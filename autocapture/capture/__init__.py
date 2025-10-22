@@ -1,8 +1,8 @@
 """Capture subsystem entry points and helpers."""
 
-from .service import CaptureService, CaptureEvent
 from .duplicate import DuplicateDetector
-from .screen_capture import ScreenCaptureBackend, CaptureFrame
+from .screen_capture import CaptureFrame, DirectXDesktopDuplicator, ScreenCaptureBackend
+from .service import CaptureEvent, CaptureService
 
 __all__ = [
     "CaptureService",
@@ -10,4 +10,5 @@ __all__ = [
     "DuplicateDetector",
     "ScreenCaptureBackend",
     "CaptureFrame",
+    "DirectXDesktopDuplicator",
 ]
