@@ -16,12 +16,8 @@ class Base(DeclarativeBase):
 class CaptureRecord(Base):
     __tablename__ = "captures"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
-    captured_at: Mapped[dt.datetime] = mapped_column(
-        DateTime(timezone=True), index=True
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    captured_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
     image_path: Mapped[str] = mapped_column(Text)
     foreground_process: Mapped[str] = mapped_column(String(256))
     foreground_window: Mapped[str] = mapped_column(String(512))
@@ -29,47 +25,33 @@ class CaptureRecord(Base):
     is_fullscreen: Mapped[bool] = mapped_column(default=False)
     ocr_status: Mapped[str] = mapped_column(String(16), default="pending")
 
-    spans: Mapped[list["OCRSpanRecord"]] = relationship(
-        "OCRSpanRecord", back_populates="capture"
-    )
-    embeddings: Mapped[list["EmbeddingRecord"]] = relationship(
-        "EmbeddingRecord", back_populates="capture"
-    )
+    spans: Mapped[list["OCRSpanRecord"]] = relationship("OCRSpanRecord", back_populates="capture")
+    embeddings: Mapped[list["EmbeddingRecord"]] = relationship("EmbeddingRecord", back_populates="capture")
 
 
 class OCRSpanRecord(Base):
     __tablename__ = "ocr_spans"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    capture_id: Mapped[str] = mapped_column(
-        ForeignKey("captures.id", ondelete="CASCADE")
-    )
+    capture_id: Mapped[str] = mapped_column(ForeignKey("captures.id", ondelete="CASCADE"))
     text: Mapped[str] = mapped_column(Text)
     confidence: Mapped[float] = mapped_column(Float)
     bbox: Mapped[dict] = mapped_column(JSON)
 
-    capture: Mapped[CaptureRecord] = relationship(
-        "CaptureRecord", back_populates="spans"
-    )
+    capture: Mapped[CaptureRecord] = relationship("CaptureRecord", back_populates="spans")
 
 
 class EmbeddingRecord(Base):
     __tablename__ = "embeddings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    capture_id: Mapped[str] = mapped_column(
-        ForeignKey("captures.id", ondelete="CASCADE")
-    )
-    span_id: Mapped[int | None] = mapped_column(
-        ForeignKey("ocr_spans.id", ondelete="SET NULL")
-    )
+    capture_id: Mapped[str] = mapped_column(ForeignKey("captures.id", ondelete="CASCADE"))
+    span_id: Mapped[int | None] = mapped_column(ForeignKey("ocr_spans.id", ondelete="SET NULL"))
     vector: Mapped[list[float]] = mapped_column(JSON)
     model: Mapped[str] = mapped_column(String(128))
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
 
-    capture: Mapped[CaptureRecord] = relationship(
-        "CaptureRecord", back_populates="embeddings"
-    )
+    capture: Mapped[CaptureRecord] = relationship("CaptureRecord", back_populates="embeddings")
     span: Mapped[OCRSpanRecord] = relationship("OCRSpanRecord")

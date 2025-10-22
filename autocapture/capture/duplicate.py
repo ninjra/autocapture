@@ -42,9 +42,7 @@ class DuplicateDetector:
 
     @staticmethod
     def _phash(image: Image.Image, hash_size: int = 16) -> np.ndarray:
-        image = image.convert("L").resize(
-            (hash_size * 4, hash_size * 4), Image.Resampling.LANCZOS
-        )
+        image = image.convert("L").resize((hash_size * 4, hash_size * 4), Image.Resampling.LANCZOS)
         pixels = np.asarray(image, dtype=np.float32)
         dct = np.fft.fft2(pixels)
         dctlow = dct[:hash_size, :hash_size]

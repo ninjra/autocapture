@@ -38,9 +38,7 @@ class ScreenCaptureBackend(abc.ABC):
         """Cleanly dispose of capture resources."""
 
     @abc.abstractmethod
-    def capture_once(
-        self,
-    ) -> Optional[CaptureFrame]:  # pragma: no cover - requires Windows API
+    def capture_once(self) -> Optional[CaptureFrame]:  # pragma: no cover - requires Windows API
         """Grab a single frame if available, otherwise return ``None``."""
 
 

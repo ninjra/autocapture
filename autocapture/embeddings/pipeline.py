@@ -53,11 +53,7 @@ class EmbeddingBatcher:
                 convert_to_numpy=True,
                 normalize_embeddings=True,
             )
-            stored_vectors = (
-                vectors.astype(np.float16)
-                if self._config.use_half_precision
-                else vectors
-            )
+            stored_vectors = vectors.astype(np.float16) if self._config.use_half_precision else vectors
             qdrant_vectors = vectors.astype(np.float32)
 
             points = []
