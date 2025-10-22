@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import multiprocessing as mp
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
@@ -12,6 +14,9 @@ from PIL import Image
 
 from ..config import OCRConfig
 from ..logging_utils import get_logger
+
+if hasattr(mp, "set_executable"):
+    mp.set_executable(sys.executable)
 
 
 @dataclass(slots=True)

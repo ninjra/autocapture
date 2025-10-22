@@ -64,9 +64,11 @@ and observable.
    Confirm counters like `autocapture_captures_total` increment while you
    interact with the workstation.
 7. **Optional – Install as a Windows Service.** Once satisfied, register the
-   orchestrator with [NSSM](https://nssm.cc/):
+   orchestrator with [NSSM](https://nssm.cc/) using the interpreter inside your
+   virtual environment so child processes always inherit the same Python
+   runtime:
    ```powershell
-   nssm install Autocapture "C:\Path\To\python.exe" "-m" "autocapture.main" "--config" "C:/Path/To/autocapture.yml" "--log-dir" "C:/Path/To/logs"
+   nssm install Autocapture "C:\Path\To\repo\.venv\Scripts\python.exe" "-m" "autocapture.main" "--config" "C:/Path/To/autocapture.yml" "--log-dir" "C:/Path/To/logs"
    nssm set Autocapture AppDirectory "C:/Path/To/repo"
    nssm start Autocapture
    ```
@@ -207,16 +209,19 @@ and observable.
    move long-term artifacts (e.g., `storage`) target the mapped NAS share on
    Windows.
 3. **Run the OCR worker.** From the workstation (with the virtual environment
-   active), start the worker loop in a dedicated PowerShell window:
+   active), start the worker loop in a dedicated PowerShell window. When you
+   detach it (e.g., via `Start-Process` or Task Scheduler), call the interpreter
+   inside `.venv` explicitly so you do not fall back to the global Python
+   installation:
    ```powershell
-   python -m autocapture.ocr.pipeline --config autocapture.yml
+   .\.venv\Scripts\python.exe -m autocapture.ocr.pipeline --config autocapture.yml
    ```
    (Use `Start-Process PowerShell -ArgumentList ...` if you want it detached.)
    Monitor the console and Prometheus metrics to confirm batches complete
    within the configured latency window.
 4. **Schedule the embedding batcher.** Create a Task Scheduler entry that runs:
    ```powershell
-   python -m autocapture.embeddings.pipeline --config C:\Path\To\autocapture.yml
+   C:\Path\To\repo\.venv\Scripts\python.exe -m autocapture.embeddings.pipeline --config C:\Path\To\autocapture.yml
    ```
    on the cron-like schedule defined in `embeddings.schedule_cron`. For manual
    execution, run the same command in a console to ensure vectors land in

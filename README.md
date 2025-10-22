@@ -62,6 +62,10 @@ pyproject.toml        # Project dependencies and tooling configuration
    ```powershell
    python -m autocapture.main --config autocapture.yml
    ```
+   When creating Windows Services or scheduled tasks, point them at the
+   interpreter inside `.venv\Scripts\python.exe` (or whatever `sys.executable`
+   prints while the virtual environment is active) so the capture service never
+   falls back to a global Python installation.
 
 > **Note:** Hardware-specific pieces (raw input hooks, DirectX capture, NVENC) are implemented behind interfaces so they can be replaced with stubs on non-Windows environments for development/testing.
 

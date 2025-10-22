@@ -59,8 +59,11 @@
 1. **Configuration** – Copy `config/example.yml` to the workstation, adjust
    paths, NAS hostnames, and the AES key provider details.
 2. **Capture Service** – Install the capture orchestrator as a Windows Service
-   (NSSM or `winsvc`) invoking `python -m autocapture.main --config
-   autocapture.yml`.
+   (NSSM or `winsvc`) pointing at the interpreter inside your project virtual
+   environment, for example:
+   ```powershell
+   nssm install Autocapture "C:\Path\To\repo\.venv\Scripts\python.exe" "-m" "autocapture.main" "--config" "C:/Path/To/autocapture.yml"
+   ```
 3. **NAS Containers** – On the TNAS, run the Docker Compose stack for Postgres,
    Qdrant, Prometheus, and Grafana, mounting the directories created above.
 4. **GPU Drivers** – Keep workstation NVIDIA drivers/CUDA in sync with the OCR

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import multiprocessing as mp
+import sys
+
 import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as rest_models
@@ -12,6 +15,9 @@ from sentence_transformers import SentenceTransformer
 from ..config import EmbeddingConfig
 from ..logging_utils import get_logger
 from ..storage import DatabaseManager, EmbeddingRecord, OCRSpanRecord
+
+if hasattr(mp, "set_executable"):
+    mp.set_executable(sys.executable)
 
 
 class EmbeddingBatcher:

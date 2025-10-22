@@ -40,3 +40,29 @@ from the workstation to ensure PyCharm can see all tracked files:
 Following these steps should make the new modules (for example
 `autocapture/ocr/pipeline.py`) visible to PyCharm so you can commit and sync
 changes normally.
+
+## Two Python processes appear when running Autocapture
+
+If you notice both your virtual environment Python and the system-wide
+`python.exe` running `-m autocapture.main`, it usually means a service or
+scheduled task is launching the orchestrator (or OCR worker) with the generic
+`python` command from `PATH`. Ensure every automation entry points to the
+virtual environment interpreter directly:
+
+```powershell
+$venv = "C:\\Path\\To\\repo\\.venv\\Scripts\\python.exe"
+nssm install Autocapture $venv "-m" "autocapture.main" --config C:/Path/To/autocapture.yml
+```
+
+You can find the correct path programmatically while inside the virtual
+environment:
+
+```powershell
+python - <<'PY'
+import sys
+print(sys.executable)
+PY
+```
+
+Update Task Scheduler definitions, PowerShell scripts, or helper batch files to
+use that path so all child processes inherit the venv’s packages and settings.

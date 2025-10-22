@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import multiprocessing as mp
+import sys
 from pathlib import Path
 
 from loguru import logger
@@ -45,6 +47,8 @@ async def main_async(config: AppConfig) -> None:
 
 def main() -> None:
     args = parse_args()
+    if hasattr(mp, "set_executable"):
+        mp.set_executable(sys.executable)
     configure_logging(args.log_dir, args.log_level)
     config = load_config(args.config)
     try:
