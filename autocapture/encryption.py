@@ -45,10 +45,14 @@ class EncryptionManager:
 
     def _load_key(self) -> bytes:
         provider = self._config.key_provider
-        if provider == "windows-credential-manager":  # pragma: no cover - Windows specific
+        if (
+            provider == "windows-credential-manager"
+        ):  # pragma: no cover - Windows specific
             import win32cred
 
-            cred = win32cred.CredRead(self._config.key_name, win32cred.CRED_TYPE_GENERIC)
+            cred = win32cred.CredRead(
+                self._config.key_name, win32cred.CRED_TYPE_GENERIC
+            )
             return cred["CredentialBlob"]
         if provider.startswith("file:"):
             return Path(provider.split(":", 1)[1]).read_bytes()

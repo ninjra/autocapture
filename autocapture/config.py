@@ -40,7 +40,8 @@ class HIDConfig(BaseModel):
 class CaptureConfig(BaseModel):
     hid: HIDConfig = HIDConfig()
     staging_dir: Path = Field(
-        Path("./staging"), description="Local NVMe-backed directory for temporary assets."
+        Path("./staging"),
+        description="Local NVMe-backed directory for temporary assets.",
     )
     encoder: str = Field(
         "nvenc_webp",
@@ -65,7 +66,9 @@ class OCRConfig(BaseModel):
 class EmbeddingConfig(BaseModel):
     model: str = Field("sentence-transformers/all-MiniLM-L6-v2")
     batch_size: int = Field(256, ge=1)
-    schedule_cron: str = Field("0 2 * * *", description="Cron string for nightly batches.")
+    schedule_cron: str = Field(
+        "0 2 * * *", description="Cron string for nightly batches."
+    )
     use_half_precision: bool = Field(
         True, description="Use float16 embeddings to shrink storage bandwidth."
     )

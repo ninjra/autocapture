@@ -40,11 +40,15 @@ pyproject.toml        # Project dependencies and tooling configuration
    .\.venv\Scripts\Activate.ps1  # PowerShell (use activate.bat for cmd.exe)
    python -m pip install --upgrade pip
    ```
-2. Install project and development dependencies:
+2. Install project and development dependencies (include the Windows extras to
+   pull in the GPU-friendly capture backend):
    ```powershell
-   python -m pip install -e .
+   python -m pip install -e .[windows]
    python -m pip install ruff black
    ```
+   The `[windows]` extra installs the high-performance capture dependencies
+   (`mss` for DXGI capture and `psutil` for foreground process metadata). If you
+   install packages manually, ensure both are available in your environment.
 3. Copy the example configuration and adjust values:
    ```powershell
    Copy-Item config/example.yml autocapture.yml

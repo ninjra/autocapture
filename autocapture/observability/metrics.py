@@ -16,19 +16,27 @@ class MetricsServer:
         self._config = config
         self._log = get_logger("metrics")
         self._started = threading.Event()
-        self.captures_total = Counter("autocapture_frames_total", "Total frames captured")
+        self.captures_total = Counter(
+            "autocapture_frames_total", "Total frames captured"
+        )
         self.ocr_backlog = Gauge("autocapture_ocr_backlog", "Pending OCR jobs")
         self.embedding_backlog = Gauge(
             "autocapture_embedding_backlog", "Pending spans waiting for embedding"
         )
-        self.disk_usage_gb = Gauge("autocapture_disk_usage_gb", "Current NAS usage in GB")
-        self.gpu_utilization = Gauge("autocapture_gpu_utilization", "Recent GPU utilization %")
+        self.disk_usage_gb = Gauge(
+            "autocapture_disk_usage_gb", "Current NAS usage in GB"
+        )
+        self.gpu_utilization = Gauge(
+            "autocapture_gpu_utilization", "Recent GPU utilization %"
+        )
 
     def start(self) -> None:
         if not self._started.is_set():
             start_http_server(self._config.prometheus_port)
             self._started.set()
-            self._log.info("Prometheus exporter listening on %s", self._config.prometheus_port)
+            self._log.info(
+                "Prometheus exporter listening on %s", self._config.prometheus_port
+            )
 
     def observe_gpu(self, util_percent: float) -> None:
         if self._config.enable_gpu_stats:

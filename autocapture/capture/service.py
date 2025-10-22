@@ -63,11 +63,16 @@ class CaptureService:
 
             now = dt.datetime.utcnow()
             delta_ms = (now - last_capture).total_seconds() * 1000
-            if delta_ms < max(1000 / self._config.hid.fps_soft_cap, self._config.hid.min_interval_ms):
+            if delta_ms < max(
+                1000 / self._config.hid.fps_soft_cap, self._config.hid.min_interval_ms
+            ):
                 continue
 
             if frame.is_fullscreen and self._config.hid.block_fullscreen:
-                self._log.debug("Skipping frame due to fullscreen focus: {}", frame.foreground_process)
+                self._log.debug(
+                    "Skipping frame due to fullscreen focus: {}",
+                    frame.foreground_process,
+                )
                 continue
 
             dup = self._duplicate_detector.update(frame.image)
@@ -85,7 +90,10 @@ class CaptureService:
             event = CaptureEvent(frame=frame, output_path=output_path)
             if len(self._pending) >= self._pending.maxlen:  # type: ignore[arg-type]
                 evicted = self._pending.popleft()
-                self._log.warning("Dropping oldest capture due to backpressure: {}", evicted.output_path)
+                self._log.warning(
+                    "Dropping oldest capture due to backpressure: {}",
+                    evicted.output_path,
+                )
             self._pending.append(event)
             self._loop.call_soon_threadsafe(self._dispatch, event)
 
@@ -93,7 +101,9 @@ class CaptureService:
         try:
             self._on_capture(event)
         except Exception as exc:  # pragma: no cover - logging side effect
-            self._log.exception("Failed to dispatch capture {}: {}", event.output_path, exc)
+            self._log.exception(
+                "Failed to dispatch capture {}: {}", event.output_path, exc
+            )
 
     def drain(self) -> list[CaptureEvent]:
         events = list(self._pending)
