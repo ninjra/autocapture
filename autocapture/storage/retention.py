@@ -13,9 +13,7 @@ from .models import CaptureRecord
 
 
 class RetentionManager:
-    def __init__(
-        self, config: StorageQuotaConfig, db: DatabaseManager, media_root: Path
-    ) -> None:
+    def __init__(self, config: StorageQuotaConfig, db: DatabaseManager, media_root: Path) -> None:
         self._config = config
         self._db = db
         self._media_root = media_root
@@ -41,10 +39,7 @@ class RetentionManager:
                     image_path.unlink(missing_ok=True)
                 session.delete(record)
                 delete_count += 1
-                if (
-                    self._folder_size_gb(self._media_root)
-                    <= self._config.image_quota_gb
-                ):
+                if self._folder_size_gb(self._media_root) <= self._config.image_quota_gb:
                     break
         if delete_count:
             self._log.warning("Pruned %s captures to respect quota", delete_count)
@@ -55,4 +50,4 @@ class RetentionManager:
         for item in path.rglob("*"):
             if item.is_file():
                 total += item.stat().st_size
-        return total / (1024**3)
+        return total / (1024 ** 3)

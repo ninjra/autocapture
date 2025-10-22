@@ -40,9 +40,7 @@ class OCRResult:
 class OCRWorker:
     """Async worker that batches OCR jobs and emits structured spans."""
 
-    def __init__(
-        self, config: OCRConfig, on_result: Callable[[OCRResult], None]
-    ) -> None:
+    def __init__(self, config: OCRConfig, on_result: Callable[[OCRResult], None]) -> None:
         self._config = config
         self._on_result = on_result
         self._queue: asyncio.Queue[OCRJob] = asyncio.Queue(maxsize=config.queue_maxsize)
@@ -88,18 +86,14 @@ class OCRWorker:
         results = self._run_engine(images)
         for job, result in zip(batch, results, strict=True):
             spans = [
-                OCRSpan(
-                    text=span["text"], confidence=span["confidence"], bbox=span["bbox"]
-                )
+                OCRSpan(text=span["text"], confidence=span["confidence"], bbox=span["bbox"])
                 for span in result.get("spans", [])
             ]
             ocr_result = OCRResult(job=job, spans=spans, raw=result)
             try:
                 self._on_result(ocr_result)
             except Exception as exc:  # pragma: no cover
-                self._log.exception(
-                    "Failed to dispatch OCR result for %s: %s", job.image_path, exc
-                )
+                self._log.exception("Failed to dispatch OCR result for %s: %s", job.image_path, exc)
 
     def _run_engine(self, images: Iterable[Image.Image]) -> list[dict]:
         """Invoke PaddleOCR/EasyOCR depending on configuration."""
@@ -111,16 +105,12 @@ class OCRWorker:
             return self._run_easyocr(images)
         raise ValueError(f"Unsupported OCR engine: {engine}")
 
-    def _run_paddle(
-        self, images: Iterable[Image.Image]
-    ) -> list[dict]:  # pragma: no cover
+    def _run_paddle(self, images: Iterable[Image.Image]) -> list[dict]:  # pragma: no cover
         from paddleocr import PaddleOCR
 
         import numpy as np
 
-        ocr = PaddleOCR(
-            use_angle_cls=True, use_gpu=True, lang="+".join(self._config.languages)
-        )
+        ocr = PaddleOCR(use_angle_cls=True, use_gpu=True, lang="+".join(self._config.languages))
         results = []
         for image in images:
             raw = ocr.ocr(np.array(image), cls=True)
@@ -135,9 +125,7 @@ class OCRWorker:
             results.append({"spans": spans, "engine": "paddleocr"})
         return results
 
-    def _run_easyocr(
-        self, images: Iterable[Image.Image]
-    ) -> list[dict]:  # pragma: no cover
+    def _run_easyocr(self, images: Iterable[Image.Image]) -> list[dict]:  # pragma: no cover
         import easyocr
         import numpy as np
 
