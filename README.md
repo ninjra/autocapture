@@ -65,9 +65,10 @@ pyproject.toml        # Project dependencies and tooling configuration
 
 > **Note:** Hardware-specific pieces (raw input hooks, DirectX capture, NVENC) are implemented behind interfaces so they can be replaced with stubs on non-Windows environments for development/testing.
 
-For an end-to-end production rollout—including NAS encryption, Prometheus/
-Grafana monitoring, OCR workers, and long-term maintenance—follow the detailed
-checklist in [`docs/step_by_step.md`](docs/step_by_step.md).
+For an end-to-end production rollout—including NAS-hosted services, AES
+encryption for artifacts, Prometheus/Grafana monitoring, OCR workers, and
+long-term maintenance—follow the detailed checklist in
+[`docs/step_by_step.md`](docs/step_by_step.md).
 
 ## License
 

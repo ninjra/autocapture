@@ -25,12 +25,12 @@ storage:
   prune_grace_days: 90
   prune_batch: 3000
 database:
-  url: "postgresql+psycopg://autocapture:autocapture@localhost/autocapture"
+  url: "postgresql+psycopg://autocapture:autocapture@nas.local/autocapture"
   echo: false
   pool_size: 10
   max_overflow: 10
 qdrant:
-  url: "http://localhost:6333"
+  url: "http://nas.local:6333"
   collection_name: "autocapture_spans"
   vector_size: 384
   distance: "Cosine"
@@ -41,5 +41,5 @@ encryption:
   chunk_size: 4194304
 observability:
   prometheus_port: 9005
-  grafana_url: "http://localhost:3000"
+  grafana_url: "http://nas.local:3000"
   enable_gpu_stats: true

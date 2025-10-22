@@ -7,19 +7,26 @@ flowchart LR
         CAP -->|GPU frame| ENC[NVENC Encoder]
         ENC -->|staged file| STAGE[NVMe Staging]
         STAGE -->|queue| OCR[OCR Worker Pool]
-        OCR -->|spans| DB[(Postgres Container)]
-        OCR -->|spans| Q[Qdrant Container]
-        DB -->|metadata| RET[Retention Manager]
+        STAGE --> RET[Retention Manager]
         CAP --> MET[Prometheus Exporter]
         OCR --> MET
         RET --> MET
     end
-    NAS[(TNAS Share - Long-term Storage)]
-    STAGE --> RET
-    RET -->|encrypted artifacts| NAS
+    subgraph NAS
+        NAS[(TNAS Share)]
+        DB[(Postgres Container)]
+        Q[(Qdrant Container)]
+        PROM[Prometheus Container]
+        Grafana[Grafana Container]
+    end
+    RET -->|AES-GCM artifacts| NAS
+    OCR -->|spans| DB
+    OCR -->|spans| Q
+    MET --> PROM
     DB -. data volume .-> NAS
     Q -. data volume .-> NAS
-    MET --> Grafana[Grafana Container]
+    PROM -. metrics store .-> NAS
+    PROM --> Grafana
     Q -->|semantic search| APP[LLM Recall App]
     APP --> MET
 ```
@@ -30,11 +37,11 @@ flowchart LR
 2. **GPU Capture** – DirectX desktop duplication grabs frames directly into GPU memory, including window metadata.
 3. **Encoding & Staging** – Frames are encoded to WebP via NVENC and written to a fast NVMe staging folder.
 4. **Deduplication** – Perceptual hashing prevents redundant uploads when frames are visually identical.
-5. **Encryption & Transfer** – Encrypted chunks are streamed to the TNAS share, ensuring at-rest protection while containers run on the workstation.
+5. **Encryption & Transfer** – AES-GCM encrypted chunks are streamed over SMB to the TNAS share for long-term storage.
 6. **OCR Pipeline** – GPU-accelerated OCR batches process staged images, emitting spans with confidence and bounding boxes.
-7. **Metadata Persistence** – Capture metadata and OCR spans are written to Postgres; embeddings land in Qdrant.
+7. **Metadata Persistence** – Capture metadata and OCR spans are written across the LAN to Postgres on the NAS; embeddings land in Qdrant there as well.
 8. **Retention** – A scheduled job enforces quota and age-based pruning, deleting oldest screenshots first while leaving metadata.
-9. **Observability** – All services emit Prometheus metrics scraped by Grafana dashboards (both running on the workstation) for real-time health insights.
+9. **Observability** – Prometheus and Grafana run on the NAS, scraping workstation exporter metrics for real-time health insights.
 
 ## Performance Considerations
 
