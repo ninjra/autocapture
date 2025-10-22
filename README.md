@@ -70,6 +70,12 @@ encryption for artifacts, Prometheus/Grafana monitoring, OCR workers, and
 long-term maintenance—follow the detailed checklist in
 [`docs/step_by_step.md`](docs/step_by_step.md).
 
+### Troubleshooting
+
+- If PyCharm does not show newly added modules (for example
+  `autocapture/ocr/pipeline.py`), follow the Git integration checklist in
+  [`docs/troubleshooting.md`](docs/troubleshooting.md).
+
 ## License
 
 MIT
