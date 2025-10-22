@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "autocapture"
+version = "0.1.0"
+description = "High-performance local activity capture and recall pipeline"
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+packages = [{ include = "autocapture" }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+pyyaml = "^6.0.1"
+loguru = "^0.7.2"
+pydantic = "^2.6.4"
+sqlalchemy = "^2.0.29"
+"psycopg[binary]" = "^3.1.18"
+pillow = "^10.2.0"
+numpy = "^1.26.4"
+opencv-python-headless = "^4.9.0.80"
+qdrant-client = "^1.8.2"
+sentence-transformers = "^2.4.0"
+uvloop = {version = "^0.19.0", markers = "sys_platform != 'win32'"}
+prometheus-client = "^0.20.0"
+cryptography = "^42.0.5"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.3.0"
+ruff = "^0.3.4"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
