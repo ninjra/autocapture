@@ -9,7 +9,7 @@ and observable.
 >
 > * Windows 11 workstation with administrator privileges, CUDA-capable GPU,
 >   and Python 3.11+.
-> * TNAS appliance with SSH access and room to provision an encrypted volume.
+> * TNAS appliance accessible over SMB with enough capacity for encrypted long-term storage.
 > * Basic familiarity with PowerShell on Windows and a POSIX shell on the NAS.
 
 ---
@@ -75,137 +75,148 @@ and observable.
 
 ---
 
-## Step 2 – Provision the encrypted TNAS share
+## Step 2 – Prepare the TNAS share for long-term storage
 
-1. **Enable SSH and confirm sudo access.** From the TNAS web UI, enable SSH
-   (Control Panel → Network Services). Log in via `ssh admin@<nas>` and run
-   `sudo -v` to verify privileges.
-2. **Identify the storage device.**
-   ```bash
-   lsblk
-   df -h | grep -v tmpfs
+1. **Create or repurpose a secure share.** Use the TNAS web console’s Storage
+   Manager to create a dedicated share (e.g., `autocapture`). If your TNAS
+   firmware supports encrypted volumes/folders, enable the option here so the
+   disks remain protected without installing additional packages. Otherwise,
+   rely on Autocapture’s built-in AES-GCM encryption and keep share access
+   restricted to your workstation account.
+2. **Lock down permissions.** Disable guest/anonymous access, require a strong
+   username/password, and ensure the share is readable/writable only by your
+   Windows user (and administrative break-glass accounts).
+3. **Create directory structure for the services.** From the TNAS file manager
+   or an SMB mount, add folders such as `captures`, `postgres`, `qdrant`, and
+   `metrics` inside the share. These become bind mounts for Docker containers
+   running on the workstation.
+4. **Mount the share on Windows.** Map it to a drive letter (e.g., `Z:`) via
+   File Explorer → “Map network drive,” or run:
+   ```powershell
+   New-PSDrive -Name "Z" -PSProvider FileSystem -Root "\\nas\autocapture" -Persist
    ```
-   Note the block device backing your data volume (e.g., `/dev/md0`).
-3. **Install cryptsetup if necessary.**
-   ```bash
-   sudo apt-get update && sudo apt-get install -y cryptsetup
-   ```
-4. **Un-mount the target device and initialize LUKS.**
-   ```bash
-   sudo umount /dev/md0
-   sudo cryptsetup luksFormat /dev/md0
-   sudo cryptsetup luksOpen /dev/md0 secure_pool
-   ```
-   Supply a strong passphrase. Record it in your password manager.
-5. **Format and mount the encrypted mapper device.**
-   ```bash
-   sudo mkfs.ext4 /dev/mapper/secure_pool
-   sudo mkdir -p /mnt/secure_pool
-   sudo mount /dev/mapper/secure_pool /mnt/secure_pool
-   ```
-6. **Persist the configuration across reboots.**
-   * Add an entry to `/etc/crypttab`:
-     ```text
-     secure_pool /dev/md0 none luks
-     ```
-   * Add a corresponding entry to `/etc/fstab`:
-     ```text
-     /dev/mapper/secure_pool /mnt/secure_pool ext4 defaults 0 2
-     ```
-   * Optionally create a keyfile (`dd if=/dev/urandom of=/root/.keys/secure_pool.key bs=32 count=1`)
-     and reference it in `crypttab` for unattended unlocks.
-7. **Create the Autocapture directory structure.**
-   ```bash
-   sudo mkdir -p /mnt/secure_pool/autocapture/{postgres,qdrant,captures,metrics}
-   sudo chown -R admin:admin /mnt/secure_pool/autocapture
-   ```
-8. **Expose an SMB share.** In the TNAS UI, create a share named `autocapture`
-   pointing at `/mnt/secure_pool/autocapture`. Restrict access to your Windows
-   account and disable guest access.
-9. **Mount the share on Windows.** Map it as a network drive (e.g., `Z:`) via
-   File Explorer or `New-PSDrive`. This drive will hold database volumes,
-   encrypted screenshots, and Prometheus data once the stack is online.
+   Confirm you can read/write files and that latency is acceptable for bulk
+   uploads. The capture service will stream encrypted artifacts and database
+   volumes to this location.
 
 ---
 
-## Step 3 – Deploy Prometheus and Grafana on the NAS
+## Step 3 – Run infrastructure containers on the workstation
 
-1. **Create a Docker Compose file on the encrypted share** (`/mnt/secure_pool/autocapture/docker-compose.yml`):
+1. **Install Docker Desktop (or another Windows container runtime).** Enable
+   WSL2 integration and grant the runtime access to the mapped NAS drive (`Z:`)
+   in *Settings → Resources → File Sharing*.
+2. **Create a local infrastructure folder** inside the repository (or another
+   convenient path) with the following files:
+   * `docker-compose.yml` – orchestrates Postgres, Qdrant, Prometheus, and
+     Grafana.
+   * `prometheus.yml` – scrape configuration for the capture metrics.
+3. **Author the Compose file.** Example (`docker-compose.yml`):
    ```yaml
    services:
-     prometheus:
-       image: prom/prometheus:latest
-       container_name: prometheus
-       volumes:
-         - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
-         - ./prom-data:/prometheus
-       ports:
-         - "9090:9090"
-     grafana:
-       image: grafana/grafana:latest
-       container_name: grafana
-       environment:
-         - GF_SECURITY_ADMIN_USER=admin
-         - GF_SECURITY_ADMIN_PASSWORD=change_me
-       volumes:
-         - ./grafana-data:/var/lib/grafana
-       ports:
-         - "3000:3000"
-   ```
-2. **Author the Prometheus scrape configuration** (`prometheus.yml`):
-   ```yaml
-   global:
-     scrape_interval: 15s
-   scrape_configs:
-     - job_name: autocapture
-       static_configs:
-         - targets: ['workstation.lan:9005']
-   ```
-   Replace `workstation.lan` with the hostname or IP of your Windows PC.
-3. **Launch the stack.**
-   ```bash
-   cd /mnt/secure_pool/autocapture
-   docker compose up -d
-   ```
-4. **Import the dashboard.** Browse to `http://<nas>:3000`, log in, add a data
-   source pointing at `http://prometheus:9090`, and import `docs/dashboard.json`
-   from the repository. Verify panels populate once the capture service emits
-   metrics.
-5. **Configure alerting.** Extend `prometheus.yml` with alert rules and start
-   the Alertmanager of your choice (Grafana Alerting, SMTP, etc.). Suggested
-   alerts:
-   * OCR backlog over 2,000 jobs for 15 minutes.
-   * Disk usage above 2.6 TB.
-   * Capture service heartbeat missing for more than 2 scrape intervals.
-
----
-
-## Step 4 – Enable OCR and embedding pipelines
-
-1. **Deploy Postgres and Qdrant alongside Prometheus.** Extend the same Compose
-   stack (or a separate one) with services:
-   ```yaml
      postgres:
        image: postgres:16
        environment:
-         - POSTGRES_DB=autocapture
-         - POSTGRES_USER=autocapture
-         - POSTGRES_PASSWORD=strong_password
+         POSTGRES_DB: autocapture
+         POSTGRES_USER: autocapture
+         POSTGRES_PASSWORD: strong_password
        volumes:
-         - ./postgres:/var/lib/postgresql/data
+         - type: bind
+           source: Z:/autocapture/postgres
+           target: /var/lib/postgresql/data
        ports:
          - "5432:5432"
 
      qdrant:
        image: qdrant/qdrant:latest
        volumes:
-         - ./qdrant:/qdrant/storage
+         - type: bind
+           source: Z:/autocapture/qdrant
+           target: /qdrant/storage
+       ports:
+         - "6333:6333"
+
+     prometheus:
+       image: prom/prometheus:latest
+       volumes:
+         - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+         - type: bind
+           source: Z:/autocapture/metrics/prom-data
+           target: /prometheus
+       ports:
+         - "9090:9090"
+
+     grafana:
+       image: grafana/grafana:latest
+       environment:
+         GF_SECURITY_ADMIN_USER: admin
+         GF_SECURITY_ADMIN_PASSWORD: change_me
+       volumes:
+         - type: bind
+           source: Z:/autocapture/metrics/grafana-data
+           target: /var/lib/grafana
+       ports:
+         - "3000:3000"
+   ```
+   Adjust the `source:` paths if you mounted the NAS share to a different drive
+   letter or directory.
+4. **Configure Prometheus scraping.** Create `prometheus.yml` alongside the
+   Compose file:
+   ```yaml
+   global:
+     scrape_interval: 15s
+   scrape_configs:
+     - job_name: autocapture
+       static_configs:
+         - targets: ['host.docker.internal:9005']
+   ```
+   Replace `host.docker.internal` with the workstation hostname/IP if the
+   runtime cannot resolve it.
+5. **Launch the stack.** From PowerShell:
+   ```powershell
+   cd C:\Path\To\infrastructure
+   docker compose up -d
+   ```
+   Verify each container is healthy via `docker compose ps`.
+6. **Import dashboards and alerts.** Visit `http://localhost:3000`, log into
+   Grafana, add Prometheus (`http://host.docker.internal:9090`) as a data
+   source, and import `docs/dashboard.json`. Extend `prometheus.yml` with alert
+   rules for OCR backlog, storage usage, and service heartbeats as needed.
+
+---
+
+## Step 4 – Enable OCR and embedding pipelines
+
+1. **Ensure Postgres and Qdrant are defined in Compose.** If you split the stack
+   across files, add services similar to the example below so both databases use
+   the NAS-backed bind mounts:
+   ```yaml
+     postgres:
+       image: postgres:16
+       environment:
+         POSTGRES_DB: autocapture
+         POSTGRES_USER: autocapture
+         POSTGRES_PASSWORD: strong_password
+       volumes:
+         - type: bind
+           source: Z:/autocapture/postgres
+           target: /var/lib/postgresql/data
+       ports:
+         - "5432:5432"
+
+     qdrant:
+       image: qdrant/qdrant:latest
+       volumes:
+         - type: bind
+           source: Z:/autocapture/qdrant
+           target: /qdrant/storage
        ports:
          - "6333:6333"
    ```
    Restart Docker Compose so all services come up.
-2. **Update `autocapture.yml`** on the workstation with the actual NAS URLs and
-   credentials (`database.url`, `qdrant.url`, `observability.grafana_url`).
+2. **Update `autocapture.yml`** so the database, Qdrant, and Grafana entries
+   point to `localhost` (matching the Compose stack) and confirm any paths that
+   move long-term artifacts (e.g., `storage`) target the mapped NAS drive.
 3. **Run the OCR worker.** From the workstation (with the virtual environment
    active), start the worker loop in a dedicated PowerShell window:
    ```powershell
@@ -233,14 +244,15 @@ and observable.
    * Ensure the capture orchestrator, OCR worker, and embedding scheduler are
      configured to auto-start after reboots (Windows Service, scheduled task,
      or background PowerShell).
-   * On the NAS, enable Docker restart policies (`restart: unless-stopped`) for
-     Prometheus, Grafana, Postgres, and Qdrant.
+   * In the workstation Compose file, set `restart: unless-stopped` on
+     Prometheus, Grafana, Postgres, and Qdrant so they recover automatically.
 2. **Storage hygiene.**
    * Monitor the `autocapture_disk_usage_gb` metric. When the quota is reached,
      the retention worker prunes oldest images; still, set quarterly reminders
      to audit usage manually.
-   * Periodically validate the encryption state by checking `lsblk -f` to confirm
-     the underlying device remains LUKS-encrypted.
+   * Periodically validate the NAS share’s protection—confirm the encrypted
+     share remains locked down and that Autocapture’s AES-GCM encryption is
+     still enabled in configuration.
 3. **Database care.** Schedule monthly maintenance:
    ```bash
    docker exec -it postgres psql -U autocapture -d autocapture -c 'VACUUM;'
