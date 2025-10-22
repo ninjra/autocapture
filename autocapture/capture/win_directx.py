@@ -44,6 +44,7 @@ class DirectXSession:  # pragma: no cover - requires Windows runtime to test
         self._get_window_text: Optional[Any] = None
         self._get_window_rect: Optional[Any] = None
         self._get_window_thread_process_id: Optional[Any] = None
+        self._mss_module: Optional[Any] = None
 
     def initialize(self) -> None:
         if sys.platform != "win32":
@@ -62,6 +63,7 @@ class DirectXSession:  # pragma: no cover - requires Windows runtime to test
                 "Optional dependency 'mss' is required for Windows capture. "
                 "Install it via `pip install autocapture[windows]` or add 'mss' to your environment."
             ) from exc
+        self._mss_module = mss_module
 
         try:
             self._psutil = importlib.import_module("psutil")
@@ -95,18 +97,24 @@ class DirectXSession:  # pragma: no cover - requires Windows runtime to test
             self._ctypes.POINTER(self._wintypes.DWORD),
         )
 
-        self._sct = mss_module.mss(with_cursor=self.include_cursor)
-        primary = self._sct.monitors[1]
-        self._monitor = {
-            "left": primary["left"],
-            "top": primary["top"],
-            "width": primary["width"],
-            "height": primary["height"],
-        }
-
     def capture(self) -> Optional[RawFrame]:
-        if not self._sct or not self._monitor or not self._ctypes:
+        if self._ctypes is None:
             raise RuntimeError("DirectXSession.capture() called before initialize().")
+
+        if self._sct is None:
+            if self._mss_module is None:
+                raise RuntimeError("DirectXSession initialisation missing MSS module.")
+            self._sct = self._mss_module.mss(with_cursor=self.include_cursor)
+            primary = self._sct.monitors[1]
+            self._monitor = {
+                "left": primary["left"],
+                "top": primary["top"],
+                "width": primary["width"],
+                "height": primary["height"],
+            }
+
+        if self._monitor is None:
+            raise RuntimeError("DirectXSession failed to determine monitor geometry.")
 
         if self._get_foreground_window is None:
             raise RuntimeError("DirectXSession not initialised correctly (foreground).")
