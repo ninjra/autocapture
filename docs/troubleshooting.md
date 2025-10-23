@@ -76,3 +76,22 @@ unexpected interpreter and prints a message similar to::
 
 If you see that output, adjust the service configuration and restart it so the
 preferred virtual environment interpreter is used.
+
+### Capture the source of unexpected spawns
+
+When the system interpreter still appears after applying the checks above, turn
+on spawn debugging to capture a stack trace for every new subprocess or
+``multiprocessing`` worker. Set the following environment variables for the
+service (or in your shell) before launching Autocapture:
+
+```powershell
+$env:AUTOCAPTURE_DEBUG_SPAWN = "1"
+$env:AUTOCAPTURE_DEBUG_SPAWN_LOG = "D:/autocapture/logs/spawn-debug.log"  # optional
+python -m autocapture.main --config autocapture.yml
+```
+
+Each process writes its PID, interpreter path, and a traceback to the specified
+log file whenever something calls :func:`subprocess.Popen`, :func:`subprocess.run`,
+or the Windows ``multiprocessing`` spawn helpers. Inspect the latest entries in
+that log to identify which code path is requesting a new Python interpreter and
+adjust the configuration accordingly.

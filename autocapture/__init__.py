@@ -11,6 +11,11 @@ from typing import Final, Sequence
 from .config import AppConfig, load_config
 from .logging_utils import configure_logging
 
+if os.environ.get("AUTOCAPTURE_DEBUG_SPAWN"):
+    from .debug import install_spawn_debugging
+
+    install_spawn_debugging(os.environ.get("AUTOCAPTURE_DEBUG_SPAWN_LOG"))
+
 if hasattr(_mp, "set_executable"):
     _mp.set_executable(sys.executable)
 
