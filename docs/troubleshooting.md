@@ -66,3 +66,13 @@ PY
 
 Update Task Scheduler definitions, PowerShell scripts, or helper batch files to
 use that path so all child processes inherit the venv’s packages and settings.
+
+Starting with this release the orchestrator also refuses to start under an
+unexpected interpreter and prints a message similar to::
+
+    Autocapture refused to start under unexpected interpreter.
+    Expected: D:\path\to\repo\.venv\Scripts\python.exe
+    Current:  C:\Users\you\AppData\Local\Programs\Python\Python311\python.exe
+
+If you see that output, adjust the service configuration and restart it so the
+preferred virtual environment interpreter is used.

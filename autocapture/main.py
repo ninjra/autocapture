@@ -11,7 +11,12 @@ from pathlib import Path
 
 from loguru import logger
 
-from . import claim_single_instance, configure_logging, load_config
+from . import (
+    claim_single_instance,
+    configure_logging,
+    ensure_expected_interpreter,
+    load_config,
+)
 from .capture import CaptureEvent, CaptureService, DirectXDesktopDuplicator
 from .config import AppConfig
 from .observability import MetricsServer
@@ -47,6 +52,9 @@ async def main_async(config: AppConfig) -> None:
 
 
 def main() -> None:
+    if not ensure_expected_interpreter():
+        return
+
     if not claim_single_instance():
         # Avoid importing log configuration just to report the duplicate.
         # The message is intentionally terse because the process may exit
