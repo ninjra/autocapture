@@ -30,7 +30,6 @@ def configure_logging(log_dir: Path | str | None = None, level: str = "INFO") ->
             retention="14 days",
             compression="gz",
             level=level,
-            enqueue=True,
             backtrace=False,
             diagnose=False,
         )
