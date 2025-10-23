@@ -1,0 +1,48 @@
+capture:
+  hid:
+    min_interval_ms: 500
+    idle_grace_ms: 1500
+    duplicate_threshold: 0.02
+    fps_soft_cap: 4.0
+    block_fullscreen: true
+  staging_dir: "D:/autocapture/staging"
+  encoder: "nvenc_webp"
+  max_pending: 8000
+ocr:
+  queue_maxsize: 4000
+  batch_size: 32
+  max_latency_s: 900
+  engine: "paddleocr-cuda"
+  languages: ["en"]
+  output_format: "json"
+embeddings:
+  model: "sentence-transformers/all-MiniLM-L6-v2"
+  batch_size: 256
+  schedule_cron: "0 */6 * * *"
+  use_half_precision: true
+storage:
+  image_quota_gb: 2500
+  prune_grace_days: 90
+  prune_batch: 3000
+database:
+  url: "postgresql+psycopg://autocapture:autocapture@tnas:5432/autocapture"
+  echo: false
+  pool_size: 10
+  max_overflow: 10
+qdrant:
+  url: "http://tnas:6333"
+  collection_name: "autocapture_spans"
+
+
+
+  vector_size: 384
+  distance: "Cosine"
+encryption:
+  enabled: true
+  key_provider: "windows-credential-manager"
+  key_name: "autocapture/nas-aes-key"
+  chunk_size: 4194304
+observability:
+  prometheus_port: 9005
+  grafana_url: "http://tnas:3000"
+  enable_gpu_stats: true
