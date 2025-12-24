@@ -26,6 +26,7 @@ class RawFrame:
     foreground_process: str
     foreground_window: str
     monitor_id: str
+    monitor_bounds: tuple[int, int, int, int]
     is_fullscreen: bool
 
 
@@ -170,12 +171,19 @@ class DirectXSession:  # pragma: no cover - requires Windows runtime to test
         image = Image.frombytes("RGB", frame.size, frame.rgb)
 
         monitor_id = f"{self._monitor['left']}x{self._monitor['top']}"
+        monitor_bounds = (
+            self._monitor["left"],
+            self._monitor["top"],
+            self._monitor["width"],
+            self._monitor["height"],
+        )
 
         return RawFrame(
             image=image,
             foreground_process=process_name,
             foreground_window=window_title,
             monitor_id=monitor_id,
+            monitor_bounds=monitor_bounds,
             is_fullscreen=is_fullscreen,
         )
 
