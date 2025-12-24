@@ -18,6 +18,7 @@ class CaptureFrame:
     foreground_process: str
     foreground_window: str
     monitor_id: str
+    monitor_bounds: tuple[int, int, int, int]
     is_fullscreen: bool
 
     def save(self, path: Path, encoder: str = "webp", quality: int = 90) -> Path:
@@ -75,5 +76,6 @@ class DirectXDesktopDuplicator(ScreenCaptureBackend):  # pragma: no cover - Wind
             foreground_process=frame.foreground_process,
             foreground_window=frame.foreground_window,
             monitor_id=frame.monitor_id,
+            monitor_bounds=frame.monitor_bounds,
             is_fullscreen=frame.is_fullscreen,
         )
