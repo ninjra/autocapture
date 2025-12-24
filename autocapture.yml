@@ -30,12 +30,14 @@ storage:
   prune_grace_days: 90
   prune_batch: 3000
 database:
-  url: "postgresql+psycopg://autocapture:autocapture@tnas:5432/autocapture"
+  # Postgres is the source of truth (metadata + full-text + integrity).
+  # If you are running docker-compose on the same machine, keep localhost.
+  url: "postgresql+psycopg://autocapture:autocapture@localhost:5432/autocapture"
   echo: false
   pool_size: 10
   max_overflow: 10
 qdrant:
-  url: "http://tnas:6333"
+  url: "http://localhost:6333"
   collection_name: "autocapture_spans"
 
 
