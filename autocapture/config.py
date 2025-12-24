@@ -117,6 +117,18 @@ class ObservabilityConfig(BaseModel):
     enable_gpu_stats: bool = Field(True)
 
 
+class APIConfig(BaseModel):
+    port: int = Field(5273, ge=1024, le=65535)
+
+
+class LLMConfig(BaseModel):
+    provider: str = Field("ollama", description="ollama or openai")
+    ollama_url: str = Field("http://127.0.0.1:11434")
+    ollama_model: str = Field("llama3")
+    openai_api_key: Optional[str] = Field(None, description="OpenAI API key")
+    openai_model: str = Field("gpt-4.1-mini")
+
+
 class AppConfig(BaseModel):
     capture: CaptureConfig = CaptureConfig()
     ocr: OCRConfig = OCRConfig()
@@ -126,6 +138,8 @@ class AppConfig(BaseModel):
     qdrant: QdrantConfig = QdrantConfig()
     encryption: EncryptionConfig = EncryptionConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
+    api: APIConfig = APIConfig()
+    llm: LLMConfig = LLMConfig()
 
     @validator("capture")
     def validate_staging_dir(cls, value: CaptureConfig) -> CaptureConfig:  # type: ignore[name-defined]
