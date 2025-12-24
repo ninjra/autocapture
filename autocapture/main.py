@@ -21,6 +21,12 @@ from .observability import MetricsServer
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Autocapture orchestrator")
+    parser.add_argument(
+        "--mode",
+        choices=("capture", "worker"),
+        default="capture",
+        help="Run the capture orchestrator or background worker.",
+    )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--log-dir", type=Path, default=Path("./logs"))
@@ -30,6 +36,55 @@ def parse_args() -> argparse.Namespace:
 Deprecated in favor of ``python -m autocapture``.
 """
 
+async def main_async(config: AppConfig) -> None:
+    metrics = MetricsServer(config.observability)
+    metrics.start()
+
+    def handle_capture(event: CaptureEvent) -> None:
+        metrics.increment_captures()
+        # TODO: enqueue event to OCR queue
+
+    backend = DirectXDesktopDuplicator()
+    service = CaptureService(config.capture, backend, handle_capture)
+    service.start()
+
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        service.stop()
+
+
+def main() -> None:
+    if not ensure_expected_interpreter():
+        return
+
+    args = parse_args()
+    if hasattr(mp, "set_executable"):
+        mp.set_executable(sys.executable)
+    os.environ.setdefault("AUTOCAPTURE_ROOT_PID", str(os.getpid()))
+    configure_logging(args.log_dir, args.log_level)
+    config = load_config(args.config)
+    if args.mode == "worker":
+        from .worker import main as worker_main
+
+        worker_main(config)
+        return
+
+    if not claim_single_instance():
+        # Avoid importing log configuration just to report the duplicate.
+        # The message is intentionally terse because the process may exit
+        # before logging is initialised.
+        sys.stderr.write(
+            "Autocapture orchestrator already active in another interpreter.\n"
+        )
+        return
+    try:
+        asyncio.run(main_async(config))
+    except KeyboardInterrupt:
+        logger.info("Shutting down")
 from __future__ import annotations
 
 from .__main__ import main

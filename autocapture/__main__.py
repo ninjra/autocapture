@@ -1,3 +1,6 @@
+"""Module entry point for the autocapture CLI."""
+
+from .main import main
 """Command-line entrypoints for autocapture."""
 """Autocapture CLI entrypoint for tray/worker/doctor modes."""
 

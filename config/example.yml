@@ -25,6 +25,15 @@ embeddings:
   batch_size: 256
   schedule_cron: "0 */6 * * *"
   use_half_precision: true
+worker:
+  data_dir: "D:/autocapture/data"
+  lease_ms: 60000
+  poll_interval_s: 1.0
+  ocr_backlog_soft_limit: 5000
+retention:
+  video_days: 3
+  roi_days: 14
+  max_media_gb: 200
 storage:
   image_quota_gb: 2500
   prune_grace_days: 90
