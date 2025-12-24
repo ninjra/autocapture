@@ -120,8 +120,8 @@ class StorageQuotaConfig(BaseModel):
 
 class DatabaseConfig(BaseModel):
     url: str = Field(
-        "postgresql+psycopg://autocapture:autocapture@nas/autocapture",
-        description="SQLAlchemy URL for Postgres instance.",
+        "postgresql+psycopg://autocapture:autocapture@localhost:5432/autocapture",
+        description="SQLAlchemy URL for Postgres (source of truth). Use localhost when running via docker-compose ports.",
     )
     echo: bool = False
     pool_size: int = Field(10, ge=1)
@@ -129,7 +129,7 @@ class DatabaseConfig(BaseModel):
 
 
 class QdrantConfig(BaseModel):
-    url: str = Field("http://nas:6333")
+    url: str = Field("http://localhost:6333")
     collection_name: str = Field("autocapture_spans")
     vector_size: int = Field(384, ge=64)
     distance: str = Field("Cosine")

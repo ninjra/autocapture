@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: autocapture-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-autocapture}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-autocapture}
+      POSTGRES_DB: ${POSTGRES_DB:-autocapture}
+    ports:
+      - "5432:5432"
+    volumes:
+      - autocapture_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: autocapture-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - autocapture_qdrant:/qdrant/storage
+
+volumes:
+  autocapture_pgdata:
+  autocapture_qdrant:
