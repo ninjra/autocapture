@@ -11,14 +11,11 @@ from pathlib import Path
 
 from loguru import logger
 
-from . import (
-    claim_single_instance,
-    configure_logging,
-    ensure_expected_interpreter,
-    load_config,
-)
+from . import claim_single_instance, ensure_expected_interpreter
 from .capture import CaptureEvent, CaptureService, DirectXDesktopDuplicator
 from .config import AppConfig
+from .config import load_config
+from .logging_utils import configure_logging
 from .observability import MetricsServer
 
 
