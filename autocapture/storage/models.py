@@ -73,3 +73,42 @@ class EmbeddingRecord(Base):
         "CaptureRecord", back_populates="embeddings"
     )
     span: Mapped[OCRSpanRecord] = relationship("OCRSpanRecord")
+
+
+class SegmentRecord(Base):
+    __tablename__ = "segments"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    started_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    ended_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    state: Mapped[str] = mapped_column(String(32), default="recording")
+
+    observations: Mapped[list["ObservationRecord"]] = relationship(
+        "ObservationRecord", back_populates="segment"
+    )
+
+
+class ObservationRecord(Base):
+    __tablename__ = "observations"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    captured_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    image_path: Mapped[str] = mapped_column(Text)
+    segment_id: Mapped[str | None] = mapped_column(
+        ForeignKey("segments.id", ondelete="SET NULL")
+    )
+    cursor_x: Mapped[int] = mapped_column(Integer)
+    cursor_y: Mapped[int] = mapped_column(Integer)
+    monitor_id: Mapped[str] = mapped_column(String(64))
+
+    segment: Mapped[SegmentRecord | None] = relationship(
+        "SegmentRecord", back_populates="observations"
+    )
