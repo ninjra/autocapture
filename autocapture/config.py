@@ -43,9 +43,29 @@ class CaptureConfig(BaseModel):
         Path("./staging"),
         description="Local NVMe-backed directory for temporary assets.",
     )
+    data_dir: Path = Field(
+        Path("./data"),
+        description="Base directory for media and recorder assets.",
+    )
     encoder: str = Field(
         "nvenc_webp",
         description="Encoder preset (nvenc_webp, nvenc_avif, cpu_webp).",
+    )
+    record_video: bool = Field(
+        True,
+        description="Enable FFmpeg video recording for activity segments.",
+    )
+    layout_mode: str = Field(
+        "virtual_desktop",
+        description="Frame layout mode (virtual_desktop or per_monitor).",
+    )
+    video_bitrate: str = Field(
+        "8M",
+        description="Target bitrate for video segments (e.g. 8M).",
+    )
+    video_preset: str = Field(
+        "p4",
+        description="Encoder preset for NVENC codecs.",
     )
     max_pending: int = Field(
         5000,
@@ -72,6 +92,24 @@ class EmbeddingConfig(BaseModel):
     use_half_precision: bool = Field(
         True, description="Use float16 embeddings to shrink storage bandwidth."
     )
+
+
+class WorkerConfig(BaseModel):
+    data_dir: Path = Field(
+        Path("./data"),
+        description="Local directory for worker databases, indexes, and media.",
+    )
+    lease_ms: int = Field(60_000, ge=1000)
+    poll_interval_s: float = Field(1.0, ge=0.1)
+    ocr_backlog_soft_limit: int = Field(
+        5000, ge=100, description="Soft limit for OCR backlog throttling."
+    )
+
+
+class RetentionPolicyConfig(BaseModel):
+    video_days: int = Field(3, ge=1)
+    roi_days: int = Field(14, ge=1)
+    max_media_gb: int = Field(200, ge=1)
 
 
 class StorageQuotaConfig(BaseModel):
@@ -133,6 +171,8 @@ class AppConfig(BaseModel):
     capture: CaptureConfig = CaptureConfig()
     ocr: OCRConfig = OCRConfig()
     embeddings: EmbeddingConfig = EmbeddingConfig()
+    worker: WorkerConfig = WorkerConfig()
+    retention: RetentionPolicyConfig = RetentionPolicyConfig()
     storage: StorageQuotaConfig = StorageQuotaConfig()
     database: DatabaseConfig = DatabaseConfig()
     qdrant: QdrantConfig = QdrantConfig()
@@ -144,6 +184,12 @@ class AppConfig(BaseModel):
     @validator("capture")
     def validate_staging_dir(cls, value: CaptureConfig) -> CaptureConfig:  # type: ignore[name-defined]
         value.staging_dir.mkdir(parents=True, exist_ok=True)
+        value.data_dir.mkdir(parents=True, exist_ok=True)
+        return value
+
+    @validator("worker")
+    def validate_data_dir(cls, value: WorkerConfig) -> WorkerConfig:  # type: ignore[name-defined]
+        value.data_dir.mkdir(parents=True, exist_ok=True)
         return value
 
 

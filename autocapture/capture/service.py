@@ -15,6 +15,7 @@ from loguru import logger
 from ..config import CaptureConfig
 from ..logging_utils import get_logger
 from .duplicate import DuplicateDetector
+from .ffmpeg_recorder import SegmentRecorder
 from .screen_capture import CaptureFrame, ScreenCaptureBackend
 
 
@@ -42,6 +43,8 @@ class CaptureService:
         self._running = threading.Event()
         self._log = get_logger("capture")
         self._staging_dir = config.staging_dir
+        self._segment_recorder = SegmentRecorder(config)
+        self._last_activity: dt.datetime | None = None
 
     def start(self) -> None:
         self._running.set()
@@ -52,16 +55,17 @@ class CaptureService:
     def stop(self) -> None:
         self._running.clear()
         self._backend.stop()
+        self._segment_recorder.stop_segment()
         logger.info("Capture service stopped")
 
     def _run_capture_loop(self) -> None:  # pragma: no cover - requires event stream
         last_capture = dt.datetime.utcnow()
         while self._running.is_set():
             frame = self._backend.capture_once()
+            now = dt.datetime.utcnow()
+            self._maybe_stop_segment(now)
             if frame is None:
                 continue
-
-            now = dt.datetime.utcnow()
             delta_ms = (now - last_capture).total_seconds() * 1000
             if delta_ms < max(
                 1000 / self._config.hid.fps_soft_cap, self._config.hid.min_interval_ms
@@ -83,6 +87,10 @@ class CaptureService:
                     dup.distance,
                 )
                 continue
+
+            self._last_activity = now
+            self._ensure_segment(now)
+            self._segment_recorder.enqueue(frame)
 
             last_capture = now
             output_path = self._staging_dir / now.strftime("%Y/%m/%d/%H%M%S_%f.webp")
@@ -109,3 +117,14 @@ class CaptureService:
         events = list(self._pending)
         self._pending.clear()
         return events
+
+    def _ensure_segment(self, now: dt.datetime) -> None:
+        if self._segment_recorder.start_segment(now):
+            return
+
+    def _maybe_stop_segment(self, now: dt.datetime) -> None:
+        if self._last_activity is None:
+            return
+        idle_ms = (now - self._last_activity).total_seconds() * 1000
+        if idle_ms >= self._config.hid.idle_grace_ms:
+            self._segment_recorder.stop_segment()
