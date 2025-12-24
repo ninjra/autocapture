@@ -74,6 +74,24 @@ class EmbeddingConfig(BaseModel):
     )
 
 
+class WorkerConfig(BaseModel):
+    data_dir: Path = Field(
+        Path("./data"),
+        description="Local directory for worker databases, indexes, and media.",
+    )
+    lease_ms: int = Field(60_000, ge=1000)
+    poll_interval_s: float = Field(1.0, ge=0.1)
+    ocr_backlog_soft_limit: int = Field(
+        5000, ge=100, description="Soft limit for OCR backlog throttling."
+    )
+
+
+class RetentionPolicyConfig(BaseModel):
+    video_days: int = Field(3, ge=1)
+    roi_days: int = Field(14, ge=1)
+    max_media_gb: int = Field(200, ge=1)
+
+
 class StorageQuotaConfig(BaseModel):
     image_quota_gb: int = Field(2500, ge=10)
     prune_grace_days: int = Field(90, ge=1)
@@ -121,6 +139,8 @@ class AppConfig(BaseModel):
     capture: CaptureConfig = CaptureConfig()
     ocr: OCRConfig = OCRConfig()
     embeddings: EmbeddingConfig = EmbeddingConfig()
+    worker: WorkerConfig = WorkerConfig()
+    retention: RetentionPolicyConfig = RetentionPolicyConfig()
     storage: StorageQuotaConfig = StorageQuotaConfig()
     database: DatabaseConfig = DatabaseConfig()
     qdrant: QdrantConfig = QdrantConfig()
@@ -130,6 +150,11 @@ class AppConfig(BaseModel):
     @validator("capture")
     def validate_staging_dir(cls, value: CaptureConfig) -> CaptureConfig:  # type: ignore[name-defined]
         value.staging_dir.mkdir(parents=True, exist_ok=True)
+        return value
+
+    @validator("worker")
+    def validate_data_dir(cls, value: WorkerConfig) -> WorkerConfig:  # type: ignore[name-defined]
+        value.data_dir.mkdir(parents=True, exist_ok=True)
         return value
 
 
