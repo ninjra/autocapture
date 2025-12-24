@@ -43,9 +43,29 @@ class CaptureConfig(BaseModel):
         Path("./staging"),
         description="Local NVMe-backed directory for temporary assets.",
     )
+    data_dir: Path = Field(
+        Path("./data"),
+        description="Base directory for media and recorder assets.",
+    )
     encoder: str = Field(
         "nvenc_webp",
         description="Encoder preset (nvenc_webp, nvenc_avif, cpu_webp).",
+    )
+    record_video: bool = Field(
+        True,
+        description="Enable FFmpeg video recording for activity segments.",
+    )
+    layout_mode: str = Field(
+        "virtual_desktop",
+        description="Frame layout mode (virtual_desktop or per_monitor).",
+    )
+    video_bitrate: str = Field(
+        "8M",
+        description="Target bitrate for video segments (e.g. 8M).",
+    )
+    video_preset: str = Field(
+        "p4",
+        description="Encoder preset for NVENC codecs.",
     )
     max_pending: int = Field(
         5000,
@@ -150,6 +170,7 @@ class AppConfig(BaseModel):
     @validator("capture")
     def validate_staging_dir(cls, value: CaptureConfig) -> CaptureConfig:  # type: ignore[name-defined]
         value.staging_dir.mkdir(parents=True, exist_ok=True)
+        value.data_dir.mkdir(parents=True, exist_ok=True)
         return value
 
     @validator("worker")

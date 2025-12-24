@@ -6,7 +6,12 @@ capture:
     fps_soft_cap: 4.0
     block_fullscreen: true
   staging_dir: "D:/autocapture/staging"
+  data_dir: "D:/autocapture/data"
   encoder: "nvenc_webp"
+  record_video: true
+  layout_mode: "virtual_desktop"
+  video_bitrate: "8M"
+  video_preset: "p4"
   max_pending: 8000
 ocr:
   queue_maxsize: 4000

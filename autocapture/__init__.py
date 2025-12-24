@@ -8,8 +8,6 @@ import sys
 from pathlib import Path
 from typing import Final, Sequence
 
-from .config import AppConfig, load_config
-from .logging_utils import configure_logging
 
 if os.environ.get("AUTOCAPTURE_DEBUG_SPAWN"):
     from .debug import install_spawn_debugging
@@ -84,8 +82,20 @@ def claim_single_instance() -> bool:
 
 __all__ = [
     "AppConfig",
-    "load_config",
     "configure_logging",
     "claim_single_instance",
     "ensure_expected_interpreter",
+    "load_config",
 ]
+
+
+def __getattr__(name: str):
+    if name in {"AppConfig", "load_config"}:
+        from .config import AppConfig, load_config
+
+        return {"AppConfig": AppConfig, "load_config": load_config}[name]
+    if name == "configure_logging":
+        from .logging_utils import configure_logging
+
+        return configure_logging
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
