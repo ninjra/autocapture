@@ -184,5 +184,8 @@ def load_config(path: Path | str) -> AppConfig:
 
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
+    data = yaml.safe_load(fh)
+    # Pydantic v2 compatibility (model_validate) with v1 fallback (parse_obj).
+    if hasattr(AppConfig, "model_validate"):
+        return AppConfig.model_validate(data)
     return AppConfig.parse_obj(data)
