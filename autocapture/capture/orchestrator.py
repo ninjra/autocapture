@@ -62,6 +62,7 @@ class CaptureOrchestrator:
         vision_sample_rate: float = 0.0,
         on_segment_finalize: Optional[Callable[[str], None]] = None,
         hotkey_callback: Optional[Callable[[], None]] = None,
+        raw_input: RawInputListener | None = None,
     ) -> None:
         self._log = get_logger("orchestrator")
         self._database = database
@@ -76,7 +77,7 @@ class CaptureOrchestrator:
         self._on_segment_finalize = on_segment_finalize
         self._backend = self._select_backend()
         self._monitors = self._backend.monitors
-        self._raw_input = RawInputListener(
+        self._raw_input = raw_input or RawInputListener(
             idle_grace_ms=idle_grace_ms,
             on_activity=None,
             on_hotkey=hotkey_callback,

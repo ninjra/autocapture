@@ -17,9 +17,11 @@ from loguru import logger
 
 from . import claim_single_instance, ensure_expected_interpreter
 from .capture.orchestrator import CaptureOrchestrator
+from .capture.raw_input import RawInputListener
 from .config import AppConfig, load_config
 from .logging_utils import configure_logging
 from .storage.database import DatabaseManager
+from .tracking import HostVectorTracker
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -59,6 +61,15 @@ def _doctor(config: AppConfig) -> int:
         logger.error("Database init failed: %s", exc)
         ok = False
 
+    if config.tracking.enabled:
+        tracking_dir = _resolve_tracking_dir(config)
+        try:
+            tracking_dir.mkdir(parents=True, exist_ok=True)
+            logger.info("Tracking DB directory: %s", tracking_dir)
+        except Exception as exc:
+            logger.error("Cannot create tracking DB directory %s: %s", tracking_dir, exc)
+            ok = False
+
     # Encryption key (if enabled)
     if getattr(config, "encryption", None) and config.encryption.enabled:
         try:
@@ -73,7 +84,9 @@ def _doctor(config: AppConfig) -> int:
     return 0 if ok else 2
 
 
-def _build_orchestrator(config: AppConfig) -> CaptureOrchestrator:
+def _build_orchestrator(
+    config: AppConfig, raw_input: RawInputListener | None = None
+) -> CaptureOrchestrator:
     db = DatabaseManager(config.database)
     cap = config.capture
     return CaptureOrchestrator(
@@ -84,11 +97,26 @@ def _build_orchestrator(config: AppConfig) -> CaptureOrchestrator:
         on_ocr_observation=None,
         on_vision_observation=None,
         vision_sample_rate=getattr(cap, "vision_sample_rate", 0.0),
+        raw_input=raw_input,
     )
 
 
 async def _run_async(config: AppConfig) -> int:
-    orch = _build_orchestrator(config)
+    tracker = HostVectorTracker(
+        config=config.tracking,
+        data_dir=str(config.capture.data_dir),
+        idle_grace_ms=config.capture.hid.idle_grace_ms,
+    )
+    raw_input = RawInputListener(
+        idle_grace_ms=config.capture.hid.idle_grace_ms,
+        on_activity=None,
+        on_hotkey=None,
+        on_input_event=tracker.ingest_input_event if config.tracking.enabled else None,
+        track_mouse_movement=config.tracking.track_mouse_movement,
+        mouse_move_sample_ms=config.tracking.mouse_move_sample_ms,
+    )
+    orch = _build_orchestrator(config, raw_input=raw_input)
+    tracker.start()
     orch.start()
     logger.info("Autocapture running. Press Ctrl+C to stop.")
     try:
@@ -101,6 +129,10 @@ async def _run_async(config: AppConfig) -> int:
             orch.stop()
         except Exception:
             logger.exception("Error while stopping orchestrator")
+        try:
+            tracker.stop()
+        except Exception:
+            logger.exception("Error while stopping tracker")
     return 0
 
 
@@ -178,6 +210,13 @@ def _validate_remote_mode(config: AppConfig) -> None:
         raise RuntimeError(
             "Remote mode misconfigured. Missing: " + ", ".join(missing)
         )
+
+
+def _resolve_tracking_dir(config: AppConfig) -> Path:
+    db_path = config.tracking.db_path
+    if db_path.is_absolute():
+        return db_path.parent
+    return Path(config.capture.data_dir) / db_path.parent
 
 
 if __name__ == "__main__":
