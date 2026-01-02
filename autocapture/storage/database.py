@@ -19,14 +19,17 @@ class DatabaseManager:
     def __init__(self, config: DatabaseConfig) -> None:
         self._config = config
         self._log = get_logger("db")
-        self._engine = create_engine(
-            config.url,
-            echo=config.echo,
-            pool_size=config.pool_size,
-            max_overflow=config.max_overflow,
-            pool_pre_ping=True,
-            pool_recycle=1800,
-        )
+        engine_kwargs = {
+            "echo": config.echo,
+            "pool_pre_ping": True,
+            "pool_recycle": 1800,
+        }
+        if config.url.startswith("sqlite"):
+            engine_kwargs["connect_args"] = {"check_same_thread": False}
+        else:
+            engine_kwargs["pool_size"] = config.pool_size
+            engine_kwargs["max_overflow"] = config.max_overflow
+        self._engine = create_engine(config.url, **engine_kwargs)
         Base.metadata.create_all(self._engine)
         self._session_factory = sessionmaker(bind=self._engine, expire_on_commit=False)
         self._log.info("Database connected at %s", config.url)

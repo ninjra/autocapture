@@ -1,0 +1,122 @@
+[
+  {
+    "id": "Q1",
+    "query": "What did I work on this morning?"
+  },
+  {
+    "id": "Q2",
+    "query": "Show me recent emails about budget"
+  },
+  {
+    "id": "Q3",
+    "query": "Which apps did I use yesterday?"
+  },
+  {
+    "id": "Q4",
+    "query": "Summarize time spent in browser"
+  },
+  {
+    "id": "Q5",
+    "query": "Find notes about roadmap review"
+  },
+  {
+    "id": "Q6",
+    "query": "When did I last open the project plan?"
+  },
+  {
+    "id": "Q7",
+    "query": "List meetings captured today"
+  },
+  {
+    "id": "Q8",
+    "query": "What did I read about AI policy?"
+  },
+  {
+    "id": "Q9",
+    "query": "Find references to Q3 planning"
+  },
+  {
+    "id": "Q10",
+    "query": "Which domains were most active?"
+  },
+  {
+    "id": "Q11",
+    "query": "Show focus blocks from last week"
+  },
+  {
+    "id": "Q12",
+    "query": "When did I edit the design doc?"
+  },
+  {
+    "id": "Q13",
+    "query": "Find mentions of customer feedback"
+  },
+  {
+    "id": "Q14",
+    "query": "What changed in the draft proposal?"
+  },
+  {
+    "id": "Q15",
+    "query": "Show activities related to onboarding"
+  },
+  {
+    "id": "Q16",
+    "query": "Which tasks were blocked?"
+  },
+  {
+    "id": "Q17",
+    "query": "Find the window with error message"
+  },
+  {
+    "id": "Q18",
+    "query": "What did I research on Friday?"
+  },
+  {
+    "id": "Q19",
+    "query": "Which projects mention budget cuts?"
+  },
+  {
+    "id": "Q20",
+    "query": "Show clipboard activity around 2pm"
+  },
+  {
+    "id": "Q21",
+    "query": "Find notes about hiring"
+  },
+  {
+    "id": "Q22",
+    "query": "Which apps interrupted my focus?"
+  },
+  {
+    "id": "Q23",
+    "query": "List domains accessed in the afternoon"
+  },
+  {
+    "id": "Q24",
+    "query": "When did I update the roadmap?"
+  },
+  {
+    "id": "Q25",
+    "query": "Show latest OCR snippets from Notion"
+  },
+  {
+    "id": "Q26",
+    "query": "Find any mentions of security review"
+  },
+  {
+    "id": "Q27",
+    "query": "Summarize activity during standup"
+  },
+  {
+    "id": "Q28",
+    "query": "What did I capture during lunch?"
+  },
+  {
+    "id": "Q29",
+    "query": "Find recent Slack conversations"
+  },
+  {
+    "id": "Q30",
+    "query": "Show events with project kickoff"
+  }
+]

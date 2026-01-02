@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Autocapture Memory Engine</title>
+    <link rel="manifest" href="/static/manifest.json" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Personal Activity Memory Engine</h1>
+      <nav>
+        <button data-tab="chat" class="active">Chat</button>
+        <button data-tab="search">Search</button>
+        <button data-tab="settings">Settings</button>
+      </nav>
+    </header>
+    <main>
+      <section id="chat" class="tab active">
+        <div class="panel">
+          <div class="controls">
+            <label>Model
+              <select id="modelSelect">
+                <option value="local">Local (Ollama)</option>
+                <option value="cloud">Cloud (OpenAI)</option>
+              </select>
+            </label>
+            <label><input type="checkbox" id="sanitizeToggle" checked /> Sanitize</label>
+            <label><input type="checkbox" id="extractiveToggle" checked /> Extractive-only</label>
+            <label><input type="checkbox" id="cloudToggle" /> Cloud enabled</label>
+            <label>Time range
+              <select id="timeRange">
+                <option value="24h">Last 24h</option>
+                <option value="7d">Last 7 days</option>
+                <option value="30d">Last 30 days</option>
+              </select>
+            </label>
+          </div>
+          <div id="thread" class="thread"></div>
+          <form id="chatForm">
+            <input id="chatInput" placeholder="Ask about your day..." />
+            <button type="submit">Send</button>
+          </form>
+        </div>
+      </section>
+      <section id="search" class="tab">
+        <div class="panel">
+          <form id="searchForm">
+            <input id="searchInput" placeholder="Search events" />
+            <button type="submit">Search</button>
+          </form>
+          <div id="searchResults" class="results"></div>
+        </div>
+      </section>
+      <section id="settings" class="tab">
+        <div class="panel">
+          <h2>Routing Defaults</h2>
+          <div class="grid">
+            <label>OCR
+              <select id="routingOcr">
+                <option>local</option>
+              </select>
+            </label>
+            <label>Embeddings
+              <select id="routingEmbedding">
+                <option>local</option>
+              </select>
+            </label>
+            <label>Retrieval
+              <select id="routingRetrieval">
+                <option>local</option>
+              </select>
+            </label>
+            <label>Compressor
+              <select id="routingCompressor">
+                <option>extractive</option>
+                <option>abstractive</option>
+              </select>
+            </label>
+            <label>Verifier
+              <select id="routingVerifier">
+                <option>rules</option>
+              </select>
+            </label>
+          </div>
+          <button id="saveSettings">Save Settings</button>
+          <p class="hint">Remote mode status: <span id="remoteStatus">local-only</span></p>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

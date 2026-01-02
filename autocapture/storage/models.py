@@ -13,6 +13,112 @@ class Base(DeclarativeBase):
     pass
 
 
+class EventRecord(Base):
+    __tablename__ = "events"
+
+    event_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    ts_start: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ts_end: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    app_name: Mapped[str] = mapped_column(String(256))
+    window_title: Mapped[str] = mapped_column(String(512))
+    url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    screenshot_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screenshot_hash: Mapped[str] = mapped_column(String(128))
+    ocr_text: Mapped[str] = mapped_column(Text)
+    ocr_spans: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    embedding_vector: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    tags: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class EntityRecord(Base):
+    __tablename__ = "entities"
+
+    entity_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    entity_type: Mapped[str] = mapped_column(String(32))
+    canonical_name: Mapped[str] = mapped_column(String(512))
+    canonical_token: Mapped[str] = mapped_column(String(64), unique=True)
+    parent_entity_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    attributes: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class EntityAliasRecord(Base):
+    __tablename__ = "entity_aliases"
+
+    alias_id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid4())
+    )
+    entity_id: Mapped[str] = mapped_column(
+        ForeignKey("entities.entity_id", ondelete="CASCADE")
+    )
+    alias_text: Mapped[str] = mapped_column(String(512))
+    alias_norm: Mapped[str] = mapped_column(String(512))
+    alias_type: Mapped[str] = mapped_column(String(64))
+    confidence: Mapped[float] = mapped_column(Float)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class DailyAggregateRecord(Base):
+    __tablename__ = "daily_aggregates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    day: Mapped[str] = mapped_column(String(10), index=True)
+    app_name: Mapped[str] = mapped_column(String(256))
+    domain: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    metric_name: Mapped[str] = mapped_column(String(64))
+    metric_value: Mapped[float] = mapped_column(Float)
+    derived_from: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class PromptLibraryRecord(Base):
+    __tablename__ = "prompt_library"
+
+    prompt_id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: str(uuid4())
+    )
+    name: Mapped[str] = mapped_column(String(128))
+    version: Mapped[str] = mapped_column(String(64))
+    raw_template: Mapped[str] = mapped_column(Text)
+    derived_template: Mapped[str] = mapped_column(Text)
+    tags: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class PromptOpsRunRecord(Base):
+    __tablename__ = "prompt_ops_runs"
+
+    run_id: Mapped[str] = mapped_column(
+        String(64), primary_key=True, default=lambda: str(uuid4())
+    )
+    ts: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    sources_fetched: Mapped[dict] = mapped_column(JSON, default=dict)
+    proposals: Mapped[dict] = mapped_column(JSON, default=dict)
+    eval_results: Mapped[dict] = mapped_column(JSON, default=dict)
+    pr_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+
+
 class CaptureRecord(Base):
     __tablename__ = "captures"
 

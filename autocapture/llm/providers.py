@@ -35,7 +35,7 @@ class LLMProvider:
     """Base interface for answer generation."""
 
     async def generate_answer(
-        self, query: str, context: Sequence[ContextChunk]
+        self, system_prompt: str, query: str, context_pack_text: str
     ) -> str:
         raise NotImplementedError
 
@@ -49,23 +49,25 @@ class OllamaProvider(LLMProvider):
         self._log = get_logger("llm.ollama")
 
     async def generate_answer(
-        self, query: str, context: Sequence[ContextChunk]
+        self, system_prompt: str, query: str, context_pack_text: str
     ) -> str:
-        system_prompt, user_prompt = build_prompt(query, context)
         try:
-            return await self._generate_openai(system_prompt, user_prompt)
+            return await self._generate_openai(system_prompt, query, context_pack_text)
         except httpx.HTTPError as exc:
             self._log.warning("Ollama OpenAI endpoint failed: %s", exc)
         except KeyError as exc:
             self._log.warning("Unexpected Ollama OpenAI response: %s", exc)
-        return await self._generate_native(system_prompt, user_prompt)
+        return await self._generate_native(system_prompt, query, context_pack_text)
 
-    async def _generate_openai(self, system: str, user: str) -> str:
+    async def _generate_openai(
+        self, system: str, query: str, context_pack_text: str
+    ) -> str:
         payload = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "user", "content": query},
+                {"role": "user", "content": context_pack_text},
             ],
             "temperature": 0.2,
         }
@@ -77,12 +79,15 @@ class OllamaProvider(LLMProvider):
             data = response.json()
         return data["choices"][0]["message"]["content"].strip()
 
-    async def _generate_native(self, system: str, user: str) -> str:
+    async def _generate_native(
+        self, system: str, query: str, context_pack_text: str
+    ) -> str:
         payload = {
             "model": self._model,
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "user", "content": query},
+                {"role": "user", "content": context_pack_text},
             ],
             "stream": False,
         }
@@ -102,9 +107,8 @@ class OpenAIProvider(LLMProvider):
         self._log = get_logger("llm.openai")
 
     async def generate_answer(
-        self, query: str, context: Sequence[ContextChunk]
+        self, system_prompt: str, query: str, context_pack_text: str
     ) -> str:
-        system_prompt, user_prompt = build_prompt(query, context)
         payload = {
             "model": self._model,
             "input": [
@@ -114,7 +118,11 @@ class OpenAIProvider(LLMProvider):
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": user_prompt}],
+                    "content": [{"type": "text", "text": query}],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": context_pack_text}],
                 },
             ],
             "temperature": 0.2,

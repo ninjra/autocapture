@@ -32,6 +32,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub = p.add_subparsers(dest="cmd", required=False)
 
     sub.add_parser("run", help="Run the capture + OCR orchestrator (default).")
+    sub.add_parser("api", help="Run the local API + UI server.")
     sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
     sub.add_parser("print-config", help="Load config and print resolved values.")
 
@@ -123,6 +124,26 @@ def main(argv: list[str] | None = None) -> None:
     if cmd == "doctor":
         raise SystemExit(_doctor(config))
 
+    if cmd == "api":
+        from .api.server import create_app
+
+        _validate_remote_mode(config)
+        app = create_app(config)
+        import uvicorn
+
+        uvicorn.run(
+            app,
+            host=config.api.bind_host,
+            port=config.api.port,
+            ssl_certfile=(
+                str(config.mode.tls_cert_path) if config.mode.https_enabled else None
+            ),
+            ssl_keyfile=(
+                str(config.mode.tls_key_path) if config.mode.https_enabled else None
+            ),
+        )
+        return
+
     if not claim_single_instance("autocapture-orchestrator"):
         logger.warning(
             "Autocapture orchestrator already active in another interpreter. Exiting."
@@ -137,6 +158,27 @@ def main(argv: list[str] | None = None) -> None:
         time.sleep(0.1)
 
 
+def _validate_remote_mode(config: AppConfig) -> None:
+    if config.mode.mode != "remote":
+        return
+    missing = []
+    if not config.mode.overlay_interface:
+        missing.append("mode.overlay_interface")
+    if not config.mode.https_enabled:
+        missing.append("mode.https_enabled")
+    if not config.mode.tls_cert_path or not config.mode.tls_key_path:
+        missing.append("TLS cert/key")
+    if not config.mode.google_oauth_client_id or not config.mode.google_oauth_client_secret:
+        missing.append("Google OIDC client")
+    if not config.mode.google_allowed_emails:
+        missing.append("mode.google_allowed_emails")
+    if config.api.bind_host in ("0.0.0.0", "127.0.0.1"):
+        missing.append("api.bind_host (overlay IP)")
+    if missing:
+        raise RuntimeError(
+            "Remote mode misconfigured. Missing: " + ", ".join(missing)
+        )
+
+
 if __name__ == "__main__":
     main()
-
