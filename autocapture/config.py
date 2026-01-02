@@ -110,6 +110,9 @@ class RetentionPolicyConfig(BaseModel):
     video_days: int = Field(3, ge=1)
     roi_days: int = Field(14, ge=1)
     max_media_gb: int = Field(200, ge=1)
+    screenshot_ttl_days: int = Field(
+        90, ge=1, description="Days to keep raw screenshots before pruning."
+    )
 
 
 class StorageQuotaConfig(BaseModel):
@@ -120,8 +123,8 @@ class StorageQuotaConfig(BaseModel):
 
 class DatabaseConfig(BaseModel):
     url: str = Field(
-        "postgresql+psycopg://autocapture:autocapture@localhost:5432/autocapture",
-        description="SQLAlchemy URL for Postgres (source of truth). Use localhost when running via docker-compose ports.",
+        "sqlite:///./data/autocapture.db",
+        description="SQLAlchemy URL for local metadata storage (SQLite by default).",
     )
     echo: bool = False
     pool_size: int = Field(10, ge=1)
@@ -157,6 +160,47 @@ class ObservabilityConfig(BaseModel):
 
 class APIConfig(BaseModel):
     port: int = Field(5273, ge=1024, le=65535)
+    bind_host: str = Field(
+        "127.0.0.1", description="Bind host for the local API server."
+    )
+
+
+class ModeConfig(BaseModel):
+    mode: str = Field("local", description="local or remote")
+    overlay_interface: Optional[str] = Field(
+        None, description="Overlay interface name (tailscale0, wg0)."
+    )
+    https_enabled: bool = Field(False)
+    tls_cert_path: Optional[Path] = Field(None)
+    tls_key_path: Optional[Path] = Field(None)
+    google_oauth_client_id: Optional[str] = Field(None)
+    google_oauth_client_secret: Optional[str] = Field(None)
+    google_allowed_emails: list[str] = Field(default_factory=list)
+
+
+class ProviderRoutingConfig(BaseModel):
+    capture: str = Field("local")
+    ocr: str = Field("local")
+    embedding: str = Field("local")
+    retrieval: str = Field("local")
+    reranker: str = Field("disabled")
+    compressor: str = Field("extractive")
+    verifier: str = Field("rules")
+    llm: str = Field("ollama")
+
+
+class PrivacyConfig(BaseModel):
+    cloud_enabled: bool = Field(False)
+    sanitize_default: bool = Field(True)
+    extractive_only_default: bool = Field(True)
+
+
+class PromptOpsConfig(BaseModel):
+    enabled: bool = Field(False)
+    schedule_cron: str = Field("0 6 * * 1")
+    sources: list[str] = Field(default_factory=list)
+    github_token: Optional[str] = Field(None)
+    github_repo: Optional[str] = Field(None)
 
 
 class LLMConfig(BaseModel):
@@ -180,6 +224,10 @@ class AppConfig(BaseModel):
     observability: ObservabilityConfig = ObservabilityConfig()
     api: APIConfig = APIConfig()
     llm: LLMConfig = LLMConfig()
+    mode: ModeConfig = ModeConfig()
+    routing: ProviderRoutingConfig = ProviderRoutingConfig()
+    privacy: PrivacyConfig = PrivacyConfig()
+    promptops: PromptOpsConfig = PromptOpsConfig()
 
     @validator("capture")
     def validate_staging_dir(cls, value: CaptureConfig) -> CaptureConfig:  # type: ignore[name-defined]
@@ -198,7 +246,7 @@ def load_config(path: Path | str) -> AppConfig:
 
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as fh:
-    data = yaml.safe_load(fh)
+        data = yaml.safe_load(fh)
     # Pydantic v2 compatibility (model_validate) with v1 fallback (parse_obj).
     if hasattr(AppConfig, "model_validate"):
         return AppConfig.model_validate(data)

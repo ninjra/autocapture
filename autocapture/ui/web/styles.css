@@ -1,0 +1,130 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #0b0f17;
+  color: #f5f7fb;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
+header {
+  padding: 24px 32px;
+  background: #111827;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+nav button {
+  margin-left: 8px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid #2c3446;
+  background: transparent;
+  color: #f5f7fb;
+  cursor: pointer;
+}
+
+nav button.active {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
+main {
+  padding: 24px 32px;
+}
+
+.panel {
+  background: #111827;
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.controls label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.thread {
+  min-height: 200px;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 16px;
+  background: #0f172a;
+}
+
+.thread .msg {
+  margin-bottom: 12px;
+}
+
+.thread .msg strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+form {
+  display: flex;
+  gap: 12px;
+}
+
+input {
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #1f2937;
+  background: #0f172a;
+  color: #f5f7fb;
+}
+
+button {
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+}
+
+.results {
+  margin-top: 16px;
+}
+
+.result-card {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: #0f172a;
+  border: 1px solid #1f2937;
+  margin-bottom: 12px;
+}
+
+.tab {
+  display: none;
+}
+
+.tab.active {
+  display: block;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.hint {
+  margin-top: 12px;
+  color: #93c5fd;
+}

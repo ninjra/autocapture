@@ -1,3 +1,40 @@
+mode:
+  mode: "local"
+  overlay_interface: null
+  https_enabled: false
+  tls_cert_path: null
+  tls_key_path: null
+  google_oauth_client_id: null
+  google_oauth_client_secret: null
+  google_allowed_emails: []
+api:
+  port: 5273
+  bind_host: "127.0.0.1"
+privacy:
+  cloud_enabled: false
+  sanitize_default: true
+  extractive_only_default: true
+routing:
+  capture: "local"
+  ocr: "local"
+  embedding: "local"
+  retrieval: "local"
+  reranker: "disabled"
+  compressor: "extractive"
+  verifier: "rules"
+  llm: "ollama"
+llm:
+  provider: "ollama"
+  ollama_url: "http://127.0.0.1:11434"
+  ollama_model: "llama3"
+  openai_api_key: null
+  openai_model: "gpt-4.1-mini"
+promptops:
+  enabled: false
+  schedule_cron: "0 6 * * 1"
+  sources: []
+  github_token: null
+  github_repo: null
 capture:
   hid:
     min_interval_ms: 500
@@ -34,12 +71,13 @@ retention:
   video_days: 3
   roi_days: 14
   max_media_gb: 200
+  screenshot_ttl_days: 90
 storage:
   image_quota_gb: 2500
   prune_grace_days: 90
   prune_batch: 3000
 database:
-  url: "postgresql+psycopg://autocapture:autocapture@localhost:5432/autocapture"
+  url: "sqlite:///D:/autocapture/data/autocapture.db"
   echo: false
   pool_size: 10
   max_overflow: 10
