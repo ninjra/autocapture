@@ -148,7 +148,7 @@ def create_app(
         return FileResponse(ui_dir / "index.html")
 
     @app.post("/api/retrieve")
-    async def retrieve(request: RetrieveRequest) -> RetrieveResponse:
+    def retrieve(request: RetrieveRequest) -> RetrieveResponse:
         evidence, events = _build_evidence(
             retrieval,
             entities,
@@ -167,7 +167,7 @@ def create_app(
         )
 
     @app.post("/api/context-pack")
-    async def context_pack(request: ContextPackRequest) -> ContextPackResponse:
+    def context_pack(request: ContextPackRequest) -> ContextPackResponse:
         sanitized = _resolve_bool(request.sanitize, config.privacy.sanitize_default)
         evidence, events = _build_evidence(
             retrieval,
@@ -206,20 +206,22 @@ def create_app(
         extractive_only = _resolve_bool(
             request.extractive_only, config.privacy.extractive_only_default
         )
-        evidence, events = _build_evidence(
+        evidence, events = await asyncio.to_thread(
+            _build_evidence,
             retrieval,
             entities,
             request.query,
             request.time_range,
             request.filters,
-            k=12,
-            sanitized=sanitized,
+            12,
+            sanitized,
         )
+        routing_data = _merge_routing(config.routing, request.routing)
         pack = build_context_pack(
             query=request.query,
             evidence=evidence,
             entity_tokens=entities.tokens_for_events(events),
-            routing=_model_dump(config.routing),
+            routing=_model_dump(routing_data),
             filters={
                 "time_range": request.time_range,
                 "apps": request.filters.get("app") if request.filters else None,
@@ -251,7 +253,7 @@ def create_app(
         )
 
     @app.get("/api/event/{event_id}")
-    async def event_detail(event_id: str) -> EventResponse:
+    def event_detail(event_id: str) -> EventResponse:
         with db.session() as session:
             event = session.get(EventRecord, event_id)
         if not event:
@@ -272,11 +274,12 @@ def create_app(
         )
 
     @app.post("/api/settings")
-    async def settings(request: SettingsRequest) -> SettingsResponse:
+    def settings(request: SettingsRequest) -> SettingsResponse:
         settings_path = Path(config.capture.data_dir) / "settings.json"
-        settings_path.write_text(
-            _safe_json(request.settings), encoding="utf-8"
-        )
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = settings_path.with_suffix(".tmp")
+        tmp_path.write_text(_safe_json(request.settings), encoding="utf-8")
+        tmp_path.replace(settings_path)
         return SettingsResponse(status="ok")
 
     return app

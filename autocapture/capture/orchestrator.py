@@ -15,10 +15,12 @@ from uuid import uuid4
 
 import numpy as np
 from PIL import Image
+from sqlalchemy import func, select
 
 from ..logging_utils import get_logger
 from ..storage.database import DatabaseManager
-from ..storage.models import ObservationRecord, SegmentRecord
+from ..storage.models import CaptureRecord, ObservationRecord, SegmentRecord
+from ..tracking.win_foreground import get_foreground_context
 from .backends import DxCamBackend, MssBackend, MonitorInfo
 from .raw_input import RawInputListener
 
@@ -63,6 +65,8 @@ class CaptureOrchestrator:
         on_segment_finalize: Optional[Callable[[str], None]] = None,
         hotkey_callback: Optional[Callable[[], None]] = None,
         raw_input: RawInputListener | None = None,
+        ocr_backlog_soft_limit: int | None = None,
+        ocr_backlog_check_s: float = 1.0,
     ) -> None:
         self._log = get_logger("orchestrator")
         self._database = database
@@ -89,6 +93,12 @@ class CaptureOrchestrator:
         self._roi_thread: Optional[threading.Thread] = None
         self._active_segment_id: Optional[str] = None
         self._was_active = False
+        self._ocr_backlog_soft_limit = ocr_backlog_soft_limit
+        self._ocr_backlog_check_s = ocr_backlog_check_s
+        self._ocr_backlog_last_check = 0.0
+        self._ocr_backlog_cached_throttle = False
+        self._ocr_backlog_last_count = 0
+        self._ocr_backlog_last_log = 0.0
 
     @property
     def video_queue(self) -> queue.Queue[VideoBatch]:
@@ -162,6 +172,8 @@ class CaptureOrchestrator:
         self._enqueue_video(VideoBatch(captured_at=dt.datetime.now(dt.timezone.utc), frames=frames))
 
     def _enqueue_roi(self, item: ROIItem) -> None:
+        if self._should_throttle_ocr():
+            return
         try:
             self._roi_queue.put_nowait(item)
         except queue.Full:
@@ -215,6 +227,9 @@ class CaptureOrchestrator:
         return path
 
     def _persist_observation(self, item: ROIItem, path: Path) -> None:
+        ctx = get_foreground_context()
+        foreground_process = ctx.process_name if ctx else "unknown"
+        foreground_window = ctx.window_title if ctx else "unknown"
         with self._database.session() as session:
             session.add(
                 ObservationRecord(
@@ -225,6 +240,18 @@ class CaptureOrchestrator:
                     cursor_x=item.cursor_x,
                     cursor_y=item.cursor_y,
                     monitor_id=item.monitor_id,
+                )
+            )
+            session.add(
+                CaptureRecord(
+                    id=item.observation_id,
+                    captured_at=item.captured_at,
+                    image_path=str(path),
+                    foreground_process=foreground_process or "unknown",
+                    foreground_window=foreground_window or "unknown",
+                    monitor_id=item.monitor_id,
+                    is_fullscreen=False,
+                    ocr_status="pending",
                 )
             )
 
@@ -288,3 +315,34 @@ class CaptureOrchestrator:
         point = POINT()
         ctypes.windll.user32.GetCursorPos(ctypes.byref(point))
         return int(point.x), int(point.y)
+
+    def _should_throttle_ocr(self) -> bool:
+        if not self._ocr_backlog_soft_limit:
+            return False
+        now = time.monotonic()
+        if now - self._ocr_backlog_last_check < self._ocr_backlog_check_s:
+            return self._ocr_backlog_cached_throttle
+        self._ocr_backlog_last_check = now
+        try:
+            with self._database.session() as session:
+                count = session.execute(
+                    select(func.count())
+                    .select_from(CaptureRecord)
+                    .where(CaptureRecord.ocr_status.in_(["pending", "processing"]))
+                ).scalar_one()
+        except Exception as exc:  # pragma: no cover - defensive
+            self._log.debug("Failed to check OCR backlog: %s", exc)
+            self._ocr_backlog_cached_throttle = False
+            return False
+        self._ocr_backlog_last_count = int(count or 0)
+        self._ocr_backlog_cached_throttle = (
+            self._ocr_backlog_last_count >= self._ocr_backlog_soft_limit
+        )
+        if self._ocr_backlog_cached_throttle and now - self._ocr_backlog_last_log > 5.0:
+            self._ocr_backlog_last_log = now
+            self._log.warning(
+                "OCR backlog at %s (limit %s); throttling capture",
+                self._ocr_backlog_last_count,
+                self._ocr_backlog_soft_limit,
+            )
+        return self._ocr_backlog_cached_throttle

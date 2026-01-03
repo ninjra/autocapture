@@ -48,6 +48,15 @@ pyproject.toml        # Project dependencies and tooling configuration
 - `Ctrl+Shift+Space` opens the search popup.
 - Open the dashboard link from the tray menu.
 
+## Canonical pipeline
+
+- `autocapture run` starts the CaptureOrchestrator (captures → `CaptureRecord`) and the
+  EventIngestWorker (`CaptureRecord` → `EventRecord` via OCR).
+- The API server retrieves from `EventRecord` and builds ContextPack v1 responses.
+
+Legacy/experimental modules exist (for example `autocapture/capture/service.py` and
+`autocapture/worker/worker_main.py`) and are not the canonical path used by `main.py` run/api.
+
 ## Troubleshooting
 
 - If PyCharm does not show newly added modules, follow the Git integration checklist in
