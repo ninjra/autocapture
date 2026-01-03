@@ -1,0 +1,3 @@
+- Frozen surfaces live in autocapture/stability/frozen_manifest.json.
+- Tracking core files (types/store/tracker) are frozen; unfreeze only for bug fixes.
+- New stability tooling: tools/freeze_surfaces.py and tests/test_frozen_surfaces.py.
