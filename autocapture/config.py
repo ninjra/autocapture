@@ -74,6 +74,22 @@ class CaptureConfig(BaseModel):
     )
 
 
+class TrackingConfig(BaseModel):
+    enabled: bool = True
+    db_path: Path = Field(
+        Path("./host_events.sqlite"),
+        description="SQLite file path for host events (relative to capture.data_dir).",
+    )
+    queue_maxsize: int = Field(20000, ge=1000)
+    flush_interval_ms: int = Field(1000, ge=100)
+    foreground_poll_ms: int = Field(250, ge=50)
+    clipboard_poll_ms: int = Field(250, ge=50)
+    track_mouse_movement: bool = True
+    mouse_move_sample_ms: int = Field(50, ge=10)
+    enable_clipboard: bool = True
+    retention_days: int | None = None
+
+
 class OCRConfig(BaseModel):
     queue_maxsize: int = Field(2000, ge=100)
     batch_size: int = Field(32, ge=1)
@@ -213,6 +229,7 @@ class LLMConfig(BaseModel):
 
 class AppConfig(BaseModel):
     capture: CaptureConfig = CaptureConfig()
+    tracking: TrackingConfig = TrackingConfig()
     ocr: OCRConfig = OCRConfig()
     embeddings: EmbeddingConfig = EmbeddingConfig()
     worker: WorkerConfig = WorkerConfig()
@@ -238,6 +255,15 @@ class AppConfig(BaseModel):
     @validator("worker")
     def validate_data_dir(cls, value: WorkerConfig) -> WorkerConfig:  # type: ignore[name-defined]
         value.data_dir.mkdir(parents=True, exist_ok=True)
+        return value
+
+    @validator("tracking")
+    def validate_tracking_dir(
+        cls, value: TrackingConfig, values: dict
+    ) -> TrackingConfig:  # type: ignore[name-defined]
+        capture = values.get("capture")
+        if capture:
+            capture.data_dir.mkdir(parents=True, exist_ok=True)
         return value
 
 

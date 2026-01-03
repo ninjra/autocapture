@@ -50,6 +50,17 @@ capture:
   video_bitrate: "8M"
   video_preset: "p4"
   max_pending: 8000
+tracking:
+  enabled: true
+  db_path: "db/host_events.sqlite"
+  queue_maxsize: 20000
+  flush_interval_ms: 1000
+  foreground_poll_ms: 250
+  clipboard_poll_ms: 250
+  track_mouse_movement: true
+  mouse_move_sample_ms: 50
+  enable_clipboard: true
+  retention_days: null
 ocr:
   queue_maxsize: 4000
   batch_size: 32

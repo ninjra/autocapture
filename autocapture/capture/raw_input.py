@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from ..logging_utils import get_logger
+from ..tracking.types import InputVectorEvent
 
 if ctypes.sizeof(ctypes.c_void_p) == 8:
     ULONG_PTR = ctypes.c_ulonglong
@@ -21,6 +22,15 @@ WM_HOTKEY = 0x0312
 WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
 RIDEV_INPUTSINK = 0x00000100
+RID_INPUT = 0x10000003
+
+RIM_TYPEMOUSE = 0
+RIM_TYPEKEYBOARD = 1
+
+RI_MOUSE_LEFT_BUTTON_DOWN = 0x0001
+RI_MOUSE_RIGHT_BUTTON_DOWN = 0x0004
+RI_MOUSE_MIDDLE_BUTTON_DOWN = 0x0010
+RI_MOUSE_WHEEL = 0x0400
 
 MOD_CONTROL = 0x0002
 MOD_SHIFT = 0x0004
@@ -65,6 +75,46 @@ class MSG(ctypes.Structure):
     ]
 
 
+class RAWINPUTHEADER(ctypes.Structure):
+    _fields_ = [
+        ("dwType", ctypes.c_uint),
+        ("dwSize", ctypes.c_uint),
+        ("hDevice", ctypes.c_void_p),
+        ("wParam", ULONG_PTR),
+    ]
+
+
+class RAWMOUSE(ctypes.Structure):
+    _fields_ = [
+        ("usFlags", ctypes.c_ushort),
+        ("usButtonFlags", ctypes.c_ushort),
+        ("usButtonData", ctypes.c_ushort),
+        ("ulRawButtons", ctypes.c_uint),
+        ("lLastX", ctypes.c_long),
+        ("lLastY", ctypes.c_long),
+        ("ulExtraInformation", ctypes.c_uint),
+    ]
+
+
+class RAWKEYBOARD(ctypes.Structure):
+    _fields_ = [
+        ("MakeCode", ctypes.c_ushort),
+        ("Flags", ctypes.c_ushort),
+        ("Reserved", ctypes.c_ushort),
+        ("VKey", ctypes.c_ushort),
+        ("Message", ctypes.c_uint),
+        ("ExtraInformation", ctypes.c_uint),
+    ]
+
+
+class RAWINPUTDATA(ctypes.Union):
+    _fields_ = [("mouse", RAWMOUSE), ("keyboard", RAWKEYBOARD)]
+
+
+class RAWINPUT(ctypes.Structure):
+    _fields_ = [("header", RAWINPUTHEADER), ("data", RAWINPUTDATA)]
+
+
 @dataclass(slots=True)
 class HotkeyConfig:
     modifiers: int = MOD_CONTROL | MOD_SHIFT
@@ -79,11 +129,17 @@ class RawInputListener:
         idle_grace_ms: int,
         on_activity: Optional[Callable[[], None]] = None,
         on_hotkey: Optional[Callable[[], None]] = None,
+        on_input_event: Optional[Callable[[InputVectorEvent], None]] = None,
+        track_mouse_movement: bool = True,
+        mouse_move_sample_ms: int = 50,
         hotkey: HotkeyConfig | None = None,
     ) -> None:
         self._idle_grace_ms = idle_grace_ms
         self._on_activity = on_activity
         self._on_hotkey = on_hotkey
+        self._on_input_event = on_input_event
+        self._track_mouse_movement = track_mouse_movement
+        self._mouse_move_sample_ms = mouse_move_sample_ms
         self._hotkey = hotkey or HotkeyConfig()
         self._log = get_logger("raw_input")
         self._thread: Optional[threading.Thread] = None
@@ -93,6 +149,9 @@ class RawInputListener:
         self._hotkey_id = 1
         self.last_input_ts = self._now_ms()
         self.active_until_ts = self.last_input_ts
+        self._last_mouse_emit_ts = self.last_input_ts
+        self._mouse_move_dx = 0
+        self._mouse_move_dy = 0
 
     def start(self) -> None:
         if self._running.is_set():
@@ -156,7 +215,7 @@ class RawInputListener:
         @WNDPROCTYPE
         def wndproc(hwnd, msg, wparam, lparam):
             if msg == WM_INPUT:
-                self._mark_activity()
+                self._handle_wm_input(lparam)
                 return 0
             if msg == WM_HOTKEY:
                 if self._on_hotkey:
@@ -226,6 +285,76 @@ class RawInputListener:
             )
         )
 
+    def _handle_wm_input(self, lparam: int) -> None:
+        self._mark_activity()
+        if not self._on_input_event:
+            return
+        try:
+            data_size = ctypes.c_uint(0)
+            ctypes.windll.user32.GetRawInputData(
+                lparam,
+                RID_INPUT,
+                None,
+                ctypes.byref(data_size),
+                ctypes.sizeof(RAWINPUTHEADER),
+            )
+            if data_size.value == 0:
+                return
+            buffer = ctypes.create_string_buffer(data_size.value)
+            read = ctypes.windll.user32.GetRawInputData(
+                lparam,
+                RID_INPUT,
+                buffer,
+                ctypes.byref(data_size),
+                ctypes.sizeof(RAWINPUTHEADER),
+            )
+            if read != data_size.value:
+                return
+            raw = RAWINPUT.from_buffer_copy(buffer)
+            now_ms = self._now_wall_ms()
+            if raw.header.dwType == RIM_TYPEKEYBOARD:
+                event = InputVectorEvent(
+                    ts_ms=now_ms,
+                    device="keyboard",
+                    mouse={"events": 1},
+                )
+                self._on_input_event(event)
+            elif raw.header.dwType == RIM_TYPEMOUSE:
+                mouse = raw.data.mouse
+                payload: dict[str, int] = {
+                    "left_clicks": 1 if mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN else 0,
+                    "right_clicks": 1 if mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN else 0,
+                    "middle_clicks": 1 if mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN else 0,
+                }
+                if mouse.usButtonFlags & RI_MOUSE_WHEEL:
+                    payload["wheel_events"] = 1
+                    payload["wheel_delta"] = ctypes.c_short(mouse.usButtonData).value
+                else:
+                    payload["wheel_events"] = 0
+                    payload["wheel_delta"] = 0
+                emitted_move = False
+                if self._track_mouse_movement:
+                    self._mouse_move_dx += int(mouse.lLastX)
+                    self._mouse_move_dy += int(mouse.lLastY)
+                    if now_ms - self._last_mouse_emit_ts >= self._mouse_move_sample_ms:
+                        payload["move_dx"] = self._mouse_move_dx
+                        payload["move_dy"] = self._mouse_move_dy
+                        self._mouse_move_dx = 0
+                        self._mouse_move_dy = 0
+                        self._last_mouse_emit_ts = now_ms
+                        emitted_move = True
+                if (
+                    payload["left_clicks"]
+                    or payload["right_clicks"]
+                    or payload["middle_clicks"]
+                    or payload["wheel_events"]
+                    or emitted_move
+                ):
+                    event = InputVectorEvent(ts_ms=now_ms, device="mouse", mouse=payload)
+                    self._on_input_event(event)
+        except Exception as exc:  # pragma: no cover - Windows-only parsing
+            self._log.debug("Raw input parse failed: %s", exc)
+
     def _mark_activity(self) -> None:
         now = self._now_ms()
         self.last_input_ts = now
@@ -239,3 +368,7 @@ class RawInputListener:
     @staticmethod
     def _now_ms() -> int:
         return int(time.monotonic() * 1000)
+
+    @staticmethod
+    def _now_wall_ms() -> int:
+        return int(time.time() * 1000)
