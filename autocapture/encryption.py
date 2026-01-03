@@ -23,16 +23,23 @@ class EncryptionManager:
     def __init__(self, config: EncryptionConfig) -> None:
         self._config = config
         self._log = get_logger("encryption")
-        self._key = self._load_key()
+        self._key: bytes | None = None
+        if self._config.enabled:
+            self._key = self._load_key()
 
     def encrypt_file(self, source: Path, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
         if not self._config.enabled:
-            destination.write_bytes(source.read_bytes())
+            with source.open("rb") as src, destination.open("wb") as dst:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
             return
 
         nonce = os.urandom(12)
         encryptor = Cipher(algorithms.AES(self._key), modes.GCM(nonce)).encryptor()
-        destination.parent.mkdir(parents=True, exist_ok=True)
         with source.open("rb") as src, destination.open("wb") as dst:
             dst.write(nonce)
             while True:
@@ -45,13 +52,18 @@ class EncryptionManager:
         self._log.debug("Encrypted %s -> %s", source, destination)
 
     def decrypt_file(self, source: Path, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
         if not self._config.enabled:
-            destination.write_bytes(source.read_bytes())
+            with source.open("rb") as src, destination.open("wb") as dst:
+                while True:
+                    chunk = src.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    dst.write(chunk)
             return
 
         # AES-GCM needs the final tag up front to initialize the decryptor.
         # We do a cheap seek to read the last 16 bytes (tag), then stream-decrypt.
-        destination.parent.mkdir(parents=True, exist_ok=True)
         tag_len = 16
         with source.open("rb") as src, destination.open("wb") as dst:
             nonce = src.read(12)
@@ -85,12 +97,20 @@ class EncryptionManager:
             cred = win32cred.CredRead(
                 self._config.key_name, win32cred.CRED_TYPE_GENERIC
             )
-            return cred["CredentialBlob"]
+            key = cred["CredentialBlob"]
+            return _validate_key_length(key)
         if provider.startswith("file:"):
-            return Path(provider.split(":", 1)[1]).read_bytes()
+            key = Path(provider.split(":", 1)[1]).read_bytes()
+            return _validate_key_length(key)
         if provider.startswith("env:"):
             key = os.getenv(provider.split(":", 1)[1])
             if not key:
                 raise RuntimeError("Encryption key environment variable is missing")
-            return bytes.fromhex(key)
+            return _validate_key_length(bytes.fromhex(key))
         raise ValueError(f"Unsupported key provider: {provider}")
+
+
+def _validate_key_length(key: bytes) -> bytes:
+    if len(key) not in (16, 24, 32):
+        raise ValueError("AES key must be 16, 24, or 32 bytes long")
+    return key

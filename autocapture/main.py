@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from .config import AppConfig, load_config
 from .logging_utils import configure_logging
 from .storage.database import DatabaseManager
 from .tracking import HostVectorTracker
+from .worker.event_worker import EventIngestWorker
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -35,6 +37,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
     sub.add_parser("run", help="Run the capture + OCR orchestrator (default).")
     sub.add_parser("api", help="Run the local API + UI server.")
+    sub.add_parser("worker", help="Run the OCR ingest worker loop only.")
     sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
     sub.add_parser("print-config", help="Load config and print resolved values.")
 
@@ -80,17 +83,25 @@ def _doctor(config: AppConfig) -> int:
             logger.error("Encryption init failed: %s", exc)
             ok = False
 
+    try:
+        import rapidocr_onnxruntime  # noqa: F401
+    except Exception as exc:
+        logger.error("OCR dependency missing (rapidocr_onnxruntime): %s", exc)
+        ok = False
+
     logger.info("Doctor result: %s", "OK" if ok else "FAILED")
     return 0 if ok else 2
 
 
 def _build_orchestrator(
-    config: AppConfig, raw_input: RawInputListener | None = None
+    config: AppConfig,
+    raw_input: RawInputListener | None = None,
+    db: DatabaseManager | None = None,
 ) -> CaptureOrchestrator:
-    db = DatabaseManager(config.database)
+    db_manager = db or DatabaseManager(config.database)
     cap = config.capture
     return CaptureOrchestrator(
-        database=db,
+        database=db_manager,
         data_dir=Path(cap.data_dir),
         idle_grace_ms=cap.hid.idle_grace_ms,
         fps_soft_cap=cap.hid.fps_soft_cap,
@@ -98,10 +109,13 @@ def _build_orchestrator(
         on_vision_observation=None,
         vision_sample_rate=getattr(cap, "vision_sample_rate", 0.0),
         raw_input=raw_input,
+        ocr_backlog_soft_limit=config.worker.ocr_backlog_soft_limit,
+        ocr_backlog_check_s=1.0,
     )
 
 
 async def _run_async(config: AppConfig) -> int:
+    db_manager = DatabaseManager(config.database)
     tracker = HostVectorTracker(
         config=config.tracking,
         data_dir=str(config.capture.data_dir),
@@ -115,9 +129,15 @@ async def _run_async(config: AppConfig) -> int:
         track_mouse_movement=config.tracking.track_mouse_movement,
         mouse_move_sample_ms=config.tracking.mouse_move_sample_ms,
     )
-    orch = _build_orchestrator(config, raw_input=raw_input)
+    orch = _build_orchestrator(config, raw_input=raw_input, db=db_manager)
+    worker_stop = threading.Event()
+    worker = EventIngestWorker(config, db_manager=db_manager)
+    worker_thread = threading.Thread(
+        target=worker.run_forever, kwargs={"stop_event": worker_stop}, daemon=True
+    )
     tracker.start()
     orch.start()
+    worker_thread.start()
     logger.info("Autocapture running. Press Ctrl+C to stop.")
     try:
         while True:
@@ -133,6 +153,8 @@ async def _run_async(config: AppConfig) -> int:
             tracker.stop()
         except Exception:
             logger.exception("Error while stopping tracker")
+        worker_stop.set()
+        worker_thread.join(timeout=2.0)
     return 0
 
 
@@ -176,7 +198,19 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
 
-    if not claim_single_instance("autocapture-orchestrator"):
+    if cmd == "worker":
+        if not claim_single_instance():
+            logger.warning("Autocapture worker already active in another interpreter. Exiting.")
+            raise SystemExit(0)
+        worker = EventIngestWorker(config)
+        logger.info("OCR ingest worker running. Press Ctrl+C to stop.")
+        try:
+            worker.run_forever()
+        except KeyboardInterrupt:
+            logger.info("Shutting down worker")
+        return
+
+    if not claim_single_instance():
         logger.warning(
             "Autocapture orchestrator already active in another interpreter. Exiting."
         )
