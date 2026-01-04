@@ -10,7 +10,7 @@ packages = [{ include = "autocapture" }]
 autocapture = "autocapture.main:main"
 
 [tool.poetry.dependencies]
-python = "^3.11"
+python = ">=3.12,<3.13"
 pyyaml = "^6.0.1"
 loguru = "^0.7.2"
 pydantic = "^2.6.4"
