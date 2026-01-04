@@ -185,6 +185,8 @@ class HostEventAggregator:
         rows: list[HostEventRow] = []
         if isinstance(event, InputVectorEvent):
             rows.extend(self._handle_input(event, now_ms))
+            if event.device == "mouse" and self._session_id and self._bucket_has_input():
+                rows.extend(self._flush_bucket(now_ms))
         elif isinstance(event, ForegroundChangeEvent):
             rows.extend(self._handle_foreground(event, now_ms))
         elif isinstance(event, ClipboardChangeEvent):
@@ -261,6 +263,24 @@ class HostEventAggregator:
         if now_ms - self._bucket.ts_start_ms >= self._flush_interval_ms:
             return self._flush_bucket(now_ms)
         return []
+
+    def _bucket_has_input(self) -> bool:
+        if not self._bucket:
+            return False
+        bucket = self._bucket
+        if bucket.keyboard_events:
+            return True
+        if (
+            bucket.mouse_left_clicks
+            or bucket.mouse_right_clicks
+            or bucket.mouse_middle_clicks
+            or bucket.mouse_wheel_events
+            or bucket.mouse_wheel_delta
+        ):
+            return True
+        if self._track_mouse_movement and (bucket.mouse_move_dx or bucket.mouse_move_dy):
+            return True
+        return False
 
     def _flush_bucket(self, now_ms: int) -> list[HostEventRow]:
         if not self._bucket:
