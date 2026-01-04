@@ -214,10 +214,7 @@ class HostEventAggregator:
 
     def _handle_input(self, event: InputVectorEvent, now_ms: int) -> list[HostEventRow]:
         rows: list[HostEventRow] = []
-        if (
-            self._last_input_ms is None
-            or now_ms - self._last_input_ms >= self._idle_grace_ms
-        ):
+        if self._session_id is None:
             self._session_id = str(uuid4())
             rows.append(self._session_row(now_ms, "session_start"))
             self._bucket = None
