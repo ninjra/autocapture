@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
+
+import importlib.resources as resources
 
 import yaml
 
@@ -25,23 +27,22 @@ class PromptTemplate:
 
 
 class PromptRegistry:
-    def __init__(self, prompts_dir: Path) -> None:
+    def __init__(self, prompts_dir: Optional[Path] = None, package: Optional[str] = None) -> None:
         self._prompts_dir = prompts_dir
+        self._package = package
         self._cache: dict[str, PromptTemplate] = {}
 
     def load(self) -> None:
-        for path in self._prompts_dir.glob("*.yaml"):
-            payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-            name = payload["name"]
-            template = PromptTemplate(
-                name=name,
-                version=payload["version"],
-                system_prompt=payload["system_prompt"],
-                tags=payload.get("tags", []),
-                raw_template=payload.get("raw_template", payload["system_prompt"]),
-                derived_template=payload.get("derived_template", payload["system_prompt"]),
-            )
-            self._cache[name] = template
+        if self._prompts_dir and self._prompts_dir.exists():
+            for path in self._prompts_dir.glob("*.yaml"):
+                template = _parse_prompt(path.read_text(encoding="utf-8"))
+                self._cache[template.name] = template
+        if self._package:
+            for entry in resources.files(self._package).iterdir():
+                if entry.name.endswith(".yaml"):
+                    payload = entry.read_text(encoding="utf-8")
+                    template = _parse_prompt(payload)
+                    self._cache[template.name] = template
 
     def get(self, name: str) -> PromptTemplate:
         if not self._cache:
@@ -54,6 +55,23 @@ class PromptRegistry:
         if not self._cache:
             self.load()
         return self._cache.values()
+
+    @classmethod
+    def from_package(cls, package: str) -> "PromptRegistry":
+        return cls(package=package)
+
+
+def _parse_prompt(raw: str) -> PromptTemplate:
+    payload = yaml.safe_load(raw)
+    name = payload["name"]
+    return PromptTemplate(
+        name=name,
+        version=payload["version"],
+        system_prompt=payload["system_prompt"],
+        tags=payload.get("tags", []),
+        raw_template=payload.get("raw_template", payload["system_prompt"]),
+        derived_template=payload.get("derived_template", payload["system_prompt"]),
+    )
 
 
 class PromptLibraryService:

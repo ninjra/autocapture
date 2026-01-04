@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -120,6 +122,16 @@ class WorkerConfig(BaseModel):
     ocr_backlog_soft_limit: int = Field(
         5000, ge=100, description="Soft limit for OCR backlog throttling."
     )
+    ocr_workers: int = Field(
+        max(1, os.cpu_count() // 2 if os.cpu_count() else 1),
+        ge=1,
+        description="Number of OCR ingest workers.",
+    )
+    embed_workers: int = Field(
+        1,
+        ge=1,
+        description="Number of embedding/indexing workers.",
+    )
 
 
 class RetentionPolicyConfig(BaseModel):
@@ -157,7 +169,9 @@ class QdrantConfig(BaseModel):
 class EncryptionConfig(BaseModel):
     enabled: bool = Field(True)
     key_provider: str = Field(
-        "windows-credential-manager",
+        default_factory=lambda: "windows-credential-manager"
+        if sys.platform == "win32"
+        else "file:./data/autocapture.key",
         description="Strategy to fetch AES key (file, env, kms).",
     )
     key_name: str = Field("autocapture/nas-aes-key")

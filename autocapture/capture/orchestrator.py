@@ -18,11 +18,20 @@ from PIL import Image
 from sqlalchemy import func, select
 
 from ..logging_utils import get_logger
+from ..observability.metrics import (
+    captures_dropped_total,
+    captures_taken_total,
+    ocr_backlog,
+    roi_queue_depth,
+)
+from ..media.store import MediaStore
 from ..storage.database import DatabaseManager
 from ..storage.models import CaptureRecord, ObservationRecord, SegmentRecord
 from ..tracking.win_foreground import get_foreground_context
 from .backends import DxCamBackend, MssBackend, MonitorInfo
+from .ffmpeg_recorder import SegmentRecorder
 from .raw_input import RawInputListener
+from .screen_capture import CaptureFrame
 
 
 class POINT(ctypes.Structure):
@@ -38,12 +47,9 @@ class ROIItem:
     cursor_x: int
     cursor_y: int
     monitor_id: str
-
-
-@dataclass(slots=True)
-class VideoBatch:
-    captured_at: dt.datetime
-    frames: Dict[str, np.ndarray]
+    foreground_process: str
+    foreground_window: str
+    is_fullscreen: bool
 
 
 class CaptureOrchestrator:
@@ -58,7 +64,6 @@ class CaptureOrchestrator:
         roi_w: int = 512,
         roi_h: int = 512,
         roi_queue_size: int = 256,
-        video_queue_size: int = 64,
         on_ocr_observation: Optional[Callable[[str], None]] = None,
         on_vision_observation: Optional[Callable[[str], None]] = None,
         vision_sample_rate: float = 0.0,
@@ -67,6 +72,7 @@ class CaptureOrchestrator:
         raw_input: RawInputListener | None = None,
         ocr_backlog_soft_limit: int | None = None,
         ocr_backlog_check_s: float = 1.0,
+        media_store: MediaStore | None = None,
     ) -> None:
         self._log = get_logger("orchestrator")
         self._database = database
@@ -87,8 +93,13 @@ class CaptureOrchestrator:
             on_hotkey=hotkey_callback,
         )
         self._roi_queue: queue.Queue[ROIItem] = queue.Queue(maxsize=roi_queue_size)
-        self._video_queue: queue.Queue[VideoBatch] = queue.Queue(maxsize=video_queue_size)
+        self._segment_recorder = SegmentRecorder(
+            capture_config=self._build_capture_config()
+        )
+        self._media_store = media_store
+        self._segment_video_paths: dict[str, Path] = {}
         self._running = threading.Event()
+        self._paused = threading.Event()
         self._capture_thread: Optional[threading.Thread] = None
         self._roi_thread: Optional[threading.Thread] = None
         self._active_segment_id: Optional[str] = None
@@ -100,14 +111,11 @@ class CaptureOrchestrator:
         self._ocr_backlog_last_count = 0
         self._ocr_backlog_last_log = 0.0
 
-    @property
-    def video_queue(self) -> queue.Queue[VideoBatch]:
-        return self._video_queue
-
     def start(self) -> None:
         if self._running.is_set():
             return
         self._running.set()
+        self._paused.clear()
         self._raw_input.start()
         self._roi_thread = threading.Thread(target=self._run_roi_saver, daemon=True)
         self._roi_thread.start()
@@ -122,18 +130,31 @@ class CaptureOrchestrator:
             return
         self._running.clear()
         self._raw_input.stop()
+        self._segment_recorder.stop_segment()
         if self._capture_thread:
             self._capture_thread.join(timeout=2.0)
         if self._roi_thread:
             self._roi_thread.join(timeout=2.0)
         self._log.info("Capture orchestrator stopped")
 
+    def pause(self) -> None:
+        self._paused.set()
+        self._log.info("Capture orchestrator paused")
+
+    def resume(self) -> None:
+        self._paused.clear()
+        self._log.info("Capture orchestrator resumed")
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused.is_set()
+
     def _run_capture_loop(self) -> None:  # pragma: no cover - depends on Windows APIs
         interval = 1.0 / max(self._fps_soft_cap, 0.01)
         while self._running.is_set():
             loop_start = time.monotonic()
             now_ms = int(loop_start * 1000)
-            active = now_ms < self._raw_input.active_until_ts
+            active = (now_ms < self._raw_input.active_until_ts) and not self._paused.is_set()
 
             if active:
                 if not self._was_active:
@@ -156,6 +177,10 @@ class CaptureOrchestrator:
             return
         cursor_x, cursor_y = self._get_cursor_pos()
         monitor = self._find_monitor(cursor_x, cursor_y)
+        ctx = get_foreground_context()
+        foreground_process = ctx.process_name if ctx else "unknown"
+        foreground_window = ctx.window_title if ctx else "unknown"
+        is_fullscreen = False
         if monitor and monitor.id in frames:
             roi = self._crop_roi(frames[monitor.id], monitor, cursor_x, cursor_y)
             observation_id = str(uuid4())
@@ -167,23 +192,53 @@ class CaptureOrchestrator:
                 cursor_x=cursor_x,
                 cursor_y=cursor_y,
                 monitor_id=monitor.id,
+                foreground_process=foreground_process or "unknown",
+                foreground_window=foreground_window or "unknown",
+                is_fullscreen=is_fullscreen,
             )
             self._enqueue_roi(roi_item)
-        self._enqueue_video(VideoBatch(captured_at=dt.datetime.now(dt.timezone.utc), frames=frames))
+            captures_taken_total.inc()
+        self._enqueue_video(frames, foreground_process, foreground_window, is_fullscreen)
 
     def _enqueue_roi(self, item: ROIItem) -> None:
         if self._should_throttle_ocr():
+            captures_dropped_total.inc()
             return
         try:
             self._roi_queue.put_nowait(item)
+            roi_queue_depth.set(self._roi_queue.qsize())
         except queue.Full:
             self._log.warning("ROI queue full; dropping observation %s", item.observation_id)
+            captures_dropped_total.inc()
 
-    def _enqueue_video(self, batch: VideoBatch) -> None:
-        try:
-            self._video_queue.put_nowait(batch)
-        except queue.Full:
-            self._log.warning("Video queue full; dropping batch at %s", batch.captured_at)
+    def _enqueue_video(
+        self,
+        frames: Dict[str, np.ndarray],
+        foreground_process: str,
+        foreground_window: str,
+        is_fullscreen: bool,
+    ) -> None:
+        if not self._segment_recorder.is_available:
+            return
+        capture_frames: list[CaptureFrame] = []
+        for monitor in self._monitors:
+            frame = frames.get(monitor.id)
+            if frame is None:
+                continue
+            image = Image.fromarray(np.ascontiguousarray(frame[:, :, ::-1]))
+            capture_frames.append(
+                CaptureFrame(
+                    timestamp=dt.datetime.now(dt.timezone.utc),
+                    image=image,
+                    foreground_process=foreground_process or "unknown",
+                    foreground_window=foreground_window or "unknown",
+                    monitor_id=monitor.id,
+                    monitor_bounds=(monitor.left, monitor.top, monitor.width, monitor.height),
+                    is_fullscreen=is_fullscreen,
+                )
+            )
+        if capture_frames:
+            self._segment_recorder.enqueue(capture_frames)
 
     def _run_roi_saver(self) -> None:
         while self._running.is_set() or not self._roi_queue.empty():
@@ -193,6 +248,8 @@ class CaptureOrchestrator:
                 continue
             try:
                 path = self._save_roi(item)
+                if path is None:
+                    continue
                 self._persist_observation(item, path)
                 if self._on_ocr_observation:
                     self._on_ocr_observation(item.observation_id)
@@ -210,8 +267,11 @@ class CaptureOrchestrator:
                 )
             finally:
                 self._roi_queue.task_done()
+                roi_queue_depth.set(self._roi_queue.qsize())
 
-    def _save_roi(self, item: ROIItem) -> Path:
+    def _save_roi(self, item: ROIItem) -> Optional[Path]:
+        if self._media_store:
+            return self._media_store.write_roi(item.image, item.captured_at, item.observation_id)
         timestamp = item.captured_at.astimezone(dt.timezone.utc)
         path = (
             self._data_dir
@@ -227,9 +287,6 @@ class CaptureOrchestrator:
         return path
 
     def _persist_observation(self, item: ROIItem, path: Path) -> None:
-        ctx = get_foreground_context()
-        foreground_process = ctx.process_name if ctx else "unknown"
-        foreground_window = ctx.window_title if ctx else "unknown"
         with self._database.session() as session:
             session.add(
                 ObservationRecord(
@@ -247,34 +304,60 @@ class CaptureOrchestrator:
                     id=item.observation_id,
                     captured_at=item.captured_at,
                     image_path=str(path),
-                    foreground_process=foreground_process or "unknown",
-                    foreground_window=foreground_window or "unknown",
+                    foreground_process=item.foreground_process or "unknown",
+                    foreground_window=item.foreground_window or "unknown",
                     monitor_id=item.monitor_id,
-                    is_fullscreen=False,
+                    is_fullscreen=item.is_fullscreen,
                     ocr_status="pending",
                 )
             )
 
     def _start_segment(self) -> str:
         segment_id = str(uuid4())
+        started_at = dt.datetime.now(dt.timezone.utc)
         with self._database.session() as session:
             session.add(
                 SegmentRecord(
                     id=segment_id,
-                    started_at=dt.datetime.now(dt.timezone.utc),
+                    started_at=started_at,
                     state="recording",
                 )
             )
+        output_path = None
+        if self._media_store:
+            staging_path, final_path = self._media_store.reserve_video_paths(
+                started_at, segment_id
+            )
+            output_path = staging_path
+            self._segment_video_paths[segment_id] = final_path
+        self._segment_recorder.start_segment(
+            started_at=started_at,
+            segment_id=segment_id,
+            output_path=output_path,
+        )
         return segment_id
 
     def _close_segment(self, segment_id: Optional[str]) -> None:
         if not segment_id:
             return
+        segment = self._segment_recorder.stop_segment()
         with self._database.session() as session:
-            segment = session.get(SegmentRecord, segment_id)
-            if segment:
-                segment.ended_at = dt.datetime.now(dt.timezone.utc)
-                segment.state = "closed"
+            record = session.get(SegmentRecord, segment_id)
+            if record:
+                record.ended_at = dt.datetime.now(dt.timezone.utc)
+                if segment is None:
+                    record.state = "closed_no_video"
+                else:
+                    record.state = segment.state or "closed"
+                    final_path = None
+                    if segment.video_path and self._media_store:
+                        final_path = self._media_store.finalize_video(
+                            Path(segment.video_path), self._segment_video_paths.get(segment_id, Path(segment.video_path))
+                        )
+                    record.video_path = str(final_path or segment.video_path) if segment.video_path else None
+                    record.encoder = segment.encoder
+                    record.frame_count = segment.frame_count
+        self._segment_video_paths.pop(segment_id, None)
         if self._on_segment_finalize:
             self._on_segment_finalize(segment_id)
 
@@ -335,6 +418,7 @@ class CaptureOrchestrator:
             self._ocr_backlog_cached_throttle = False
             return False
         self._ocr_backlog_last_count = int(count or 0)
+        ocr_backlog.set(self._ocr_backlog_last_count)
         self._ocr_backlog_cached_throttle = (
             self._ocr_backlog_last_count >= self._ocr_backlog_soft_limit
         )
@@ -346,3 +430,14 @@ class CaptureOrchestrator:
                 self._ocr_backlog_soft_limit,
             )
         return self._ocr_backlog_cached_throttle
+
+    def _build_capture_config(self):
+        from ..config import CaptureConfig, HIDConfig
+
+        return CaptureConfig(
+            hid=HIDConfig(
+                idle_grace_ms=self._idle_grace_ms,
+                fps_soft_cap=self._fps_soft_cap,
+            ),
+            data_dir=self._data_dir,
+        )
