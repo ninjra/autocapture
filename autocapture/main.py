@@ -7,22 +7,17 @@ It replaces earlier experimental bootstrap code and avoids circular imports.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import os
 import sys
-import threading
-import time
 from pathlib import Path
 
 from loguru import logger
 
 from . import claim_single_instance, ensure_expected_interpreter
-from .capture.orchestrator import CaptureOrchestrator
-from .capture.raw_input import RawInputListener
 from .config import AppConfig, load_config
 from .logging_utils import configure_logging
+from .runtime import AppRuntime
 from .storage.database import DatabaseManager
-from .tracking import HostVectorTracker
 from .worker.event_worker import EventIngestWorker
 
 
@@ -36,6 +31,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub = p.add_subparsers(dest="cmd", required=False)
 
     sub.add_parser("run", help="Run the capture + OCR orchestrator (default).")
+    sub.add_parser("app", help="Run the tray UI + full local pipeline.")
+    sub.add_parser("tray", help="Alias for app.")
     sub.add_parser("api", help="Run the local API + UI server.")
     sub.add_parser("worker", help="Run the OCR ingest worker loop only.")
     sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
@@ -93,68 +90,12 @@ def _doctor(config: AppConfig) -> int:
     return 0 if ok else 2
 
 
-def _build_orchestrator(
-    config: AppConfig,
-    raw_input: RawInputListener | None = None,
-    db: DatabaseManager | None = None,
-) -> CaptureOrchestrator:
-    db_manager = db or DatabaseManager(config.database)
-    cap = config.capture
-    return CaptureOrchestrator(
-        database=db_manager,
-        data_dir=Path(cap.data_dir),
-        idle_grace_ms=cap.hid.idle_grace_ms,
-        fps_soft_cap=cap.hid.fps_soft_cap,
-        on_ocr_observation=None,
-        on_vision_observation=None,
-        vision_sample_rate=getattr(cap, "vision_sample_rate", 0.0),
-        raw_input=raw_input,
-        ocr_backlog_soft_limit=config.worker.ocr_backlog_soft_limit,
-        ocr_backlog_check_s=1.0,
-    )
-
-
-async def _run_async(config: AppConfig) -> int:
-    db_manager = DatabaseManager(config.database)
-    tracker = HostVectorTracker(
-        config=config.tracking,
-        data_dir=str(config.capture.data_dir),
-        idle_grace_ms=config.capture.hid.idle_grace_ms,
-    )
-    raw_input = RawInputListener(
-        idle_grace_ms=config.capture.hid.idle_grace_ms,
-        on_activity=None,
-        on_hotkey=None,
-        on_input_event=tracker.ingest_input_event if config.tracking.enabled else None,
-        track_mouse_movement=config.tracking.track_mouse_movement,
-        mouse_move_sample_ms=config.tracking.mouse_move_sample_ms,
-    )
-    orch = _build_orchestrator(config, raw_input=raw_input, db=db_manager)
-    worker_stop = threading.Event()
-    worker = EventIngestWorker(config, db_manager=db_manager)
-    worker_thread = threading.Thread(
-        target=worker.run_forever, kwargs={"stop_event": worker_stop}, daemon=True
-    )
-    tracker.start()
-    orch.start()
-    worker_thread.start()
+def _run_runtime(config: AppConfig) -> int:
+    runtime = AppRuntime(config)
+    runtime.start()
     logger.info("Autocapture running. Press Ctrl+C to stop.")
-    try:
-        while True:
-            await asyncio.sleep(0.5)
-    except asyncio.CancelledError:
-        pass
-    finally:
-        try:
-            orch.stop()
-        except Exception:
-            logger.exception("Error while stopping orchestrator")
-        try:
-            tracker.stop()
-        except Exception:
-            logger.exception("Error while stopping tracker")
-        worker_stop.set()
-        worker_thread.join(timeout=2.0)
+    runtime.wait_forever()
+    runtime.stop()
     return 0
 
 
@@ -180,22 +121,25 @@ def main(argv: list[str] | None = None) -> None:
 
     if cmd == "api":
         from .api.server import create_app
+        import uvicorn
 
         _validate_remote_mode(config)
         app = create_app(config)
-        import uvicorn
-
-        uvicorn.run(
-            app,
-            host=config.api.bind_host,
-            port=config.api.port,
-            ssl_certfile=(
-                str(config.mode.tls_cert_path) if config.mode.https_enabled else None
-            ),
-            ssl_keyfile=(
-                str(config.mode.tls_key_path) if config.mode.https_enabled else None
-            ),
+        server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host=config.api.bind_host,
+                port=config.api.port,
+                log_level="info",
+                ssl_certfile=(
+                    str(config.mode.tls_cert_path) if config.mode.https_enabled else None
+                ),
+                ssl_keyfile=(
+                    str(config.mode.tls_key_path) if config.mode.https_enabled else None
+                ),
+            )
         )
+        server.run()
         return
 
     if cmd == "worker":
@@ -210,6 +154,18 @@ def main(argv: list[str] | None = None) -> None:
             logger.info("Shutting down worker")
         return
 
+    if cmd in {"app", "tray"}:
+        if not claim_single_instance():
+            logger.warning(
+                "Autocapture already active in another interpreter. Exiting."
+            )
+            raise SystemExit(0)
+        from .ui.tray import run_tray
+
+        log_dir = Path(config.capture.data_dir) / "logs"
+        run_tray(config_path, log_dir)
+        return
+
     if not claim_single_instance():
         logger.warning(
             "Autocapture orchestrator already active in another interpreter. Exiting."
@@ -217,7 +173,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(0)
 
     try:
-        raise SystemExit(asyncio.run(_run_async(config)))
+        raise SystemExit(_run_runtime(config))
     except KeyboardInterrupt:
         logger.info("Shutting down")
         # Let asyncio loop close cleanly.

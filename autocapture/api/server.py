@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+from sqlalchemy import select
 
 from ..config import AppConfig, ProviderRoutingConfig
 from ..logging_utils import get_logger
@@ -20,9 +22,10 @@ from ..memory.entities import EntityResolver, SecretStore
 from ..memory.prompts import PromptLibraryService, PromptRegistry
 from ..memory.retrieval import RetrieveFilters, RetrievalService
 from ..memory.router import ProviderRouter
+from ..memory.verification import Claim, RulesVerifier
 from ..security.oidc import GoogleOIDCVerifier
 from ..storage.database import DatabaseManager
-from ..storage.models import EventRecord
+from ..storage.models import EventRecord, QueryHistoryRecord
 from ..storage.retention import RetentionManager
 
 
@@ -56,13 +59,23 @@ class ContextPackResponse(BaseModel):
 
 
 class AnswerRequest(BaseModel):
-    query: str
+    model_config = ConfigDict(populate_by_name=True)
+    query: Optional[str] = None
+    q: Optional[str] = None
     routing: Optional[dict[str, str]] = None
     sanitize: Optional[bool] = None
     extractive_only: Optional[bool] = None
     model: Optional[str] = None
     time_range: Optional[tuple[dt.datetime, dt.datetime]] = None
     filters: Optional[dict[str, list[str]]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_query(cls, values: Any) -> Any:
+        if isinstance(values, dict):
+            if not values.get("query") and values.get("q"):
+                values["query"] = values["q"]
+        return values
 
 
 class AnswerResponse(BaseModel):
@@ -95,16 +108,20 @@ class SettingsResponse(BaseModel):
     status: str
 
 
+class SuggestRequest(BaseModel):
+    q: str
+
+
 def create_app(
     config: AppConfig,
     db_manager: DatabaseManager | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Autocapture Memory Engine")
     db = db_manager or DatabaseManager(config.database)
-    retrieval = RetrievalService(db)
+    retrieval = RetrievalService(db, config)
     secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
     entities = EntityResolver(db, secret)
-    prompt_registry = PromptRegistry(Path(__file__).resolve().parents[2] / "prompts" / "derived")
+    prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
     PromptLibraryService(db).sync_registry(prompt_registry)
     retention = RetentionManager(config.storage, config.retention, db, Path(config.capture.data_dir))
     log = get_logger("api")
@@ -115,7 +132,10 @@ def create_app(
             config.mode.google_allowed_emails,
         )
 
-    ui_dir = Path(__file__).resolve().parents[1] / "ui" / "web"
+    base_dir = Path(__file__).resolve().parents[1]
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        base_dir = Path(getattr(sys, "_MEIPASS")) / "autocapture"
+    ui_dir = base_dir / "ui" / "web"
     if ui_dir.exists():
         app.mount("/static", StaticFiles(directory=ui_dir), name="static")
 
@@ -147,8 +167,13 @@ def create_app(
             return HTMLResponse("<h2>UI not available</h2>")
         return FileResponse(ui_dir / "index.html")
 
+    @app.get("/dashboard")
+    async def dashboard_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/")
+
     @app.post("/api/retrieve")
     def retrieve(request: RetrieveRequest) -> RetrieveResponse:
+        _record_query_history(db, request.query)
         evidence, events = _build_evidence(
             retrieval,
             entities,
@@ -206,11 +231,13 @@ def create_app(
         extractive_only = _resolve_bool(
             request.extractive_only, config.privacy.extractive_only_default
         )
+        query_text = request.query or ""
+        _record_query_history(db, query_text)
         evidence, events = await asyncio.to_thread(
             _build_evidence,
             retrieval,
             entities,
-            request.query,
+            query_text,
             request.time_range,
             request.filters,
             12,
@@ -218,7 +245,7 @@ def create_app(
         )
         routing_data = _merge_routing(config.routing, request.routing)
         pack = build_context_pack(
-            query=request.query,
+            query=query_text,
             evidence=evidence,
             entity_tokens=entities.tokens_for_events(events),
             routing=_model_dump(routing_data),
@@ -239,10 +266,33 @@ def create_app(
             system_prompt = prompt_registry.get("ANSWER_WITH_CONTEXT_PACK").system_prompt
             answer_text = await provider.generate_answer(
                 system_prompt,
-                request.query,
+                query_text,
                 pack.to_text(extractive_only=False),
             )
-            citations = [item.evidence_id for item in evidence]
+            citations = _extract_citations(answer_text)
+            if not _valid_citations(citations, evidence):
+                retry_prompt = (
+                    system_prompt
+                    + "\n\nYou must cite evidence IDs in the form [E1], [E2], etc. "
+                    "Only cite IDs that appear in the provided context pack."
+                )
+                answer_text = await provider.generate_answer(
+                    retry_prompt,
+                    query_text,
+                    pack.to_text(extractive_only=False),
+                )
+                citations = _extract_citations(answer_text)
+            if not _valid_citations(citations, evidence):
+                compressed = extractive_answer(evidence)
+                answer_text = compressed.answer
+                citations = compressed.citations
+            else:
+                verifier = RulesVerifier()
+                verifier.verify(
+                    [Claim(text=answer_text, evidence_ids=citations, entity_tokens=[])],
+                    {item.evidence_id for item in evidence},
+                    set(),
+                )
             log.info("LLM routed to %s", decision.llm_provider)
         latency = (dt.datetime.now(dt.timezone.utc) - start).total_seconds() * 1000
         return AnswerResponse(
@@ -251,6 +301,32 @@ def create_app(
             used_context_pack=pack.to_json(),
             latency_ms=latency,
         )
+
+    @app.post("/api/suggest")
+    def suggest(request: SuggestRequest) -> list[dict[str, Any]]:
+        query = request.q.strip()
+        if not query:
+            return []
+        normalized = _normalize_query(query)
+        with db.session() as session:
+            stmt = (
+                select(QueryHistoryRecord)
+                .where(QueryHistoryRecord.normalized_text.like(f"{normalized}%"))
+                .order_by(QueryHistoryRecord.last_used_at.desc())
+                .limit(30)
+            )
+            rows = session.execute(stmt).scalars().all()
+        scored = []
+        now = dt.datetime.now(dt.timezone.utc)
+        for row in rows:
+            prefix_boost = 1.0 if row.normalized_text.startswith(normalized) else 0.0
+            last_used = _ensure_aware(row.last_used_at)
+            age_hours = max((now - last_used).total_seconds() / 3600, 0.0)
+            recency = 1 / (1 + age_hours)
+            score = prefix_boost * 1.0 + (row.count ** 0.5) * 0.3 + recency * 0.3
+            scored.append((score, row.query_text))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [{"snippet": text} for _, text in scored[:8]]
 
     @app.get("/api/event/{event_id}")
     def event_detail(event_id: str) -> EventResponse:
@@ -328,8 +404,14 @@ def _build_evidence(
     for idx, result in enumerate(results, start=1):
         event = result.event
         events.append(event)
-        snippet = _snippet_for_query(event.ocr_text, query)
-        spans = _spans_for_event(event.ocr_spans, snippet)
+        snippet, snippet_offset = _snippet_for_query(event.ocr_text, query)
+        spans = _spans_for_event(
+            event.ocr_spans,
+            snippet,
+            snippet_offset,
+            query,
+            result.matched_span_keys,
+        )
         app_name = event.app_name
         title = event.window_title
         domain = event.domain
@@ -355,33 +437,111 @@ def _build_evidence(
     return evidence, events
 
 
-def _snippet_for_query(text: str, query: str, window: int = 200) -> str:
+def _snippet_for_query(text: str, query: str, window: int = 200) -> tuple[str, int]:
     if not text:
-        return ""
+        return "", 0
     lower = text.lower()
     q = query.lower()
     idx = lower.find(q)
     if idx == -1:
-        return text[: min(400, len(text))]
+        return text[: min(400, len(text))], 0
     start = max(idx - window, 0)
     end = min(idx + len(q) + window, len(text))
-    return text[start:end]
+    return text[start:end], start
 
 
-def _spans_for_event(spans: list[dict], snippet: str) -> list[EvidenceSpan]:
+def _spans_for_event(
+    spans: list[dict],
+    snippet: str,
+    snippet_offset: int,
+    query: str,
+    matched_span_keys: list[str],
+) -> list[EvidenceSpan]:
     evidence_spans: list[EvidenceSpan] = []
-    for span in spans[:3]:
+    query_lower = query.lower()
+    candidate_spans = spans
+    if matched_span_keys:
+        candidate_spans = [
+            span for span in spans if str(span.get("span_key")) in set(matched_span_keys)
+        ]
+    elif query_lower:
+        candidate_spans = [
+            span for span in spans if query_lower in str(span.get("text", "")).lower()
+        ]
+    for span in candidate_spans:
+        start = int(span.get("start", 0)) - snippet_offset
+        end = int(span.get("end", 0)) - snippet_offset
+        if start < 0 or end > len(snippet) or end <= start:
+            continue
         evidence_spans.append(
             EvidenceSpan(
                 span_id=str(span.get("span_id", "S?")),
-                start=int(span.get("start", 0)),
-                end=int(span.get("end", len(snippet))),
+                start=start,
+                end=end,
                 conf=float(span.get("conf", span.get("confidence", 0.9))),
             )
         )
     if not evidence_spans:
         evidence_spans.append(EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5))
     return evidence_spans
+
+
+def _extract_citations(answer_text: str) -> list[str]:
+    import re
+
+    citations = re.findall(r"E\d+", answer_text or "")
+    seen = []
+    for cite in citations:
+        if cite not in seen:
+            seen.append(cite)
+    return seen
+
+
+def _valid_citations(citations: list[str], evidence: list[EvidenceItem]) -> bool:
+    if not citations:
+        return False
+    valid = {item.evidence_id for item in evidence}
+    return set(citations).issubset(valid)
+
+
+def _normalize_query(text: str) -> str:
+    return " ".join(text.strip().lower().split())
+
+
+def _ensure_aware(timestamp: dt.datetime) -> dt.datetime:
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=dt.timezone.utc)
+    return timestamp
+
+
+def _record_query_history(db: DatabaseManager, query: str) -> None:
+    if not query.strip():
+        return
+    normalized = _normalize_query(query)
+    now = dt.datetime.now(dt.timezone.utc)
+    with db.session() as session:
+        record = (
+            session.execute(
+                select(QueryHistoryRecord).where(
+                    QueryHistoryRecord.normalized_text == normalized
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if record:
+            record.count += 1
+            record.last_used_at = now
+            record.query_text = query
+        else:
+            session.add(
+                QueryHistoryRecord(
+                    query_text=query,
+                    normalized_text=normalized,
+                    count=1,
+                    last_used_at=now,
+                )
+            )
 
 
 def _evidence_to_json(

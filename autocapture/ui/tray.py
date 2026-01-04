@@ -2,40 +2,25 @@
 
 from __future__ import annotations
 
-import threading
 import webbrowser
 from pathlib import Path
 
-import uvicorn
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import configure_logging, load_config
-from ..api.server import create_app
 from ..config import AppConfig
 from ..logging_utils import get_logger
+from ..runtime import AppRuntime
 from .popup import SearchPopup
 from .raw_input import on_hotkey
 
 
-class ApiServerThread(threading.Thread):
-    def __init__(self, app, host: str, port: int) -> None:
-        super().__init__(daemon=True)
-        self._server = uvicorn.Server(
-            uvicorn.Config(app, host=host, port=port, log_level="info")
-        )
-
-    def run(self) -> None:
-        self._server.run()
-
-    def stop(self) -> None:
-        self._server.should_exit = True
-
-
 class TrayApp(QtCore.QObject):
-    def __init__(self, config: AppConfig, log_dir: Path) -> None:
+    def __init__(self, config: AppConfig, log_dir: Path, runtime: AppRuntime) -> None:
         super().__init__()
         self._config = config
         self._log_dir = log_dir
+        self._runtime = runtime
         self._log = get_logger("tray")
         self._paused = False
         self._hotkey = None
@@ -61,9 +46,9 @@ class TrayApp(QtCore.QObject):
         self._dashboard_action.triggered.connect(self.open_dashboard)
         self._pause_action.triggered.connect(self.toggle_pause)
         self._logs_action.triggered.connect(self.open_logs)
-        self._quit_action.triggered.connect(QtWidgets.QApplication.quit)
+        self._quit_action.triggered.connect(self._quit)
 
-        api_url = f"http://127.0.0.1:{config.api.port}"
+        api_url = f"http://{config.api.bind_host}:{config.api.port}"
         self._popup = SearchPopup(api_url)
         self._tray.activated.connect(self._on_tray_activated)
 
@@ -86,12 +71,16 @@ class TrayApp(QtCore.QObject):
         self._popup.show_popup()
 
     def open_dashboard(self) -> None:
-        url = f"http://127.0.0.1:{self._config.api.port}/dashboard"
+        url = f"http://{self._config.api.bind_host}:{self._config.api.port}/"
         webbrowser.open(url)
 
     def toggle_pause(self) -> None:
         self._paused = not self._paused
         self._pause_action.setText("Resume Capture" if self._paused else "Pause Capture")
+        if self._paused:
+            self._runtime.pause_capture()
+        else:
+            self._runtime.resume_capture()
 
     def open_logs(self) -> None:
         QtGui.QDesktopServices.openUrl(
@@ -102,6 +91,12 @@ class TrayApp(QtCore.QObject):
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
             self.toggle_popup()
 
+    def _quit(self) -> None:
+        try:
+            self._runtime.stop()
+        finally:
+            QtWidgets.QApplication.quit()
+
     @staticmethod
     def _default_icon() -> QtGui.QIcon:
         return QtGui.QIcon.fromTheme("system-search")
@@ -111,13 +106,12 @@ def run_tray(config_path: Path, log_dir: Path) -> None:
     configure_logging(log_dir)
     config = load_config(config_path)
     app = QtWidgets.QApplication([])
-    api_app = create_app(config)
-    server_thread = ApiServerThread(api_app, host="127.0.0.1", port=config.api.port)
-    server_thread.start()
-    tray = TrayApp(config, log_dir)
+    runtime = AppRuntime(config)
+    runtime.start()
+    tray = TrayApp(config, log_dir, runtime)
     tray.start()
 
     exit_code = app.exec()
     tray.stop()
-    server_thread.stop()
+    runtime.stop()
     raise SystemExit(exit_code)

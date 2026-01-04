@@ -9,6 +9,7 @@ from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Deque
+import uuid
 
 from loguru import logger
 
@@ -43,7 +44,7 @@ class CaptureService:
         self._running = threading.Event()
         self._log = get_logger("capture")
         self._staging_dir = config.staging_dir
-        self._segment_recorder = SegmentRecorder(config)
+        self._segment_recorder = SegmentRecorder(capture_config=config)
         self._last_activity: dt.datetime | None = None
 
     def start(self) -> None:
@@ -119,7 +120,7 @@ class CaptureService:
         return events
 
     def _ensure_segment(self, now: dt.datetime) -> None:
-        if self._segment_recorder.start_segment(now):
+        if self._segment_recorder.start_segment(now, segment_id=str(uuid.uuid4())):
             return
 
     def _maybe_stop_segment(self, now: dt.datetime) -> None:

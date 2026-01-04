@@ -8,7 +8,7 @@
     "autocapture/tracking/tracker.py": {
       "frozen_at_utc": "2026-01-03T00:18:14Z",
       "reason": "Host vector tracking core stabilized + tested; prevent refactor churn.",
-      "sha256": "4bad35759671195e9b4bd8fcc310e8450b054754a5f447cac35ae43afc80fa51"
+      "sha256": "5ac08a452f5d1ebad65d814c15cda0fe50f92d01cd5df4404b899f5c47a80fb4"
     },
     "autocapture/tracking/types.py": {
       "frozen_at_utc": "2026-01-03T00:18:14Z",

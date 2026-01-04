@@ -32,6 +32,8 @@ class EventRecord(Base):
     ocr_text: Mapped[str] = mapped_column(Text)
     ocr_spans: Mapped[list[dict]] = mapped_column(JSON, default=list)
     embedding_vector: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    embedding_status: Mapped[str] = mapped_column(String(16), default="pending")
+    embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
     tags: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
@@ -128,7 +130,7 @@ class CaptureRecord(Base):
     captured_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), index=True
     )
-    image_path: Mapped[str] = mapped_column(Text)
+    image_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     foreground_process: Mapped[str] = mapped_column(String(256))
     foreground_window: Mapped[str] = mapped_column(String(512))
     monitor_id: Mapped[str] = mapped_column(String(64))
@@ -150,6 +152,9 @@ class OCRSpanRecord(Base):
     capture_id: Mapped[str] = mapped_column(
         ForeignKey("captures.id", ondelete="CASCADE")
     )
+    span_key: Mapped[str] = mapped_column(String(64))
+    start: Mapped[int] = mapped_column(Integer)
+    end: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
     confidence: Mapped[float] = mapped_column(Float)
     bbox: Mapped[dict] = mapped_column(JSON)
@@ -169,11 +174,17 @@ class EmbeddingRecord(Base):
     span_id: Mapped[int | None] = mapped_column(
         ForeignKey("ocr_spans.id", ondelete="SET NULL")
     )
-    vector: Mapped[list[float]] = mapped_column(JSON)
+    vector: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     model: Mapped[str] = mapped_column(String(128))
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    span_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     capture: Mapped[CaptureRecord] = relationship(
         "CaptureRecord", back_populates="embeddings"
@@ -194,10 +205,34 @@ class SegmentRecord(Base):
         DateTime(timezone=True), nullable=True
     )
     state: Mapped[str] = mapped_column(String(32), default="recording")
+    video_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    encoder: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    frame_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     observations: Mapped[list["ObservationRecord"]] = relationship(
         "ObservationRecord", back_populates="segment"
     )
+
+
+class QueryHistoryRecord(Base):
+    __tablename__ = "query_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    query_text: Mapped[str] = mapped_column(Text)
+    normalized_text: Mapped[str] = mapped_column(Text, index=True)
+    count: Mapped[int] = mapped_column(Integer, default=1)
+    last_used_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class HNSWMappingRecord(Base):
+    __tablename__ = "hnsw_mapping"
+
+    label: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(36), index=True)
+    span_key: Mapped[str] = mapped_column(String(64))
+    span_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ObservationRecord(Base):

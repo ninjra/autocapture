@@ -10,13 +10,15 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from PIL import Image
 from sqlalchemy import select, update
 
 from ..config import AppConfig
 from ..logging_utils import get_logger
+from ..observability.metrics import ocr_backlog, ocr_latency_ms, worker_errors_total
+from ..indexing.lexical_index import LexicalIndex
+from ..media.store import MediaStore
 from ..storage.database import DatabaseManager
-from ..storage.models import CaptureRecord, EventRecord
+from ..storage.models import CaptureRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
 
 
 class OCRProcessor:
@@ -50,13 +52,17 @@ class EventIngestWorker:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.event_ingest")
+        self._lexical = LexicalIndex(self._db)
+        self._media_store = MediaStore(config.capture, config.encryption)
         if ocr_processor is None:
             self._ocr = OCRProcessor()
         else:
             self._ocr = ocr_processor
 
-    def process_batch(self, limit: int = 25) -> int:
+    def process_batch(self, limit: Optional[int] = None) -> int:
         processed = 0
+        if limit is None:
+            limit = self._config.ocr.batch_size
         with self._db.session() as session:
             capture_ids = (
                 session.execute(
@@ -68,15 +74,19 @@ class EventIngestWorker:
                 .scalars()
                 .all()
             )
+        ocr_backlog.set(len(capture_ids))
 
         for capture_id in capture_ids:
             claimed = self._claim_capture(capture_id)
             if not claimed:
                 continue
             try:
+                start = time.monotonic()
                 self._ingest_capture(capture_id)
+                ocr_latency_ms.observe((time.monotonic() - start) * 1000)
             except Exception as exc:
                 self._log.exception("Failed to ingest capture %s: %s", capture_id, exc)
+                worker_errors_total.labels("ocr").inc()
                 self._mark_failed(capture_id)
                 continue
             processed += 1
@@ -110,9 +120,14 @@ class EventIngestWorker:
                 capture.ocr_status = "failed"
 
     def _ingest_capture(self, capture_id: str) -> None:
+        event: EventRecord | None = None
         with self._db.session() as session:
             capture = session.get(CaptureRecord, capture_id)
             if not capture:
+                return
+            if not capture.image_path:
+                self._log.warning("Capture %s missing image path; skipping", capture_id)
+                capture.ocr_status = "failed"
                 return
             image = self._load_image(Path(capture.image_path))
             spans = self._ocr.run(image)
@@ -131,17 +146,43 @@ class EventIngestWorker:
                 ocr_text=ocr_text,
                 ocr_spans=ocr_spans,
                 embedding_vector=None,
+                embedding_status="pending",
+                embedding_model=self._config.embeddings.model,
                 tags={},
             )
             session.add(event)
-            capture.ocr_status = "done"
+            span_records = []
+            for span in ocr_spans:
+                span_record = OCRSpanRecord(
+                    capture_id=capture.id,
+                    span_key=str(span.get("span_key")),
+                    start=int(span.get("start", 0)),
+                    end=int(span.get("end", 0)),
+                    text=str(span.get("text", "")),
+                    confidence=float(span.get("conf", 0.0)),
+                    bbox=span.get("bbox", []),
+                )
+                session.add(span_record)
+                session.flush()
+                span_records.append(span_record)
 
-    @staticmethod
-    def _load_image(path: Path) -> np.ndarray:
-        with path.open("rb") as handle:
-            image = Image.open(handle)
-            image = image.convert("RGB")
-            return np.array(image)
+            for span_record in span_records:
+                session.add(
+                    EmbeddingRecord(
+                        capture_id=capture.id,
+                        span_id=span_record.id,
+                        vector=None,
+                        model=self._config.embeddings.model,
+                        status="pending",
+                        span_key=span_record.span_key,
+                    )
+                )
+            capture.ocr_status = "done"
+        if event is not None:
+            self._lexical.upsert_event(event)
+
+    def _load_image(self, path: Path) -> np.ndarray:
+        return self._media_store.read_image(path)
 
 
 def _hash_file(path: Path) -> str:
@@ -169,6 +210,7 @@ def _build_ocr_payload(
         ocr_spans.append(
             {
                 "span_id": f"S{idx}",
+                "span_key": f"S{idx}",
                 "start": start,
                 "end": end,
                 "conf": float(conf),

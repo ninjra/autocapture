@@ -12,7 +12,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
-from uuid import uuid4
 
 from PIL import Image
 
@@ -28,6 +27,7 @@ class VideoSegment:
     video_path: Optional[Path]
     state: str
     encoder: Optional[str] = None
+    frame_count: int = 0
 
 
 def find_ffmpeg(data_dir: Path) -> Optional[Path]:
@@ -88,8 +88,8 @@ def composite_frames(
 class SegmentRecorder:
     """Manage a single FFmpeg process per active activity segment."""
 
-    def __init__(self, config: CaptureConfig) -> None:
-        self._config = config
+    def __init__(self, capture_config: CaptureConfig) -> None:
+        self._config = capture_config
         self._log = get_logger("recorder")
         self._ffmpeg_path = find_ffmpeg(config.data_dir)
         if self._ffmpeg_path is None:
@@ -102,7 +102,16 @@ class SegmentRecorder:
         self._process: Optional[subprocess.Popen[bytes]] = None
         self._frame_size: Optional[tuple[int, int]] = None
 
-    def start_segment(self, started_at: dt.datetime) -> Optional[VideoSegment]:
+    @property
+    def is_available(self) -> bool:
+        return self._config.record_video and self._ffmpeg_path is not None
+
+    def start_segment(
+        self,
+        started_at: dt.datetime,
+        segment_id: str,
+        output_path: Optional[Path] = None,
+    ) -> Optional[VideoSegment]:
         if not self._config.record_video:
             return None
         if self._ffmpeg_path is None:
@@ -112,11 +121,11 @@ class SegmentRecorder:
         if self._segment is not None and self._segment.state != "recording":
             self._segment = None
 
-        segment_id = str(uuid4())
-        date_prefix = started_at.strftime("%Y/%m/%d")
-        output_dir = self._config.data_dir / "media" / "video" / date_prefix
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / f"segment_{segment_id}.mp4"
+        if output_path is None:
+            date_prefix = started_at.strftime("%Y/%m/%d")
+            output_dir = self._config.data_dir / "media" / "video" / date_prefix
+            output_dir.mkdir(parents=True, exist_ok=True)
+            output_path = output_dir / f"segment_{segment_id}.mp4"
 
         self._segment = VideoSegment(
             id=segment_id,
@@ -129,11 +138,11 @@ class SegmentRecorder:
         self._thread.start()
         return self._segment
 
-    def enqueue(self, frame: CaptureFrame) -> None:
+    def enqueue(self, frames: list[CaptureFrame]) -> None:
         if self._segment is None or self._segment.state != "recording":
             return
         try:
-            self._queue.put_nowait([frame])
+            self._queue.put_nowait(frames)
         except queue.Full:
             self._log.warning("Dropping video frame due to recorder backpressure.")
 
@@ -311,6 +320,8 @@ class SegmentRecorder:
             return
         try:
             self._process.stdin.write(image.tobytes())
+            if self._segment:
+                self._segment.frame_count += 1
         except BrokenPipeError:
             self._log.warning("FFmpeg pipe closed unexpectedly.")
             self._terminate_process()

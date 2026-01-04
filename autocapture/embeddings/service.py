@@ -1,0 +1,84 @@
+"""Embedding service wrapper with fastembed + sentence-transformers fallback."""
+
+from __future__ import annotations
+
+from typing import Iterable
+
+from ..config import EmbeddingConfig
+from ..logging_utils import get_logger
+
+
+class EmbeddingService:
+    def __init__(self, config: EmbeddingConfig) -> None:
+        self._config = config
+        self._log = get_logger("embeddings")
+        self._backend = None
+        self._dim = None
+        self._model_name = config.model
+
+        if config.model == "local-test":
+            self._backend = "local-test"
+            self._dim = 16
+            self._log.info("Embedding backend: local-test")
+            return
+        import importlib.util
+
+        if importlib.util.find_spec("fastembed") is not None:
+            from fastembed import TextEmbedding  # type: ignore
+
+            self._backend = TextEmbedding(model_name=config.model)
+            self._dim = self._backend.embedding_size
+            self._log.info("Embedding backend: fastembed (%s)", config.model)
+            return
+
+        if importlib.util.find_spec("sentence_transformers") is not None:
+            from sentence_transformers import SentenceTransformer  # type: ignore
+
+            self._backend = SentenceTransformer(config.model)
+            self._dim = self._backend.get_sentence_embedding_dimension()
+            self._log.info("Embedding backend: sentence-transformers (%s)", config.model)
+            return
+
+        raise RuntimeError("No embedding backend available")
+
+    @property
+    def dim(self) -> int:
+        if self._dim is None:
+            raise RuntimeError("Embedding backend not initialized")
+        return int(self._dim)
+
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def embed_texts(self, texts: Iterable[str]) -> list[list[float]]:
+        text_list = [text or "" for text in texts]
+        if not text_list:
+            return []
+        if self._backend is None:
+            raise RuntimeError("Embedding backend not initialized")
+
+        if self._backend == "local-test":
+            return [_hash_embedding(text, self.dim) for text in text_list]
+
+        if hasattr(self._backend, "embed"):
+            vectors = list(self._backend.embed(text_list))
+            return [vector.tolist() if hasattr(vector, "tolist") else list(vector) for vector in vectors]
+
+        vectors = self._backend.encode(
+            text_list,
+            batch_size=self._config.batch_size,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )
+        return [vec.tolist() for vec in vectors]
+
+
+def _hash_embedding(text: str, dim: int) -> list[float]:
+    import hashlib
+
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    values = [b / 255.0 for b in digest[:dim]]
+    if len(values) < dim:
+        values.extend([0.0] * (dim - len(values)))
+    return values
