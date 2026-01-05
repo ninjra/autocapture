@@ -14,6 +14,19 @@ from ..config import DatabaseConfig
 from ..logging_utils import get_logger
 
 
+def init_schema(engine) -> None:
+    """Create all SQLAlchemy tables. Safe to call multiple times."""
+    log = get_logger("db")
+    try:
+        from . import models as storage_models
+
+        storage_models.Base.metadata.create_all(bind=engine)
+        log.info("DB schema initialized via Base.metadata.create_all().")
+    except Exception:
+        log.exception("DB schema initialization failed.")
+        raise
+
+
 class DatabaseManager:
     """Configure SQLAlchemy engine and provide sessions."""
 
@@ -32,6 +45,10 @@ class DatabaseManager:
             engine_kwargs["max_overflow"] = config.max_overflow
         self._engine = create_engine(config.url, **engine_kwargs)
         self._run_migrations()
+        if self._engine.dialect.name == "sqlite" and (
+            ":memory:" in str(self._engine.url) or "mode=memory" in str(self._engine.url)
+        ):
+            init_schema(self._engine)
         self._session_factory = sessionmaker(bind=self._engine, expire_on_commit=False)
         self._log.info("Database connected at %s", config.url)
 
