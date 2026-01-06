@@ -6,6 +6,7 @@ import ctypes
 import datetime as dt
 import queue
 import random
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -20,10 +21,14 @@ from sqlalchemy import func, select
 from ..config import CaptureConfig, WorkerConfig
 from ..logging_utils import get_logger
 from ..observability.metrics import (
-    captures_dropped_total,
+    captures_skipped_backpressure_total,
     captures_taken_total,
+    disk_low_total,
     ocr_backlog,
+    ocr_backlog_gauge,
+    ocr_stale_processing_gauge,
     roi_queue_depth,
+    roi_queue_full_total,
 )
 from ..media.store import MediaStore
 from ..storage.database import DatabaseManager
@@ -93,9 +98,7 @@ class CaptureOrchestrator:
             on_hotkey=hotkey_callback,
         )
         self._roi_queue: queue.Queue[ROIItem] = queue.Queue(maxsize=roi_queue_size)
-        self._segment_recorder = SegmentRecorder(
-            capture_config=capture_config
-        )
+        self._segment_recorder = SegmentRecorder(capture_config=capture_config)
         self._duplicate_detector = DuplicateDetector(
             capture_config.hid.duplicate_threshold
         )
@@ -113,6 +116,7 @@ class CaptureOrchestrator:
         self._ocr_backlog_cached_throttle = False
         self._ocr_backlog_last_count = 0
         self._ocr_backlog_last_log = 0.0
+        self._backoff_s = 0.0
 
     def start(self) -> None:
         if self._running.is_set():
@@ -154,11 +158,15 @@ class CaptureOrchestrator:
 
     def _run_capture_loop(self) -> None:  # pragma: no cover - depends on Windows APIs
         min_interval = self._capture_config.hid.min_interval_ms / 1000
-        interval = max(1.0 / max(self._capture_config.hid.fps_soft_cap, 0.01), min_interval)
+        interval = max(
+            1.0 / max(self._capture_config.hid.fps_soft_cap, 0.01), min_interval
+        )
         while self._running.is_set():
             loop_start = time.monotonic()
             now_ms = int(loop_start * 1000)
-            active = (now_ms < self._raw_input.active_until_ts) and not self._paused.is_set()
+            active = (
+                now_ms < self._raw_input.active_until_ts
+            ) and not self._paused.is_set()
 
             if active:
                 if not self._was_active:
@@ -186,10 +194,8 @@ class CaptureOrchestrator:
         foreground_process = ctx.process_name if ctx else "unknown"
         foreground_window = ctx.window_title if ctx else "unknown"
         is_fullscreen = False
-        if monitor and ctx and ctx.hwnd:
-            is_fullscreen = is_fullscreen_window(
-                ctx.hwnd, (monitor.left, monitor.top, monitor.width, monitor.height)
-            )
+        if ctx and ctx.hwnd:
+            is_fullscreen = is_fullscreen_window(ctx.hwnd)
         if is_fullscreen and self._capture_config.hid.block_fullscreen:
             return
         if monitor and monitor.id in frames:
@@ -213,18 +219,22 @@ class CaptureOrchestrator:
                 )
                 self._enqueue_roi(roi_item)
                 captures_taken_total.inc()
-        self._enqueue_video(frames, foreground_process, foreground_window, is_fullscreen)
+        self._enqueue_video(
+            frames, foreground_process, foreground_window, is_fullscreen
+        )
 
     def _enqueue_roi(self, item: ROIItem) -> None:
         if self._should_throttle_ocr():
-            captures_dropped_total.inc()
+            captures_skipped_backpressure_total.inc()
+            self._apply_backpressure("ocr_backlog")
             return
         try:
-            self._roi_queue.put_nowait(item)
+            self._roi_queue.put(item, timeout=0.1)
             roi_queue_depth.set(self._roi_queue.qsize())
+            self._backoff_s = 0.0
         except queue.Full:
-            self._log.warning("ROI queue full; dropping observation {}", item.observation_id)
-            captures_dropped_total.inc()
+            roi_queue_full_total.inc()
+            self._apply_backpressure("roi_queue_full")
 
     def _enqueue_video(
         self,
@@ -248,7 +258,12 @@ class CaptureOrchestrator:
                     foreground_process=foreground_process or "unknown",
                     foreground_window=foreground_window or "unknown",
                     monitor_id=monitor.id,
-                    monitor_bounds=(monitor.left, monitor.top, monitor.width, monitor.height),
+                    monitor_bounds=(
+                        monitor.left,
+                        monitor.top,
+                        monitor.width,
+                        monitor.height,
+                    ),
                     is_fullscreen=is_fullscreen,
                 )
             )
@@ -264,6 +279,7 @@ class CaptureOrchestrator:
             try:
                 path = self._save_roi(item)
                 if path is None:
+                    self._persist_skipped_capture(item, "roi_write_failed")
                     continue
                 self._persist_observation(item, path)
                 if self._on_ocr_observation:
@@ -285,8 +301,14 @@ class CaptureOrchestrator:
                 roi_queue_depth.set(self._roi_queue.qsize())
 
     def _save_roi(self, item: ROIItem) -> Optional[Path]:
+        if not self._has_disk_space():
+            disk_low_total.inc()
+            self._apply_backpressure("disk_low")
+            return None
         if self._media_store:
-            return self._media_store.write_roi(item.image, item.captured_at, item.observation_id)
+            return self._media_store.write_roi(
+                item.image, item.captured_at, item.observation_id
+            )
         timestamp = item.captured_at.astimezone(dt.timezone.utc)
         path = (
             Path(self._capture_config.data_dir)
@@ -301,7 +323,7 @@ class CaptureOrchestrator:
         return path
 
     def _persist_observation(self, item: ROIItem, path: Path) -> None:
-        with self._database.session() as session:
+        def _write(session) -> None:
             session.add(
                 ObservationRecord(
                     id=item.observation_id,
@@ -326,17 +348,38 @@ class CaptureOrchestrator:
                 )
             )
 
+        self._database.transaction(_write)
+
+    def _persist_skipped_capture(self, item: ROIItem, reason: str) -> None:
+        def _write(session) -> None:
+            session.add(
+                CaptureRecord(
+                    id=item.observation_id,
+                    captured_at=item.captured_at,
+                    image_path=None,
+                    foreground_process=item.foreground_process or "unknown",
+                    foreground_window=item.foreground_window or "unknown",
+                    monitor_id=item.monitor_id,
+                    is_fullscreen=item.is_fullscreen,
+                    ocr_status="skipped",
+                    ocr_last_error=reason,
+                )
+            )
+
+        self._database.transaction(_write)
+
     def _start_segment(self) -> str:
         segment_id = str(uuid4())
         started_at = dt.datetime.now(dt.timezone.utc)
-        with self._database.session() as session:
-            session.add(
+        self._database.transaction(
+            lambda session: session.add(
                 SegmentRecord(
                     id=segment_id,
                     started_at=started_at,
                     state="recording",
                 )
             )
+        )
         output_path = None
         if self._media_store:
             staging_path, final_path = self._media_store.reserve_video_paths(
@@ -355,7 +398,8 @@ class CaptureOrchestrator:
         if not segment_id:
             return
         segment = self._segment_recorder.stop_segment()
-        with self._database.session() as session:
+
+        def _write(session) -> None:
             record = session.get(SegmentRecord, segment_id)
             if record:
                 record.ended_at = dt.datetime.now(dt.timezone.utc)
@@ -366,11 +410,20 @@ class CaptureOrchestrator:
                     final_path = None
                     if segment.video_path and self._media_store:
                         final_path = self._media_store.finalize_video(
-                            Path(segment.video_path), self._segment_video_paths.get(segment_id, Path(segment.video_path))
+                            Path(segment.video_path),
+                            self._segment_video_paths.get(
+                                segment_id, Path(segment.video_path)
+                            ),
                         )
-                    record.video_path = str(final_path or segment.video_path) if segment.video_path else None
+                    record.video_path = (
+                        str(final_path or segment.video_path)
+                        if segment.video_path
+                        else None
+                    )
                     record.encoder = segment.encoder
                     record.frame_count = segment.frame_count
+
+        self._database.transaction(_write)
         self._segment_video_paths.pop(segment_id, None)
         if self._on_segment_finalize:
             self._on_segment_finalize(segment_id)
@@ -422,16 +475,27 @@ class CaptureOrchestrator:
         self._ocr_backlog_last_check = now
         try:
             with self._database.session() as session:
-                lease_cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
-                    milliseconds=self._worker_config.ocr_lease_ms
-                )
                 count = session.execute(
                     select(func.count())
                     .select_from(CaptureRecord)
                     .where(
                         CaptureRecord.ocr_status.in_(["pending", "processing"]),
-                        func.coalesce(CaptureRecord.ocr_heartbeat_at, CaptureRecord.captured_at)
-                        >= lease_cutoff,
+                        CaptureRecord.ocr_attempts
+                        < self._worker_config.ocr_max_attempts,
+                    )
+                ).scalar_one()
+                lease_cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+                    milliseconds=self._worker_config.ocr_lease_ms
+                )
+                stale = session.execute(
+                    select(func.count())
+                    .select_from(CaptureRecord)
+                    .where(
+                        CaptureRecord.ocr_status == "processing",
+                        func.coalesce(
+                            CaptureRecord.ocr_heartbeat_at, CaptureRecord.ocr_started_at
+                        )
+                        < lease_cutoff,
                     )
                 ).scalar_one()
         except Exception as exc:  # pragma: no cover - defensive
@@ -440,6 +504,8 @@ class CaptureOrchestrator:
             return False
         self._ocr_backlog_last_count = int(count or 0)
         ocr_backlog.set(self._ocr_backlog_last_count)
+        ocr_backlog_gauge.set(self._ocr_backlog_last_count)
+        ocr_stale_processing_gauge.set(int(stale or 0))
         self._ocr_backlog_cached_throttle = (
             self._ocr_backlog_last_count >= self._ocr_backlog_soft_limit
         )
@@ -451,6 +517,24 @@ class CaptureOrchestrator:
                 self._ocr_backlog_soft_limit,
             )
         return self._ocr_backlog_cached_throttle
+
+    def _apply_backpressure(self, reason: str) -> None:
+        self._backoff_s = min(2.0, self._backoff_s * 2 or 0.25)
+        if self._backoff_s > 0:
+            self._log.debug(
+                "Backpressure ({}): sleeping for {:.2f}s", reason, self._backoff_s
+            )
+            time.sleep(self._backoff_s)
+
+    def _has_disk_space(self) -> bool:
+        try:
+            staging = shutil.disk_usage(self._capture_config.staging_dir)
+            data = shutil.disk_usage(self._capture_config.data_dir)
+        except FileNotFoundError:
+            return False
+        min_staging = self._capture_config.staging_min_free_mb * 1024 * 1024
+        min_data = self._capture_config.data_min_free_mb * 1024 * 1024
+        return staging.free >= min_staging and data.free >= min_data
 
     def _refresh_monitors(self) -> None:
         backend_monitors = self._backend.monitors

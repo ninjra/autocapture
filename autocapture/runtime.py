@@ -12,7 +12,10 @@ import uvicorn
 from .api.server import create_app
 from .capture.orchestrator import CaptureOrchestrator
 from .capture.raw_input import RawInputListener
+from .capture.backends.monitor_utils import set_process_dpi_awareness
 from .config import AppConfig
+from .embeddings.service import EmbeddingService
+from .indexing.vector_index import VectorIndex
 from .logging_utils import get_logger
 from .media.store import MediaStore
 from .observability.metrics import MetricsServer
@@ -56,12 +59,15 @@ class AppRuntime:
     """Start/stop the entire Autocapture pipeline in one process."""
 
     def __init__(self, config: AppConfig) -> None:
+        set_process_dpi_awareness()
         self._config = config
         self._log = get_logger("runtime")
         self._lock = threading.Lock()
         self._running = False
 
         self._db = DatabaseManager(config.database)
+        self._retrieval_embedder = EmbeddingService(config.embeddings)
+        self._vector_index = VectorIndex(config, self._db, self._retrieval_embedder.dim)
         self._tracker = (
             HostVectorTracker(
                 config=config.tracking,
@@ -90,7 +96,11 @@ class AppRuntime:
             ocr_backlog_check_s=1.0,
             media_store=MediaStore(config.capture, config.encryption),
         )
-        self._workers = WorkerSupervisor(config=config, db_manager=self._db)
+        self._workers = WorkerSupervisor(
+            config=config,
+            db_manager=self._db,
+            vector_index=self._vector_index,
+        )
         self._retention = RetentionManager(
             config.storage,
             config.retention,
@@ -98,7 +108,9 @@ class AppRuntime:
             Path(config.capture.data_dir),
         )
         self._retention_scheduler = RetentionScheduler(self._retention)
-        self._metrics = MetricsServer(config.observability, Path(config.capture.data_dir))
+        self._metrics = MetricsServer(
+            config.observability, Path(config.capture.data_dir)
+        )
         self._api_server: Optional[uvicorn.Server] = None
         self._api_thread: Optional[threading.Thread] = None
 
@@ -155,7 +167,12 @@ class AppRuntime:
         self._workers.notify_ocr_observation(observation_id)
 
     def _start_api(self) -> None:
-        app = create_app(self._config, db_manager=self._db)
+        app = create_app(
+            self._config,
+            db_manager=self._db,
+            embedder=self._retrieval_embedder,
+            vector_index=self._vector_index,
+        )
         config = uvicorn.Config(
             app,
             host=self._config.api.bind_host,

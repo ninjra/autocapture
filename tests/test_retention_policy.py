@@ -3,7 +3,12 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from autocapture.config import AppConfig, DatabaseConfig, RetentionPolicyConfig, StorageQuotaConfig
+from autocapture.config import (
+    AppConfig,
+    DatabaseConfig,
+    RetentionPolicyConfig,
+    StorageQuotaConfig,
+)
 from autocapture.storage.database import DatabaseManager
 from autocapture.storage.models import CaptureRecord, EventRecord, SegmentRecord
 from autocapture.storage.retention import RetentionManager
@@ -13,7 +18,9 @@ def test_retention_prunes_media(tmp_path: Path) -> None:
     config = AppConfig(
         database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"),
         retention=RetentionPolicyConfig(roi_days=1, video_days=1, max_media_gb=1),
-        storage=StorageQuotaConfig(image_quota_gb=10, prune_grace_days=1, prune_batch=10),
+        storage=StorageQuotaConfig(
+            image_quota_gb=10, prune_grace_days=1, prune_batch=10
+        ),
     )
     db = DatabaseManager(config.database)
 
@@ -42,7 +49,7 @@ def test_retention_prunes_media(tmp_path: Path) -> None:
             SegmentRecord(
                 id="seg-1",
                 started_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=2),
-                ended_at=None,
+                ended_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=2),
                 state="closed",
                 video_path=str(video_path),
             )
@@ -67,7 +74,9 @@ def test_retention_clears_event_screenshot_path(tmp_path: Path) -> None:
     config = AppConfig(
         database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"),
         retention=RetentionPolicyConfig(roi_days=1, video_days=1, max_media_gb=1),
-        storage=StorageQuotaConfig(image_quota_gb=10, prune_grace_days=1, prune_batch=10),
+        storage=StorageQuotaConfig(
+            image_quota_gb=10, prune_grace_days=1, prune_batch=10
+        ),
     )
     db = DatabaseManager(config.database)
     roi_path = tmp_path / "media" / "roi" / "old.webp"
@@ -124,7 +133,9 @@ def test_retention_idempotent(tmp_path: Path) -> None:
     config = AppConfig(
         database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"),
         retention=RetentionPolicyConfig(roi_days=1, video_days=1, max_media_gb=1),
-        storage=StorageQuotaConfig(image_quota_gb=10, prune_grace_days=1, prune_batch=10),
+        storage=StorageQuotaConfig(
+            image_quota_gb=10, prune_grace_days=1, prune_batch=10
+        ),
     )
     db = DatabaseManager(config.database)
     retention = RetentionManager(config.storage, config.retention, db, tmp_path)

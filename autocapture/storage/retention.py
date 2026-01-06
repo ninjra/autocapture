@@ -44,7 +44,9 @@ class RetentionManager:
             days=self._retention_config.screenshot_ttl_days
         )
         removed = 0
-        with self._db.session() as session:
+
+        def _prune(session) -> None:
+            nonlocal removed
             stmt = (
                 select(EventRecord)
                 .where(EventRecord.ts_start < cutoff)
@@ -58,20 +60,30 @@ class RetentionManager:
                         safe_unlink(path)
                 event.screenshot_path = None
                 removed += 1
+
+        self._db.transaction(_prune)
         if removed:
             self._log.info("Pruned {} screenshots beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
         return removed
 
     def _prune_roi_age(self) -> int:
+        safe_statuses = {"done", "failed", "skipped"}
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
             days=self._retention_config.roi_days
         )
+        protect_cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+            minutes=self._retention_config.protect_recent_minutes
+        )
         removed = 0
-        with self._db.session() as session:
+
+        def _prune(session) -> None:
+            nonlocal removed
             stmt = (
                 select(CaptureRecord)
                 .where(CaptureRecord.captured_at < cutoff)
+                .where(CaptureRecord.captured_at < protect_cutoff)
+                .where(CaptureRecord.ocr_status.in_(safe_statuses))
                 .where(CaptureRecord.image_path.is_not(None))
                 .order_by(CaptureRecord.captured_at.asc())
             )
@@ -85,6 +97,8 @@ class RetentionManager:
                     ).update({EventRecord.screenshot_path: None})
                 capture.image_path = None
                 removed += 1
+
+        self._db.transaction(_prune)
         if removed:
             self._log.info("Pruned {} ROI images beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
@@ -97,10 +111,13 @@ class RetentionManager:
         removed = 0
         from .models import SegmentRecord
 
-        with self._db.session() as session:
+        def _prune(session) -> None:
+            nonlocal removed
             stmt = (
                 select(SegmentRecord)
                 .where(SegmentRecord.started_at < cutoff)
+                .where(SegmentRecord.ended_at.is_not(None))
+                .where(SegmentRecord.state != "recording")
                 .where(SegmentRecord.video_path.is_not(None))
                 .order_by(SegmentRecord.started_at.asc())
             )
@@ -111,6 +128,8 @@ class RetentionManager:
                         safe_unlink(path)
                 segment.video_path = None
                 removed += 1
+
+        self._db.transaction(_prune)
         if removed:
             self._log.info("Pruned {} videos beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
@@ -118,15 +137,25 @@ class RetentionManager:
 
     def _prune_quota(self) -> int:
         usage_gb = self._folder_size_gb(self._media_root)
-        cap_gb = min(self._storage_config.image_quota_gb, self._retention_config.max_media_gb)
+        cap_gb = min(
+            self._storage_config.image_quota_gb, self._retention_config.max_media_gb
+        )
         if usage_gb <= cap_gb:
             return 0
         removed = 0
-        with self._db.session() as session:
+        safe_statuses = {"done", "failed", "skipped"}
+        protect_cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+            minutes=self._retention_config.protect_recent_minutes
+        )
+
+        def _prune(session) -> None:
+            nonlocal removed
             captures = (
                 session.execute(
                     select(CaptureRecord)
                     .where(CaptureRecord.image_path.is_not(None))
+                    .where(CaptureRecord.ocr_status.in_(safe_statuses))
+                    .where(CaptureRecord.captured_at < protect_cutoff)
                     .order_by(CaptureRecord.captured_at.asc())
                     .limit(self._storage_config.prune_batch)
                 )
@@ -145,6 +174,8 @@ class RetentionManager:
                 removed += 1
                 if self._folder_size_gb(self._media_root) <= cap_gb:
                     break
+
+        self._db.transaction(_prune)
         if removed:
             self._log.warning("Pruned {} captures to respect quota", removed)
             retention_files_deleted_total.inc(removed)

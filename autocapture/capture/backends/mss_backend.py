@@ -7,7 +7,7 @@ from typing import Dict
 import numpy as np
 
 from ...logging_utils import get_logger
-from .monitor_utils import MonitorInfo
+from .monitor_utils import MonitorInfo, stable_monitor_id
 
 
 class MssBackend:
@@ -43,10 +43,16 @@ class MssBackend:
 
     def _refresh_monitors(self) -> None:
         self._monitors = []
-        for index, monitor in enumerate(self._mss.monitors[1:], start=1):
+        for monitor in self._mss.monitors[1:]:
+            monitor_id = stable_monitor_id(
+                monitor["left"],
+                monitor["top"],
+                monitor["width"],
+                monitor["height"],
+            )
             self._monitors.append(
                 MonitorInfo(
-                    id=str(index - 1),
+                    id=monitor_id,
                     left=monitor["left"],
                     top=monitor["top"],
                     width=monitor["width"],

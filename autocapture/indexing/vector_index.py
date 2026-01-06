@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from typing import Iterable, Optional
 
 from qdrant_client import QdrantClient
@@ -38,7 +39,9 @@ class QdrantIndex:
     def _ensure_collection(self) -> None:
         if self._client.collection_exists(self._collection):
             return
-        distance = getattr(Distance, self._config.qdrant.distance.upper(), Distance.COSINE)
+        distance = getattr(
+            Distance, self._config.qdrant.distance.upper(), Distance.COSINE
+        )
         self._client.create_collection(
             self._collection,
             vectors_config=VectorParams(size=self._dim, distance=distance),
@@ -83,6 +86,8 @@ class HNSWIndex:
         self._index_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = None
         self._index = None
+        self._index_mtime: float | None = None
+        self._last_mtime_check = 0.0
         self._load()
 
     def _load(self) -> None:
@@ -93,9 +98,13 @@ class HNSWIndex:
         index = hnswlib.Index(space="cosine", dim=self._dim)
         if self._index_path.exists():
             index.load_index(str(self._index_path))
+            self._index_mtime = self._index_path.stat().st_mtime
         else:
             index.init_index(
-                max_elements=200000, ef_construction=200, M=16, allow_replace_deleted=True
+                max_elements=200000,
+                ef_construction=200,
+                M=16,
+                allow_replace_deleted=True,
             )
         index.set_ef(50)
         self._index = index
@@ -116,7 +125,8 @@ class HNSWIndex:
             return
         mapping_records = []
         vectors = []
-        with self._db.session() as session:
+
+        def _persist(session) -> None:
             for event_id, span_key, vector, payload in items_list:
                 mapping = (
                     session.execute(
@@ -131,26 +141,31 @@ class HNSWIndex:
                     mapping = HNSWMappingRecord(
                         event_id=event_id,
                         span_key=span_key,
-                        span_id=payload.get("span_id") if isinstance(payload, dict) else None,
+                        span_id=payload.get("span_id")
+                        if isinstance(payload, dict)
+                        else None,
                     )
-                    session.add(mapping)
-                    try:
-                        session.flush()
-                    except IntegrityError:
-                        session.rollback()
-                        mapping = (
-                            session.execute(
-                                select(HNSWMappingRecord)
-                                .where(HNSWMappingRecord.event_id == event_id)
-                                .where(HNSWMappingRecord.span_key == span_key)
+                    with session.begin_nested():
+                        session.add(mapping)
+                        try:
+                            session.flush()
+                        except IntegrityError:
+                            session.rollback()
+                            mapping = (
+                                session.execute(
+                                    select(HNSWMappingRecord)
+                                    .where(HNSWMappingRecord.event_id == event_id)
+                                    .where(HNSWMappingRecord.span_key == span_key)
+                                )
+                                .scalars()
+                                .first()
                             )
-                            .scalars()
-                            .first()
-                        )
-                        if mapping is None:
-                            raise
+                            if mapping is None:
+                                raise
                 mapping_records.append(mapping)
                 vectors.append(vector)
+
+        self._db.transaction(_persist)
 
         labels = [record.label for record in mapping_records if record is not None]
         if not labels:
@@ -171,23 +186,62 @@ class HNSWIndex:
         with file_lock(self._lock_path):
             self._index.save_index(str(temp_path))
             safe_replace(temp_path, self._index_path)
+            self._index_mtime = self._index_path.stat().st_mtime
+
+    def _maybe_reload(self) -> None:
+        if not self._index_path.exists():
+            return
+        now = time.monotonic()
+        if now - self._last_mtime_check < 1.0:
+            return
+        self._last_mtime_check = now
+        try:
+            current_mtime = self._index_path.stat().st_mtime
+        except FileNotFoundError:
+            return
+        if self._index_mtime is not None and current_mtime <= self._index_mtime:
+            return
+        try:
+            import hnswlib  # type: ignore
+
+            with file_lock(self._lock_path):
+                new_index = hnswlib.Index(space="cosine", dim=self._dim)
+                new_index.load_index(str(self._index_path))
+                new_index.set_ef(50)
+            with self._lock:
+                self._index = new_index
+                self._index_mtime = current_mtime
+                self._log.info("Reloaded HNSW index from disk")
+        except Exception as exc:
+            self._log.warning("Failed to reload HNSW index: {}", exc)
 
     def search(self, vector: list[float], limit: int = 20) -> list[VectorHit]:
         if self._index is None or self._lock is None:
             return []
+        self._maybe_reload()
         current = self._index.get_current_count()
         if current == 0:
             return []
         k = min(limit, current)
         with self._lock:
             labels, distances = self._index.knn_query([vector], k=k)
-        label_list = labels[0].tolist() if hasattr(labels[0], "tolist") else list(labels[0])
-        dist_list = distances[0].tolist() if hasattr(distances[0], "tolist") else list(distances[0])
+        label_list = (
+            labels[0].tolist() if hasattr(labels[0], "tolist") else list(labels[0])
+        )
+        dist_list = (
+            distances[0].tolist()
+            if hasattr(distances[0], "tolist")
+            else list(distances[0])
+        )
         if not label_list:
             return []
         with self._db.session() as session:
             mappings = (
-                session.execute(select(HNSWMappingRecord).where(HNSWMappingRecord.label.in_(label_list)))
+                session.execute(
+                    select(HNSWMappingRecord).where(
+                        HNSWMappingRecord.label.in_(label_list)
+                    )
+                )
                 .scalars()
                 .all()
             )
@@ -198,7 +252,11 @@ class HNSWIndex:
             if not mapping:
                 continue
             score = 1.0 - float(distance)
-            hits.append(VectorHit(event_id=mapping.event_id, span_key=mapping.span_key, score=score))
+            hits.append(
+                VectorHit(
+                    event_id=mapping.event_id, span_key=mapping.span_key, score=score
+                )
+            )
         return hits
 
 

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 from dataclasses import dataclass
-from typing import Callable
 
 
 class RECT(ctypes.Structure):
@@ -16,12 +16,13 @@ class RECT(ctypes.Structure):
     ]
 
 
-class MONITORINFO(ctypes.Structure):
+class MONITORINFOEXW(ctypes.Structure):
     _fields_ = [
         ("cbSize", ctypes.c_uint),
         ("rcMonitor", RECT),
         ("rcWork", RECT),
         ("dwFlags", ctypes.c_uint),
+        ("szDevice", ctypes.c_wchar * 32),
     ]
 
 
@@ -34,7 +35,10 @@ class MonitorInfo:
     height: int
 
     def contains(self, x: int, y: int) -> bool:
-        return self.left <= x < self.left + self.width and self.top <= y < self.top + self.height
+        return (
+            self.left <= x < self.left + self.width
+            and self.top <= y < self.top + self.height
+        )
 
 
 def enumerate_monitors() -> list[MonitorInfo]:
@@ -42,17 +46,21 @@ def enumerate_monitors() -> list[MonitorInfo]:
     monitors: list[MonitorInfo] = []
 
     MONITORENUMPROC = ctypes.WINFUNCTYPE(
-        ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(RECT), ctypes.c_long
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(RECT),
+        ctypes.c_long,
     )
 
     def _callback(hmonitor, _hdc, _rect_ptr, _data):
-        info = MONITORINFO()
-        info.cbSize = ctypes.sizeof(MONITORINFO)
+        info = MONITORINFOEXW()
+        info.cbSize = ctypes.sizeof(MONITORINFOEXW)
         if user32.GetMonitorInfoW(hmonitor, ctypes.byref(info)):
             rect = info.rcMonitor
             monitors.append(
                 MonitorInfo(
-                    id=str(len(monitors)),
+                    id=info.szDevice or str(len(monitors)),
                     left=rect.left,
                     top=rect.top,
                     width=rect.right - rect.left,
@@ -64,3 +72,27 @@ def enumerate_monitors() -> list[MonitorInfo]:
     callback = MONITORENUMPROC(_callback)
     user32.EnumDisplayMonitors(None, None, callback, 0)
     return monitors
+
+
+def stable_monitor_id(left: int, top: int, width: int, height: int) -> str:
+    return f"{left},{top},{width}x{height}"
+
+
+_DPI_AWARENESS_SET = False
+
+
+def set_process_dpi_awareness() -> None:
+    global _DPI_AWARENESS_SET
+    if _DPI_AWARENESS_SET or sys.platform != "win32":
+        return
+    _DPI_AWARENESS_SET = True
+    try:
+        awareness = ctypes.c_void_p(-4)
+        ctypes.windll.user32.SetProcessDpiAwarenessContext(awareness)
+        return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        return

@@ -1,4 +1,8 @@
-from autocapture.memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
+from autocapture.memory.context_pack import (
+    EvidenceItem,
+    EvidenceSpan,
+    build_context_pack,
+)
 from autocapture.memory.entities import EntityToken
 
 

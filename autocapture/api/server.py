@@ -21,6 +21,8 @@ from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
 from ..memory.entities import EntityResolver, SecretStore
 from ..memory.prompts import PromptLibraryService, PromptRegistry
 from ..memory.retrieval import RetrieveFilters, RetrievalService
+from ..embeddings.service import EmbeddingService
+from ..indexing.vector_index import VectorIndex
 from ..memory.router import ProviderRouter
 from ..memory.verification import Claim, RulesVerifier
 from ..security.oidc import GoogleOIDCVerifier
@@ -115,15 +117,25 @@ class SuggestRequest(BaseModel):
 def create_app(
     config: AppConfig,
     db_manager: DatabaseManager | None = None,
+    *,
+    embedder: EmbeddingService | None = None,
+    vector_index: VectorIndex | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Autocapture Memory Engine")
     db = db_manager or DatabaseManager(config.database)
-    retrieval = RetrievalService(db, config)
+    retrieval = RetrievalService(
+        db,
+        config,
+        embedder=embedder,
+        vector_index=vector_index,
+    )
     secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
     entities = EntityResolver(db, secret)
     prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
     PromptLibraryService(db).sync_registry(prompt_registry)
-    retention = RetentionManager(config.storage, config.retention, db, Path(config.capture.data_dir))
+    retention = RetentionManager(
+        config.storage, config.retention, db, Path(config.capture.data_dir)
+    )
     log = get_logger("api")
     oidc_verifier: GoogleOIDCVerifier | None = None
     if config.mode.mode == "remote":
@@ -140,6 +152,7 @@ def create_app(
         app.mount("/static", StaticFiles(directory=ui_dir), name="static")
 
     if config.mode.mode == "remote":
+
         @app.middleware("http")
         async def auth_middleware(request: Request, call_next):  # type: ignore[no-redef]
             auth = request.headers.get("Authorization", "")
@@ -186,7 +199,9 @@ def create_app(
         event_map = {event.event_id: event for event in events}
         return RetrieveResponse(
             evidence=[
-                _evidence_to_json(item, event_map.get(item.event_id), request.include_screenshots)
+                _evidence_to_json(
+                    item, event_map.get(item.event_id), request.include_screenshots
+                )
                 for item in evidence
             ]
         )
@@ -263,7 +278,9 @@ def create_app(
             citations = compressed.citations
         else:
             provider, decision = ProviderRouter(routing_data, config.llm).select_llm()
-            system_prompt = prompt_registry.get("ANSWER_WITH_CONTEXT_PACK").system_prompt
+            system_prompt = prompt_registry.get(
+                "ANSWER_WITH_CONTEXT_PACK"
+            ).system_prompt
             answer_text = await provider.generate_answer(
                 system_prompt,
                 query_text,
@@ -323,7 +340,7 @@ def create_app(
             last_used = _ensure_aware(row.last_used_at)
             age_hours = max((now - last_used).total_seconds() / 3600, 0.0)
             recency = 1 / (1 + age_hours)
-            score = prefix_boost * 1.0 + (row.count ** 0.5) * 0.3 + recency * 0.3
+            score = prefix_boost * 1.0 + (row.count**0.5) * 0.3 + recency * 0.3
             scored.append((score, row.query_text))
         scored.sort(key=lambda item: item[0], reverse=True)
         return [{"snippet": text} for _, text in scored[:8]]
@@ -371,7 +388,9 @@ def _model_dump(model: Any) -> dict[str, Any]:
     return model.dict()
 
 
-def _merge_routing(base: ProviderRoutingConfig, override: Optional[dict[str, str]]) -> ProviderRoutingConfig:
+def _merge_routing(
+    base: ProviderRoutingConfig, override: Optional[dict[str, str]]
+) -> ProviderRoutingConfig:
     data = _model_dump(base)
     if override:
         data.update({k: v for k, v in override.items() if v})
@@ -463,7 +482,9 @@ def _spans_for_event(
     candidate_spans = spans
     if matched_span_keys:
         candidate_spans = [
-            span for span in spans if str(span.get("span_key")) in set(matched_span_keys)
+            span
+            for span in spans
+            if str(span.get("span_key")) in set(matched_span_keys)
         ]
     elif query_lower:
         candidate_spans = [
@@ -483,7 +504,9 @@ def _spans_for_event(
             )
         )
     if not evidence_spans:
-        evidence_spans.append(EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5))
+        evidence_spans.append(
+            EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5)
+        )
     return evidence_spans
 
 
@@ -507,9 +530,7 @@ def _remap_spans(
     remapped: list[EvidenceSpan] = []
     for span in spans:
         overlaps = [
-            rep
-            for rep in replacements
-            if span.start < rep[1] and span.end > rep[0]
+            rep for rep in replacements if span.start < rep[1] and span.end > rep[0]
         ]
         if overlaps:
             new_start = min(rep[2] for rep in overlaps)
@@ -600,7 +621,12 @@ def _evidence_to_json(
         "domain": item.domain,
         "score": item.score,
         "spans": [
-            {"span_id": span.span_id, "start": span.start, "end": span.end, "conf": span.conf}
+            {
+                "span_id": span.span_id,
+                "start": span.start,
+                "end": span.end,
+                "conf": span.conf,
+            }
             for span in item.spans
         ],
         "text": item.text,

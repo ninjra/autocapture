@@ -16,12 +16,23 @@ from ..logging_utils import get_logger
 
 captures_taken_total = Counter("captures_taken_total", "Total captures taken")
 captures_dropped_total = Counter("captures_dropped_total", "Total captures dropped")
+captures_skipped_backpressure_total = Counter(
+    "captures_skipped_backpressure_total", "Captures skipped due to backpressure"
+)
+roi_queue_full_total = Counter("roi_queue_full_total", "ROI queue full events")
+disk_low_total = Counter("disk_low_total", "Disk low backpressure events")
 roi_queue_depth = Gauge("roi_queue_depth", "ROI queue depth")
 ocr_backlog = Gauge("ocr_backlog", "OCR backlog count")
+ocr_backlog_gauge = Gauge("ocr_backlog_gauge", "OCR backlog gauge")
+ocr_stale_processing_gauge = Gauge(
+    "ocr_stale_processing_gauge", "Stale OCR processing count"
+)
 ocr_latency_ms = Histogram("ocr_latency_ms", "OCR latency (ms)")
 embedding_latency_ms = Histogram("embedding_latency_ms", "Embedding latency (ms)")
 retrieval_latency_ms = Histogram("retrieval_latency_ms", "Retrieval latency (ms)")
-retention_files_deleted_total = Counter("retention_files_deleted_total", "Retention deletions")
+retention_files_deleted_total = Counter(
+    "retention_files_deleted_total", "Retention deletions"
+)
 worker_errors_total = Counter("worker_errors_total", "Worker errors", ["worker"])
 media_folder_size_gb = Gauge("media_folder_size_gb", "Media folder size (GB)")
 process_cpu_percent = Gauge("process_cpu_percent", "Process CPU percent")
@@ -91,7 +102,11 @@ def _folder_size_gb(path: Path) -> float:
 def _update_gpu_stats() -> None:
     try:
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used", "--format=csv,noheader,nounits"],
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used",
+                "--format=csv,noheader,nounits",
+            ],
             capture_output=True,
             text=True,
             check=False,

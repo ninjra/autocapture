@@ -23,12 +23,16 @@ def test_hnsw_mapping_unique_and_atomic_save(tmp_path: Path) -> None:
     index.upsert_spans([("event-1", "S1", [0.1, 0.2, 0.3], payload)])
 
     with db.session() as session:
-        rows = session.execute(
-            select(HNSWMappingRecord).where(
-                HNSWMappingRecord.event_id == "event-1",
-                HNSWMappingRecord.span_key == "S1",
+        rows = (
+            session.execute(
+                select(HNSWMappingRecord).where(
+                    HNSWMappingRecord.event_id == "event-1",
+                    HNSWMappingRecord.span_key == "S1",
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     assert len(rows) == 1
 
     index_path = tmp_path / "embeddings" / "hnsw.index"

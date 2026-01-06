@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "High-performance local activity capture and recall pipeline"
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
-packages = [{ include = "autocapture" }]
+packages = [{ include = "autocapture", exclude = ["autocapture/_legacy/**"] }]
 include = ["autocapture/prompts/**/*.yaml", "autocapture/ui/web/**"]
 
 [tool.poetry.scripts]

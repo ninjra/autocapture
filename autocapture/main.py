@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -18,7 +19,7 @@ from .config import AppConfig, load_config
 from .logging_utils import configure_logging
 from .runtime import AppRuntime
 from .storage.database import DatabaseManager
-from .worker.event_worker import EventIngestWorker
+from .worker.supervisor import WorkerSupervisor
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -67,7 +68,9 @@ def _doctor(config: AppConfig) -> int:
             tracking_dir.mkdir(parents=True, exist_ok=True)
             logger.info("Tracking DB directory: %s", tracking_dir)
         except Exception as exc:
-            logger.error("Cannot create tracking DB directory %s: %s", tracking_dir, exc)
+            logger.error(
+                "Cannot create tracking DB directory %s: %s", tracking_dir, exc
+            )
             ok = False
 
     # Encryption key (if enabled)
@@ -135,7 +138,9 @@ def main(argv: list[str] | None = None) -> None:
                 port=config.api.port,
                 log_level="info",
                 ssl_certfile=(
-                    str(config.mode.tls_cert_path) if config.mode.https_enabled else None
+                    str(config.mode.tls_cert_path)
+                    if config.mode.https_enabled
+                    else None
                 ),
                 ssl_keyfile=(
                     str(config.mode.tls_key_path) if config.mode.https_enabled else None
@@ -147,14 +152,20 @@ def main(argv: list[str] | None = None) -> None:
 
     if cmd == "worker":
         if not claim_single_instance():
-            logger.warning("Autocapture worker already active in another interpreter. Exiting.")
+            logger.warning(
+                "Autocapture worker already active in another interpreter. Exiting."
+            )
             raise SystemExit(0)
-        worker = EventIngestWorker(config)
-        logger.info("OCR ingest worker running. Press Ctrl+C to stop.")
+        worker = WorkerSupervisor(config=config)
+        logger.info("Worker supervisor running. Press Ctrl+C to stop.")
+        worker.start()
         try:
-            worker.run_forever()
+            while True:
+                time.sleep(0.5)
         except KeyboardInterrupt:
             logger.info("Shutting down worker")
+        finally:
+            worker.stop()
         return
 
     if cmd in {"app", "tray"}:
@@ -193,16 +204,17 @@ def _validate_remote_mode(config: AppConfig) -> None:
         missing.append("mode.https_enabled")
     if not config.mode.tls_cert_path or not config.mode.tls_key_path:
         missing.append("TLS cert/key")
-    if not config.mode.google_oauth_client_id or not config.mode.google_oauth_client_secret:
+    if (
+        not config.mode.google_oauth_client_id
+        or not config.mode.google_oauth_client_secret
+    ):
         missing.append("Google OIDC client")
     if not config.mode.google_allowed_emails:
         missing.append("mode.google_allowed_emails")
     if config.api.bind_host in ("0.0.0.0", "127.0.0.1"):
         missing.append("api.bind_host (overlay IP)")
     if missing:
-        raise RuntimeError(
-            "Remote mode misconfigured. Missing: " + ", ".join(missing)
-        )
+        raise RuntimeError("Remote mode misconfigured. Missing: " + ", ".join(missing))
 
 
 def _resolve_tracking_dir(config: AppConfig) -> Path:

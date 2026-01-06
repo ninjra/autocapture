@@ -35,13 +35,20 @@ class RetrievedEvent:
 
 
 class RetrievalService:
-    def __init__(self, db: DatabaseManager, config: AppConfig | None = None) -> None:
+    def __init__(
+        self,
+        db: DatabaseManager,
+        config: AppConfig | None = None,
+        *,
+        embedder: EmbeddingService | None = None,
+        vector_index: VectorIndex | None = None,
+    ) -> None:
         self._db = db
         self._config = config or AppConfig()
         self._log = get_logger("retrieval")
         self._lexical = LexicalIndex(db)
-        self._embedder = EmbeddingService(self._config.embeddings)
-        self._vector = VectorIndex(self._config, db, self._embedder.dim)
+        self._embedder = embedder or EmbeddingService(self._config.embeddings)
+        self._vector = vector_index or VectorIndex(self._config, db, self._embedder.dim)
 
     def retrieve(
         self,
@@ -62,13 +69,17 @@ class RetrievalService:
         vector_scores: dict[str, float] = {}
         span_hits: dict[str, list[str]] = {}
         for hit in vector_hits:
-            vector_scores[hit.event_id] = max(vector_scores.get(hit.event_id, 0.0), hit.score)
+            vector_scores[hit.event_id] = max(
+                vector_scores.get(hit.event_id, 0.0), hit.score
+            )
             span_hits.setdefault(hit.event_id, []).append(hit.span_key)
 
         candidate_ids = set(lexical_scores) | set(vector_scores)
         if not candidate_ids:
             with self._db.session() as session:
-                stmt = select(EventRecord).where(EventRecord.ocr_text.ilike(f"%{query}%"))
+                stmt = select(EventRecord).where(
+                    EventRecord.ocr_text.ilike(f"%{query}%")
+                )
                 if time_range:
                     stmt = stmt.where(EventRecord.ts_start.between(*time_range))
                 if filters and filters.apps:
@@ -119,7 +130,9 @@ class RetrievalService:
 
     def list_events(self, limit: int = 100) -> Iterable[EventRecord]:
         with self._db.session() as session:
-            stmt = select(EventRecord).order_by(EventRecord.ts_start.desc()).limit(limit)
+            stmt = (
+                select(EventRecord).order_by(EventRecord.ts_start.desc()).limit(limit)
+            )
             return list(session.execute(stmt).scalars().all())
 
 
@@ -131,7 +144,9 @@ def _normalize_scores(scores: dict[str, float]) -> dict[str, float]:
     max_score = max(values)
     if max_score == min_score:
         return {key: 1.0 for key in scores}
-    return {key: (val - min_score) / (max_score - min_score) for key, val in scores.items()}
+    return {
+        key: (val - min_score) / (max_score - min_score) for key, val in scores.items()
+    }
 
 
 def _recency_bias(age_hours: float) -> float:

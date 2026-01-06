@@ -1,6 +1,7 @@
 """Worker entry points and helpers."""
 
+from .embedding_worker import EmbeddingWorker
 from .event_worker import EventIngestWorker
-from .worker_main import Worker, main
+from .supervisor import WorkerSupervisor
 
-__all__ = ["EventIngestWorker", "Worker", "main"]
+__all__ = ["EmbeddingWorker", "EventIngestWorker", "WorkerSupervisor"]

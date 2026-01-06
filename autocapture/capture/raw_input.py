@@ -349,9 +349,15 @@ class RawInputListener:
             elif raw.header.dwType == RIM_TYPEMOUSE:
                 mouse = raw.data.mouse
                 payload: dict[str, int] = {
-                    "left_clicks": 1 if mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN else 0,
-                    "right_clicks": 1 if mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN else 0,
-                    "middle_clicks": 1 if mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN else 0,
+                    "left_clicks": 1
+                    if mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN
+                    else 0,
+                    "right_clicks": 1
+                    if mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN
+                    else 0,
+                    "middle_clicks": 1
+                    if mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN
+                    else 0,
                 }
                 if mouse.usButtonFlags & RI_MOUSE_WHEEL:
                     payload["wheel_events"] = 1
@@ -377,7 +383,9 @@ class RawInputListener:
                     or payload["wheel_events"]
                     or emitted_move
                 ):
-                    event = InputVectorEvent(ts_ms=now_ms, device="mouse", mouse=payload)
+                    event = InputVectorEvent(
+                        ts_ms=now_ms, device="mouse", mouse=payload
+                    )
                     self._on_input_event(event)
         except Exception as exc:  # pragma: no cover - Windows-only parsing
             self._log.debug("Raw input parse failed: {}", exc)

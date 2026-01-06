@@ -9,7 +9,9 @@ import pytest
 from autocapture.fs_utils import atomic_publish, safe_replace
 
 
-def test_safe_replace_handles_exdev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_safe_replace_handles_exdev(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = tmp_path / "source.txt"
     destination = tmp_path / "destination.txt"
     source.write_text("payload", encoding="utf-8")

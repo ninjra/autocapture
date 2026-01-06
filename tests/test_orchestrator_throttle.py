@@ -22,7 +22,7 @@ class DummyBackend:
         return {}
 
 
-def test_throttle_ignores_stale_processing(monkeypatch) -> None:
+def test_throttle_counts_stale_processing() -> None:
     config = AppConfig(database=DatabaseConfig(url="sqlite:///:memory:"))
     db = DatabaseManager(config.database)
     stale_time = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=10)
@@ -52,4 +52,4 @@ def test_throttle_ignores_stale_processing(monkeypatch) -> None:
         backend=DummyBackend(),
     )
     orchestrator._ocr_backlog_soft_limit = 1
-    assert orchestrator._should_throttle_ocr() is False
+    assert orchestrator._should_throttle_ocr() is True

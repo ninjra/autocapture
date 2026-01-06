@@ -110,7 +110,9 @@ def lease_one(kinds: list[str] | None, lease_ms: int):
         raise
 
 
-def _get_job_meta(conn: sqlite3.Connection, job_id: int) -> tuple[str | None, int | None]:
+def _get_job_meta(
+    conn: sqlite3.Connection, job_id: int
+) -> tuple[str | None, int | None]:
     cursor = conn.execute(
         "SELECT kind, updated_at FROM jobs WHERE id = ?",
         (job_id,),
@@ -182,4 +184,6 @@ def mark_failed(job_id: int, error: str) -> None:
     )
     conn.commit()
     duration_ms = now - updated_at if updated_at else None
-    _LOG.error("Job {} ({}) failed duration_ms={} error={}", job_id, kind, duration_ms, error)
+    _LOG.error(
+        "Job {} ({}) failed duration_ms={} error={}", job_id, kind, duration_ms, error
+    )

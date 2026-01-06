@@ -9,8 +9,22 @@ from autocapture.storage.database import DatabaseManager
 def test_snippet_offsets_keep_spans_in_bounds() -> None:
     text = "Alpha beta gamma delta epsilon zeta eta theta iota"
     spans = [
-        {"span_id": "S1", "span_key": "S1", "text": "gamma", "start": 12, "end": 17, "conf": 0.9},
-        {"span_id": "S2", "span_key": "S2", "text": "theta", "start": 41, "end": 46, "conf": 0.9},
+        {
+            "span_id": "S1",
+            "span_key": "S1",
+            "text": "gamma",
+            "start": 12,
+            "end": 17,
+            "conf": 0.9,
+        },
+        {
+            "span_id": "S2",
+            "span_key": "S2",
+            "text": "theta",
+            "start": 41,
+            "end": 46,
+            "conf": 0.9,
+        },
     ]
     snippet, offset = _snippet_for_query(text, "theta", window=5)
     evidence_spans = _spans_for_event(spans, snippet, offset, "theta", ["S2"])
@@ -22,7 +36,14 @@ def test_snippet_offsets_keep_spans_in_bounds() -> None:
 def test_sanitized_spans_remap_to_pseudonymized_text() -> None:
     text = "Email me at test@example.com for details."
     spans = [
-        {"span_id": "S1", "span_key": "S1", "text": "test@example.com", "start": 12, "end": 28, "conf": 0.9},
+        {
+            "span_id": "S1",
+            "span_key": "S1",
+            "text": "test@example.com",
+            "start": 12,
+            "end": 28,
+            "conf": 0.9,
+        },
     ]
     snippet, offset = _snippet_for_query(text, "example", window=20)
     evidence_spans = _spans_for_event(spans, snippet, offset, "example", ["S1"])

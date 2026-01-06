@@ -23,7 +23,9 @@ def build_parser() -> argparse.ArgumentParser:
     freeze_parser.add_argument("paths", nargs="+", help="Relative file paths")
 
     unfreeze_parser = subparsers.add_parser("unfreeze", help="Unfreeze file surfaces")
-    unfreeze_parser.add_argument("--reason", required=True, help="Reason for unfreezing")
+    unfreeze_parser.add_argument(
+        "--reason", required=True, help="Reason for unfreezing"
+    )
     unfreeze_parser.add_argument("paths", nargs="+", help="Relative file paths")
 
     subparsers.add_parser("verify", help="Verify frozen file hashes")

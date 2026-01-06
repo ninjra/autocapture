@@ -42,7 +42,15 @@ def test_api_suggest_returns_snippets(tmp_path: Path) -> None:
                 screenshot_path=None,
                 screenshot_hash="hash",
                 ocr_text="Hello world from autocapture",
-                ocr_spans=[{"span_id": "S1", "text": "Hello", "start": 0, "end": 5, "conf": 0.9}],
+                ocr_spans=[
+                    {
+                        "span_id": "S1",
+                        "text": "Hello",
+                        "start": 0,
+                        "end": 5,
+                        "conf": 0.9,
+                    }
+                ],
                 embedding_vector=None,
                 tags={},
             )

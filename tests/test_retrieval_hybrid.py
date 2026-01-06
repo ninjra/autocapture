@@ -39,7 +39,9 @@ class FakeVector:
 
 
 def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
-    config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
+    config = AppConfig(
+        database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
+    )
     config.embeddings.model = "local-test"
     db = DatabaseManager(config.database)
 
@@ -54,7 +56,16 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
         screenshot_path=None,
         screenshot_hash="hash",
         ocr_text="Project roadmap details",
-        ocr_spans=[{"span_id": "S1", "span_key": "S1", "text": "roadmap", "start": 8, "end": 15, "conf": 0.9}],
+        ocr_spans=[
+            {
+                "span_id": "S1",
+                "span_key": "S1",
+                "text": "roadmap",
+                "start": 8,
+                "end": 15,
+                "conf": 0.9,
+            }
+        ],
         embedding_vector=None,
         tags={},
     )
@@ -69,7 +80,16 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
         screenshot_path=None,
         screenshot_hash="hash2",
         ocr_text="Random chatter",
-        ocr_spans=[{"span_id": "S1", "span_key": "S1", "text": "Random", "start": 0, "end": 6, "conf": 0.9}],
+        ocr_spans=[
+            {
+                "span_id": "S1",
+                "span_key": "S1",
+                "text": "Random",
+                "start": 0,
+                "end": 6,
+                "conf": 0.9,
+            }
+        ],
         embedding_vector=None,
         tags={},
     )
@@ -80,7 +100,9 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
     retrieval = RetrievalService(db, config)
     retrieval._embedder = FakeEmbedder()  # type: ignore[attr-defined]
     retrieval._lexical = FakeLexical([LexicalHit(event_id="EOLD", score=0.9)])  # type: ignore[attr-defined]
-    retrieval._vector = FakeVector([VectorHit(event_id="EOLD", span_key="S1", score=0.9)])  # type: ignore[attr-defined]
+    retrieval._vector = FakeVector(
+        [VectorHit(event_id="EOLD", span_key="S1", score=0.9)]
+    )  # type: ignore[attr-defined]
 
     results = retrieval.retrieve("roadmap", None, None, limit=2)
     assert results
