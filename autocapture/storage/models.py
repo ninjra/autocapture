@@ -10,6 +10,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -40,7 +41,6 @@ class EventRecord(Base):
     screenshot_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     screenshot_hash: Mapped[str] = mapped_column(String(128))
     ocr_text: Mapped[str] = mapped_column(Text)
-    ocr_spans: Mapped[list[dict]] = mapped_column(JSON, default=list)
     embedding_vector: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     embedding_status: Mapped[str] = mapped_column(String(16), default="pending")
     embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -175,6 +175,7 @@ class OCRSpanRecord(Base):
             "span_key",
             name="uq_ocr_spans_capture_span_key",
         ),
+        Index("ix_ocr_spans_capture_id", "capture_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -202,6 +203,11 @@ class EmbeddingRecord(Base):
             "model",
             name="uq_embeddings_capture_span_model",
         ),
+        ForeignKeyConstraint(
+            ["capture_id", "span_key"],
+            ["ocr_spans.capture_id", "ocr_spans.span_key"],
+            ondelete="CASCADE",
+        ),
         Index("ix_embeddings_status", "status"),
         Index("ix_embeddings_status_heartbeat", "status", "heartbeat_at"),
     )
@@ -209,9 +215,6 @@ class EmbeddingRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     capture_id: Mapped[str] = mapped_column(
         ForeignKey("captures.id", ondelete="CASCADE")
-    )
-    span_id: Mapped[int | None] = mapped_column(
-        ForeignKey("ocr_spans.id", ondelete="SET NULL")
     )
     vector: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     model: Mapped[str] = mapped_column(String(128))
@@ -230,12 +233,11 @@ class EmbeddingRecord(Base):
     updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
-    span_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    span_key: Mapped[str] = mapped_column(String(64))
 
     capture: Mapped[CaptureRecord] = relationship(
         "CaptureRecord", back_populates="embeddings"
     )
-    span: Mapped[OCRSpanRecord] = relationship("OCRSpanRecord")
 
 
 class SegmentRecord(Base):
@@ -281,7 +283,6 @@ class HNSWMappingRecord(Base):
     label: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     event_id: Mapped[str] = mapped_column(String(36), index=True)
     span_key: Mapped[str] = mapped_column(String(64))
-    span_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class ObservationRecord(Base):

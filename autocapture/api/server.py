@@ -27,7 +27,7 @@ from ..memory.router import ProviderRouter
 from ..memory.verification import Claim, RulesVerifier
 from ..security.oidc import GoogleOIDCVerifier
 from ..storage.database import DatabaseManager
-from ..storage.models import EventRecord, QueryHistoryRecord
+from ..storage.models import EventRecord, OCRSpanRecord, QueryHistoryRecord
 from ..storage.retention import RetentionManager
 
 
@@ -190,6 +190,7 @@ def create_app(
         evidence, events = _build_evidence(
             retrieval,
             entities,
+            db,
             request.query,
             request.time_range,
             request.filters,
@@ -212,6 +213,7 @@ def create_app(
         evidence, events = _build_evidence(
             retrieval,
             entities,
+            db,
             request.query,
             request.time_range,
             request.filters,
@@ -252,6 +254,7 @@ def create_app(
             _build_evidence,
             retrieval,
             entities,
+            db,
             query_text,
             request.time_range,
             request.filters,
@@ -351,6 +354,7 @@ def create_app(
             event = session.get(EventRecord, event_id)
         if not event:
             raise HTTPException(status_code=404, detail="Event not found")
+        spans = _fetch_spans(db, event.event_id)
         return EventResponse(
             event_id=event.event_id,
             ts_start=event.ts_start,
@@ -362,7 +366,7 @@ def create_app(
             screenshot_path=event.screenshot_path,
             screenshot_hash=event.screenshot_hash,
             ocr_text=event.ocr_text,
-            ocr_spans=event.ocr_spans,
+            ocr_spans=spans,
             tags=event.tags,
         )
 
@@ -406,6 +410,7 @@ def _safe_json(value: dict[str, Any]) -> str:
 def _build_evidence(
     retrieval: RetrievalService,
     entities: EntityResolver,
+    db: DatabaseManager,
     query: str,
     time_range: Optional[tuple[dt.datetime, dt.datetime]],
     filters: Optional[dict[str, list[str]]],
@@ -424,8 +429,9 @@ def _build_evidence(
         event = result.event
         events.append(event)
         snippet, snippet_offset = _snippet_for_query(event.ocr_text, query)
+        spans_data = _fetch_spans(db, event.event_id, result.matched_span_keys)
         spans = _spans_for_event(
-            event.ocr_spans,
+            spans_data,
             snippet,
             snippet_offset,
             query,
@@ -455,6 +461,31 @@ def _build_evidence(
             )
         )
     return evidence, events
+
+
+def _fetch_spans(
+    db: DatabaseManager,
+    event_id: str,
+    matched_span_keys: Optional[list[str]] = None,
+) -> list[dict[str, Any]]:
+    with db.session() as session:
+        stmt = select(OCRSpanRecord).where(OCRSpanRecord.capture_id == event_id)
+        if matched_span_keys:
+            stmt = stmt.where(OCRSpanRecord.span_key.in_(matched_span_keys))
+        stmt = stmt.order_by(OCRSpanRecord.start.asc())
+        rows = session.execute(stmt).scalars().all()
+    return [
+        {
+            "span_key": row.span_key,
+            "span_id": row.span_key,
+            "start": row.start,
+            "end": row.end,
+            "conf": row.confidence,
+            "bbox": row.bbox,
+            "text": row.text,
+        }
+        for row in rows
+    ]
 
 
 def _snippet_for_query(text: str, query: str, window: int = 200) -> tuple[str, int]:

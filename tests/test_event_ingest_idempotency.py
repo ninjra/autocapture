@@ -7,7 +7,7 @@ from PIL import Image
 
 from autocapture.config import AppConfig, CaptureConfig, DatabaseConfig
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import CaptureRecord, EventRecord
+from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 from autocapture.worker.event_worker import EventIngestWorker
 
 
@@ -53,21 +53,21 @@ def test_event_ingest_idempotent(tmp_path: Path) -> None:
                 screenshot_path=str(image_path),
                 screenshot_hash="hash",
                 ocr_text="hello",
-                ocr_spans=[
-                    {
-                        "span_id": "S1",
-                        "span_key": "S1",
-                        "start": 0,
-                        "end": 5,
-                        "conf": 0.9,
-                        "bbox": [0, 0, 1, 1],
-                        "text": "hello",
-                    }
-                ],
                 embedding_vector=None,
                 embedding_status="pending",
                 embedding_model=config.embeddings.model,
                 tags={},
+            )
+        )
+        session.add(
+            OCRSpanRecord(
+                capture_id=capture.id,
+                span_key="S1",
+                start=0,
+                end=5,
+                text="hello",
+                confidence=0.9,
+                bbox=[0, 0, 1, 1],
             )
         )
 

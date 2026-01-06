@@ -4,10 +4,11 @@ import datetime as dt
 
 import numpy as np
 from PIL import Image
+from sqlalchemy import select
 
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import CaptureRecord, EventRecord
+from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 from autocapture.worker.event_worker import EventIngestWorker
 
 
@@ -51,7 +52,14 @@ def test_event_ingest_worker_creates_event(tmp_path) -> None:
     assert capture.ocr_status == "done"
     assert event is not None
     assert event.ocr_text
-    assert event.ocr_spans
-    span = event.ocr_spans[0]
-    assert span["span_id"]
-    assert span["start"] <= span["end"]
+    spans = (
+        session.execute(
+            select(OCRSpanRecord).where(OCRSpanRecord.capture_id == capture_id)
+        )
+        .scalars()
+        .all()
+    )
+    assert spans
+    span = spans[0]
+    assert span.span_key
+    assert span.start <= span.end

@@ -23,7 +23,6 @@ def test_lexical_index_sanitizes_invalid_queries() -> None:
         screenshot_path=None,
         screenshot_hash="hash",
         ocr_text='email "test@example.com" path C:\\Users\\Test',
-        ocr_spans=[],
         embedding_vector=None,
         embedding_status="pending",
         embedding_model=None,

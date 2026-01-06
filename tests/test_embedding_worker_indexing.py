@@ -65,7 +65,6 @@ def test_embedding_worker_retries_indexing(tmp_path) -> None:
                 screenshot_path=None,
                 screenshot_hash="hash",
                 ocr_text="hello",
-                ocr_spans=[],
                 embedding_vector=None,
                 embedding_status="done",
                 embedding_model="fake-model",
@@ -82,11 +81,9 @@ def test_embedding_worker_retries_indexing(tmp_path) -> None:
             bbox={},
         )
         session.add(span)
-        session.flush()
         session.add(
             EmbeddingRecord(
                 capture_id="cap-1",
-                span_id=span.id,
                 vector=None,
                 model="fake-model",
                 status="pending",
@@ -149,7 +146,6 @@ def test_embedding_worker_reclaims_stale_processing(tmp_path) -> None:
                 screenshot_path=None,
                 screenshot_hash="hash",
                 ocr_text="hello",
-                ocr_spans=[],
                 embedding_vector=None,
                 embedding_status="done",
                 embedding_model="fake-model",
@@ -166,11 +162,9 @@ def test_embedding_worker_reclaims_stale_processing(tmp_path) -> None:
             bbox={},
         )
         session.add(span)
-        session.flush()
         session.add(
             EmbeddingRecord(
                 capture_id="cap-2",
-                span_id=span.id,
                 vector=None,
                 model="fake-model",
                 status="processing",

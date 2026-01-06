@@ -23,7 +23,6 @@ def test_lexical_bulk_upsert(tmp_path: Path) -> None:
         screenshot_path=None,
         screenshot_hash="hash",
         ocr_text="hello world",
-        ocr_spans=[],
         embedding_vector=None,
         embedding_status="pending",
         embedding_model=None,
