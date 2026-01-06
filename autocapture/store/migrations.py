@@ -46,8 +46,8 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
 
     for idx in range(current_version, target_version):
         migration_number = idx + 1
-        _LOG.info("Applying migration %s", migration_number)
+        _LOG.info("Applying migration {}", migration_number)
         migrations[idx](conn)
         _set_schema_version(conn, migration_number)
 
-    _LOG.info("SQLite schema at version %s", target_version)
+    _LOG.info("SQLite schema at version {}", target_version)

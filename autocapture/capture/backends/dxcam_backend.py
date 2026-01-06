@@ -25,10 +25,10 @@ class DxCamBackend:
             try:
                 camera = dxcam.create(output_idx=idx)
             except Exception as exc:  # pragma: no cover - depends on dxcam
-                self._log.warning("Failed to create dxcam output %s: %s", idx, exc)
+                self._log.warning("Failed to create dxcam output {}: {}", idx, exc)
                 continue
             if camera is None:
-                self._log.warning("DxCam returned None for output %s", idx)
+                self._log.warning("DxCam returned None for output {}", idx)
                 continue
             self._cameras[monitor.id] = camera
 
@@ -49,8 +49,10 @@ class DxCamBackend:
                 frame = camera.grab()
                 if frame is None:
                     raise RuntimeError("dxcam returned empty frame")
-                frames[monitor_id] = frame
+                if frame.shape[-1] == 4:
+                    frame = frame[:, :, :3]
+                frames[monitor_id] = frame[:, :, ::-1]
             except Exception as exc:  # pragma: no cover - depends on dxcam
-                self._log.warning("Disabling dxcam output %s: %s", monitor_id, exc)
+                self._log.warning("Disabling dxcam output {}: {}", monitor_id, exc)
                 self._disabled.add(monitor_id)
         return frames

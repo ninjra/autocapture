@@ -47,6 +47,7 @@ pyproject.toml        # Project dependencies and tooling configuration
 
 - `Ctrl+Shift+Space` opens the search popup.
 - Open the dashboard link from the tray menu.
+- Pause/resume capture from the tray menu (hotkey is reserved for search).
 
 ## Canonical pipeline
 

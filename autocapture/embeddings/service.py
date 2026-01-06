@@ -28,7 +28,7 @@ class EmbeddingService:
 
             self._backend = TextEmbedding(model_name=config.model)
             self._dim = self._backend.embedding_size
-            self._log.info("Embedding backend: fastembed (%s)", config.model)
+            self._log.info("Embedding backend: fastembed ({})", config.model)
             return
 
         if importlib.util.find_spec("sentence_transformers") is not None:
@@ -36,7 +36,7 @@ class EmbeddingService:
 
             self._backend = SentenceTransformer(config.model)
             self._dim = self._backend.get_sentence_embedding_dimension()
-            self._log.info("Embedding backend: sentence-transformers (%s)", config.model)
+            self._log.info("Embedding backend: sentence-transformers ({})", config.model)
             return
 
         raise RuntimeError("No embedding backend available")

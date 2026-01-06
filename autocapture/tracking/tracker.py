@@ -87,9 +87,9 @@ class ForegroundPollSource:
                 try:
                     self._on_event(event)
                 except Exception as exc:  # pragma: no cover - defensive
-                    self._log.debug("Foreground event callback failed: %s", exc)
+                    self._log.debug("Foreground event callback failed: {}", exc)
                 self._log.debug(
-                    "Foreground change: %s - %s",
+                    "Foreground change: {} - {}",
                     ctx.process_name,
                     _truncate(ctx.window_title),
                 )
@@ -141,7 +141,7 @@ class ClipboardPollSource:
                 try:
                     self._on_event(event)
                 except Exception as exc:  # pragma: no cover - defensive
-                    self._log.debug("Clipboard event callback failed: %s", exc)
+                    self._log.debug("Clipboard event callback failed: {}", exc)
             time.sleep(self._interval)
 
 
@@ -397,7 +397,7 @@ class HostVectorTracker:
             return
         db_path = Path(self._db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._log.info("Starting host vector tracker (db=%s)", db_path)
+        self._log.info("Starting host vector tracker (db={})", db_path)
         self._stop.clear()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -426,7 +426,7 @@ class HostVectorTracker:
         if self._thread:
             self._thread.join(timeout=3.0)
         self._log.info(
-            "Host vector tracker stopped (rows=%d, dropped=%d)",
+            "Host vector tracker stopped (rows={}, dropped={})",
             self._rows_written,
             self._dropped,
         )
@@ -441,7 +441,7 @@ class HostVectorTracker:
             now = time.monotonic()
             if now - self._last_drop_log > 5:
                 self._last_drop_log = now
-                self._log.warning("Dropping input events (total=%d)", self._dropped)
+                self._log.warning("Dropping input events (total={})", self._dropped)
 
     def _enqueue_event(self, event: EventType) -> None:
         if not self._config.enabled:

@@ -118,10 +118,13 @@ class WorkerConfig(BaseModel):
         description="Local directory for worker databases, indexes, and media.",
     )
     lease_ms: int = Field(60_000, ge=1000)
+    ocr_lease_ms: int = Field(60_000, ge=1000)
+    embedding_lease_ms: int = Field(60_000, ge=1000)
     poll_interval_s: float = Field(1.0, ge=0.1)
     ocr_backlog_soft_limit: int = Field(
         5000, ge=100, description="Soft limit for OCR backlog throttling."
     )
+    ocr_max_attempts: int = Field(5, ge=1)
     ocr_workers: int = Field(
         max(1, os.cpu_count() // 2 if os.cpu_count() else 1),
         ge=1,
@@ -132,6 +135,7 @@ class WorkerConfig(BaseModel):
         ge=1,
         description="Number of embedding/indexing workers.",
     )
+    embedding_max_attempts: int = Field(5, ge=1)
 
 
 class RetentionPolicyConfig(BaseModel):

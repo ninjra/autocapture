@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
+import re
+
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from ..logging_utils import get_logger
 from ..storage.database import DatabaseManager
@@ -76,15 +79,29 @@ class LexicalIndex:
         if not query.strip():
             return []
         if engine.dialect.name == "sqlite":
+            rows = []
             with engine.begin() as conn:
-                rows = conn.execute(
-                    text(
-                        "SELECT event_id, bm25(event_fts) AS rank "
-                        "FROM event_fts WHERE event_fts MATCH :query "
-                        "ORDER BY rank LIMIT :limit"
-                    ),
-                    {"query": query, "limit": limit},
-                ).fetchall()
+                try:
+                    rows = conn.execute(
+                        text(
+                            "SELECT event_id, bm25(event_fts) AS rank "
+                            "FROM event_fts WHERE event_fts MATCH :query "
+                            "ORDER BY rank LIMIT :limit"
+                        ),
+                        {"query": query, "limit": limit},
+                    ).fetchall()
+                except OperationalError:
+                    sanitized = _sanitize_fts_query(query)
+                    if not sanitized:
+                        return []
+                    rows = conn.execute(
+                        text(
+                            "SELECT event_id, bm25(event_fts) AS rank "
+                            "FROM event_fts WHERE event_fts MATCH :query "
+                            "ORDER BY rank LIMIT :limit"
+                        ),
+                        {"query": sanitized, "limit": limit},
+                    ).fetchall()
             return [
                 LexicalHit(event_id=row[0], score=1 / (1 + abs(row[1])))
                 for row in rows
@@ -110,8 +127,16 @@ class LexicalIndex:
                 ).fetchall()
             return [LexicalHit(event_id=row[0], score=float(row[1] or 0.0)) for row in rows]
 
-        self._log.warning("Unsupported dialect for lexical search: %s", engine.dialect.name)
+        self._log.warning("Unsupported dialect for lexical search: {}", engine.dialect.name)
         return []
+
+
+def _sanitize_fts_query(query: str) -> str:
+    tokens = re.findall(r"[\w\.-]+", query)
+    if not tokens:
+        return ""
+    quoted = [f"\"{token.replace('\"', '\"\"')}\"" for token in tokens]
+    return " AND ".join(quoted)
 
     def bulk_upsert(self, events: Iterable[EventRecord]) -> None:
         for event in events:

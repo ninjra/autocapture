@@ -149,7 +149,7 @@ def create_app(
             try:
                 oidc_verifier.verify(token)
             except Exception as exc:
-                log.warning("OIDC verification failed: %s", exc)
+                log.warning("OIDC verification failed: {}", exc)
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
             return await call_next(request)
 
@@ -293,7 +293,7 @@ def create_app(
                     {item.evidence_id for item in evidence},
                     set(),
                 )
-            log.info("LLM routed to %s", decision.llm_provider)
+            log.info("LLM routed to {}", decision.llm_provider)
         latency = (dt.datetime.now(dt.timezone.utc) - start).total_seconds() * 1000
         return AnswerResponse(
             answer=answer_text,
@@ -416,7 +416,8 @@ def _build_evidence(
         title = event.window_title
         domain = event.domain
         if sanitized:
-            snippet = entities.pseudonymize_text(snippet)
+            snippet, mapping = entities.pseudonymize_text_with_mapping(snippet)
+            spans = _remap_spans(spans, mapping, len(snippet))
             app_name = entities.pseudonymize_text(app_name)
             title = entities.pseudonymize_text(title)
             if domain:
@@ -484,6 +485,49 @@ def _spans_for_event(
     if not evidence_spans:
         evidence_spans.append(EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5))
     return evidence_spans
+
+
+def _remap_spans(
+    spans: list[EvidenceSpan],
+    replacements: list[tuple[int, int, int, int]],
+    text_len: int,
+) -> list[EvidenceSpan]:
+    if not replacements:
+        return spans
+    replacements = sorted(replacements, key=lambda item: item[0])
+
+    def delta_before(idx: int) -> int:
+        delta = 0
+        for start, end, new_start, new_end in replacements:
+            if idx <= start:
+                break
+            delta += (new_end - new_start) - (end - start)
+        return delta
+
+    remapped: list[EvidenceSpan] = []
+    for span in spans:
+        overlaps = [
+            rep
+            for rep in replacements
+            if span.start < rep[1] and span.end > rep[0]
+        ]
+        if overlaps:
+            new_start = min(rep[2] for rep in overlaps)
+            new_end = max(rep[3] for rep in overlaps)
+        else:
+            new_start = span.start + delta_before(span.start)
+            new_end = span.end + delta_before(span.end)
+        new_start = max(0, min(new_start, text_len))
+        new_end = max(new_start + 1, min(new_end, text_len))
+        remapped.append(
+            EvidenceSpan(
+                span_id=span.span_id,
+                start=new_start,
+                end=new_end,
+                conf=span.conf,
+            )
+        )
+    return remapped
 
 
 def _extract_citations(answer_text: str) -> list[str]:

@@ -10,6 +10,47 @@ from typing import Optional
 from loguru import logger
 
 
+class LoggerAdapter:
+    def __init__(self, base_logger):
+        self._logger = base_logger
+
+    def bind(self, **kwargs):
+        return LoggerAdapter(self._logger.bind(**kwargs))
+
+    def debug(self, message, *args, **kwargs):
+        return self._log("DEBUG", message, *args, **kwargs)
+
+    def info(self, message, *args, **kwargs):
+        return self._log("INFO", message, *args, **kwargs)
+
+    def warning(self, message, *args, **kwargs):
+        return self._log("WARNING", message, *args, **kwargs)
+
+    def error(self, message, *args, **kwargs):
+        return self._log("ERROR", message, *args, **kwargs)
+
+    def critical(self, message, *args, **kwargs):
+        return self._log("CRITICAL", message, *args, **kwargs)
+
+    def exception(self, message, *args, **kwargs):
+        message, args = _prepare_message(message, args)
+        return self._logger.exception(message, *args, **kwargs)
+
+    def _log(self, level: str, message, *args, **kwargs):
+        message, args = _prepare_message(message, args)
+        return self._logger.log(level, message, *args, **kwargs)
+
+
+def _prepare_message(message, args):
+    if args and isinstance(message, str) and "%" in message:
+        try:
+            message = message % args
+            return message, ()
+        except Exception:
+            return message, args
+    return message, args
+
+
 def _default_log_dir() -> Path:
     base = os.environ.get("LOCALAPPDATA")
     if base:
@@ -61,5 +102,5 @@ def get_logger(name: Optional[str] = None):
     """Return a child logger with contextualized name."""
 
     if name:
-        return logger.bind(component=name)
-    return logger
+        return LoggerAdapter(logger.bind(component=name))
+    return LoggerAdapter(logger)

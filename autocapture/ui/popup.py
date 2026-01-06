@@ -181,6 +181,13 @@ class SearchPopup(QtWidgets.QWidget):
         try:
             payload = future.result()
         except Exception as exc:
-            self._log.warning("Popup request failed: %s", exc)
-            payload = {}
+            self._log.warning("Popup request failed: {}", exc)
+            payload = self._default_payload(signal)
         signal.emit(token, payload)
+
+    def _default_payload(self, signal):
+        if signal == self.suggestions_ready:
+            return []
+        if signal == self.answer_ready:
+            return {}
+        return {}

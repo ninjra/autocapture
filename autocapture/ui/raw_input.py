@@ -16,7 +16,7 @@ class GlobalHotkey:
         self._log = get_logger("hotkey")
 
     def start(self) -> None:
-        self._log.info("Registering hotkey %s", self._hotkey)
+        self._log.info("Registering hotkey {}", self._hotkey)
         self._listener.start()
 
     def stop(self) -> None:

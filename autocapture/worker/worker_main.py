@@ -317,7 +317,7 @@ class EmbeddingIndex:
         if current + extra <= max_elements:
             return
         new_max = max(max_elements * 2, current + extra)
-        self._log.info("Resizing HNSW index to %s", new_max)
+        self._log.info("Resizing HNSW index to {}", new_max)
         self._index.resize_index(new_max)
 
     def add_embedding(self, label: int, text: str) -> None:
@@ -352,7 +352,7 @@ class RetentionManager:
                 path.unlink(missing_ok=True)
                 removed += 1
         if removed:
-            self._log.info("Removed %s old video files", removed)
+            self._log.info("Removed {} old video files", removed)
 
     def _delete_old_roi_images(self, db: WorkerDatabase) -> None:
         cutoff = datetime.now(timezone.utc) - timedelta(days=self._policy.roi_days)
@@ -363,7 +363,7 @@ class RetentionManager:
                 roi_path.unlink(missing_ok=True)
                 removed += 1
         if removed:
-            self._log.info("Removed %s old ROI images", removed)
+            self._log.info("Removed {} old ROI images", removed)
 
     def _enforce_max_media(self) -> None:
         max_bytes = int(self._policy.max_media_gb * (1024**3))
@@ -392,7 +392,7 @@ class RetentionManager:
             total -= size
             removed += 1
         if removed:
-            self._log.warning("Removed %s videos to respect media cap", removed)
+            self._log.warning("Removed {} videos to respect media cap", removed)
 
 
 class Worker:

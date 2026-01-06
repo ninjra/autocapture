@@ -12,7 +12,6 @@ from ..config import AppConfig
 from ..logging_utils import get_logger
 from ..runtime import AppRuntime
 from .popup import SearchPopup
-from .raw_input import on_hotkey
 
 
 class TrayApp(QtCore.QObject):
@@ -23,7 +22,6 @@ class TrayApp(QtCore.QObject):
         self._runtime = runtime
         self._log = get_logger("tray")
         self._paused = False
-        self._hotkey = None
 
         self._tray = QtWidgets.QSystemTrayIcon(self._default_icon())
         self._menu = QtWidgets.QMenu()
@@ -54,12 +52,11 @@ class TrayApp(QtCore.QObject):
 
     def start(self) -> None:
         self._tray.show()
-        self._hotkey = on_hotkey("<ctrl>+<shift>+<space>", self.toggle_popup)
+        self._runtime.set_hotkey_callback(self.toggle_popup)
         self._log.info("Tray started")
 
     def stop(self) -> None:
-        if self._hotkey:
-            self._hotkey.stop()
+        self._runtime.set_hotkey_callback(None)
 
     def toggle_popup(self) -> None:
         if self._popup.isVisible():

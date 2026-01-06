@@ -93,7 +93,7 @@ def freeze_files(repo_root: Path, rel_paths: list[str], reason: str) -> None:
             "frozen_at_utc": _utc_timestamp(),
             "reason": reason,
         }
-        logger.info("Froze %s", rel_path)
+        logger.info("Froze {}", rel_path)
     save_manifest(repo_root, manifest)
 
 
@@ -109,7 +109,7 @@ def unfreeze_files(repo_root: Path, rel_paths: list[str], reason: str) -> None:
             missing.append(rel_path)
             continue
         frozen.pop(rel_path, None)
-        logger.info("Unfroze %s", rel_path)
+        logger.info("Unfroze {}", rel_path)
     if missing:
         raise ValueError(
             "Cannot unfreeze paths not present in manifest: " + ", ".join(missing)
@@ -130,11 +130,11 @@ def verify_frozen(repo_root: Path) -> list[str]:
             violations.append(message)
             # NOTE: stdlib logging does not support structlog-style brace formatting
             # nor arbitrary keyword args (e.g., message=...). Use %s formatting.
-            logger.error("Frozen surface violation: %s", message)
+            logger.error("Frozen surface violation: {}", message)
             continue
         actual = sha256_file(path)
         if actual != expected:
             message = f"{rel_path}: expected {expected}, actual {actual}"
             violations.append(message)
-            logger.error("Frozen surface violation: %s", message)
+            logger.error("Frozen surface violation: {}", message)
     return violations

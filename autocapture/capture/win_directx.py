@@ -50,7 +50,7 @@ class DirectXSession:  # pragma: no cover - requires Windows runtime to test
     def initialize(self) -> None:
         if sys.platform != "win32":
             raise RuntimeError(
-                "DirectXSession is only available on Windows. Current platform: %s"
+                "DirectXSession is only available on Windows. Current platform: {}"
                 % sys.platform
             )
 

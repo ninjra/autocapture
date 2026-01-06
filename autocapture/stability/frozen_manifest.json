@@ -3,12 +3,12 @@
     "autocapture/tracking/store.py": {
       "frozen_at_utc": "2026-01-03T00:18:14Z",
       "reason": "Host vector tracking core stabilized + tested; prevent refactor churn.",
-      "sha256": "06158654f80026d12b58934462aa0af8e067dddf30b527d02e4059f70403498b"
+      "sha256": "76e8a3cebb82cbddcc584268241b52f1d1d2acc44659f41a7eb73d3352a83aa6"
     },
     "autocapture/tracking/tracker.py": {
       "frozen_at_utc": "2026-01-03T00:18:14Z",
       "reason": "Host vector tracking core stabilized + tested; prevent refactor churn.",
-      "sha256": "5ac08a452f5d1ebad65d814c15cda0fe50f92d01cd5df4404b899f5c47a80fb4"
+      "sha256": "60504ecfb1537bcffd3f385220157debbbf9ffd1324117b96b1a61a825800fe6"
     },
     "autocapture/tracking/types.py": {
       "frozen_at_utc": "2026-01-03T00:18:14Z",

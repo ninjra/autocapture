@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -136,6 +136,14 @@ class CaptureRecord(Base):
     monitor_id: Mapped[str] = mapped_column(String(64))
     is_fullscreen: Mapped[bool] = mapped_column(default=False)
     ocr_status: Mapped[str] = mapped_column(String(16), default="pending")
+    ocr_started_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ocr_heartbeat_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    ocr_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    ocr_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     spans: Mapped[list["OCRSpanRecord"]] = relationship(
         "OCRSpanRecord", back_populates="capture"
@@ -178,6 +186,13 @@ class EmbeddingRecord(Base):
     model: Mapped[str] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(16), default="pending")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    processing_started_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    heartbeat_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
@@ -228,6 +243,7 @@ class QueryHistoryRecord(Base):
 
 class HNSWMappingRecord(Base):
     __tablename__ = "hnsw_mapping"
+    __table_args__ = (UniqueConstraint("event_id", "span_key", name="uq_hnsw_event_span"),)
 
     label: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     event_id: Mapped[str] = mapped_column(String(36), index=True)

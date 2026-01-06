@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -13,6 +12,8 @@ from PIL import Image
 
 from ..config import CaptureConfig, EncryptionConfig
 from ..encryption import EncryptionManager
+from ..image_utils import ensure_rgb
+from ..fs_utils import atomic_publish, safe_unlink
 from ..logging_utils import get_logger
 
 
@@ -27,7 +28,7 @@ class MediaStore:
 
     def write_roi(self, image: np.ndarray, timestamp, observation_id: str) -> Optional[Path]:
         if not self._has_staging_space():
-            self._log.warning("Staging quota exceeded; dropping ROI %s", observation_id)
+            self._log.warning("Staging quota exceeded; dropping ROI {}", observation_id)
             return None
         date_prefix = timestamp.strftime("%Y/%m/%d")
         final_dir = self._data_dir / "media" / "roi" / date_prefix
@@ -37,21 +38,23 @@ class MediaStore:
             final_path = final_path.with_suffix(final_path.suffix + ".acenc")
 
         staging_path = self._staging_dir / f"roi_{observation_id}.tmp"
-        rgb = image[:, :, ::-1]
-        pil = Image.fromarray(np.ascontiguousarray(rgb))
+        image = ensure_rgb(image)
+        pil = Image.fromarray(np.ascontiguousarray(image))
         staging_path.parent.mkdir(parents=True, exist_ok=True)
-        pil.save(staging_path, format="WEBP", quality=80, method=6)
-        self._fsync_file(staging_path)
-
+        pil.save(staging_path, format="WEBP", lossless=True, quality=100, method=6)
         final_dir.mkdir(parents=True, exist_ok=True)
         if self._encryption.enabled:
-            encrypted_tmp = self._staging_dir / f"roi_{observation_id}.enc"
-            self._encryption.encrypt_file(staging_path, encrypted_tmp)
-            self._fsync_file(encrypted_tmp)
-            encrypted_tmp.replace(final_path)
-            staging_path.unlink(missing_ok=True)
+            atomic_publish(
+                staging_path,
+                final_path,
+                writer=self._encryption.encrypt_file,
+            )
         else:
-            staging_path.replace(final_path)
+            atomic_publish(
+                staging_path,
+                final_path,
+                writer=_copy_file,
+            )
         return final_path
 
     def reserve_video_paths(self, timestamp, segment_id: str) -> tuple[Path, Path]:
@@ -71,13 +74,17 @@ class MediaStore:
             return final_path
         final_path.parent.mkdir(parents=True, exist_ok=True)
         if self._encryption.enabled:
-            encrypted_tmp = self._staging_dir / f"segment_{staging_path.stem}.enc"
-            self._encryption.encrypt_file(staging_path, encrypted_tmp)
-            self._fsync_file(encrypted_tmp)
-            encrypted_tmp.replace(final_path)
-            staging_path.unlink(missing_ok=True)
+            atomic_publish(
+                staging_path,
+                final_path,
+                writer=self._encryption.encrypt_file,
+            )
         else:
-            staging_path.replace(final_path)
+            atomic_publish(
+                staging_path,
+                final_path,
+                writer=_copy_file,
+            )
         return final_path
 
     def read_image(self, path: Path) -> np.ndarray:
@@ -95,7 +102,7 @@ class MediaStore:
                 image = image.convert("RGB")
                 return np.array(image)
         finally:
-            tmp_path.unlink(missing_ok=True)
+            safe_unlink(tmp_path)
 
     def _has_staging_space(self) -> bool:
         try:
@@ -104,7 +111,7 @@ class MediaStore:
             return False
         return usage.free > 100 * 1024 * 1024
 
-    @staticmethod
-    def _fsync_file(path: Path) -> None:
-        with path.open("rb") as handle:
-            os.fsync(handle.fileno())
+def _copy_file(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with source.open("rb") as src, destination.open("wb") as dst:
+        shutil.copyfileobj(src, dst, length=1024 * 1024)

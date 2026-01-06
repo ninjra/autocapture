@@ -42,7 +42,7 @@ class PromptOpsRunner:
                     )
                 )
             except httpx.HTTPError as exc:
-                self._log.warning("PromptOps fetch failed for %s: %s", url, exc)
+                self._log.warning("PromptOps fetch failed for {}: {}", url, exc)
                 fetched.append(
                     SourceItem(
                         url=url,
