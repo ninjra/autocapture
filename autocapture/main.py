@@ -51,23 +51,23 @@ def _doctor(config: AppConfig) -> int:
         try:
             Path(p).mkdir(parents=True, exist_ok=True)
         except Exception as exc:
-            logger.error("Cannot create {}={!r}: {}", name, p, exc)
+            logger.error("Cannot create %s=%r: %s", name, p, exc)
             ok = False
 
     # DB
     try:
         _ = DatabaseManager(config.database)
     except Exception as exc:
-        logger.error("Database init failed: {}", exc)
+        logger.error("Database init failed: %s", exc)
         ok = False
 
     if config.tracking.enabled:
         tracking_dir = _resolve_tracking_dir(config)
         try:
             tracking_dir.mkdir(parents=True, exist_ok=True)
-            logger.info("Tracking DB directory: {}", tracking_dir)
+            logger.info("Tracking DB directory: %s", tracking_dir)
         except Exception as exc:
-            logger.error("Cannot create tracking DB directory {}: {}", tracking_dir, exc)
+            logger.error("Cannot create tracking DB directory %s: %s", tracking_dir, exc)
             ok = False
 
     # Encryption key (if enabled)
@@ -77,16 +77,16 @@ def _doctor(config: AppConfig) -> int:
 
             _ = EncryptionManager(config.encryption)
         except Exception as exc:
-        logger.error("Encryption init failed: {}", exc)
-            ok = False
+            logger.exception("Encryption init failed; aborting startup")
+            raise RuntimeError("Encryption subsystem failed to initialize") from exc
 
     try:
         import rapidocr_onnxruntime  # noqa: F401
     except Exception as exc:
-        logger.error("OCR dependency missing (rapidocr_onnxruntime): {}", exc)
+        logger.error("OCR dependency missing (rapidocr_onnxruntime): %s", exc)
         ok = False
 
-    logger.info("Doctor result: {}", "OK" if ok else "FAILED")
+    logger.info("Doctor result: %s", "OK" if ok else "FAILED")
     return 0 if ok else 2
 
 
@@ -112,9 +112,9 @@ def main(argv: list[str] | None = None) -> None:
 
     if cmd == "print-config":
         # Avoid importing rich; keep it simple and predictable.
-        logger.info("Resolved config loaded from {}", config_path)
+        logger.info("Resolved config loaded from %s", config_path)
         logger.info(
-            "{}",
+            "%s",
             config.model_dump() if hasattr(config, "model_dump") else config.dict(),
         )
         return
