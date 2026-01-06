@@ -133,6 +133,8 @@ class RawInputListener:
         track_mouse_movement: bool = True,
         mouse_move_sample_ms: int = 50,
         hotkey: HotkeyConfig | None = None,
+        hotkey_registrar: Optional[Callable[[int, int, int], bool]] = None,
+        hotkey_unregistrar: Optional[Callable[[int, int], bool]] = None,
     ) -> None:
         self._idle_grace_ms = idle_grace_ms
         self._on_activity = on_activity
@@ -142,6 +144,8 @@ class RawInputListener:
         self._mouse_move_sample_ms = mouse_move_sample_ms
         self._hotkey = hotkey or HotkeyConfig()
         self._log = get_logger("raw_input")
+        self._hotkey_registrar = hotkey_registrar
+        self._hotkey_unregistrar = hotkey_unregistrar
         self._thread: Optional[threading.Thread] = None
         self._running = threading.Event()
         self._hwnd: Optional[int] = None
@@ -166,11 +170,23 @@ class RawInputListener:
             return
         self._running.clear()
         if self._hwnd:
-            ctypes.windll.user32.UnregisterHotKey(self._hwnd, self._hotkey_id)
+            if self._on_hotkey:
+                self._unregister_hotkey(self._hwnd)
             ctypes.windll.user32.PostMessageW(self._hwnd, WM_CLOSE, 0, 0)
         if self._thread:
             self._thread.join(timeout=2.0)
         self._log.info("Raw input listener stopped")
+
+    def set_hotkey_callback(self, callback: Optional[Callable[[], None]]) -> None:
+        previous = self._on_hotkey
+        self._on_hotkey = callback
+        if not self._hwnd:
+            return
+        if previous is None and callback is not None:
+            if not self._register_hotkey(self._hwnd):
+                self._log.warning("Failed to register hotkey")
+        elif previous is not None and callback is None:
+            self._unregister_hotkey(self._hwnd)
 
     def _run_loop(self) -> None:  # pragma: no cover - Windows message loop
         hwnd = self._create_message_window()
@@ -181,7 +197,7 @@ class RawInputListener:
         if not self._register_raw_input_devices(hwnd):
             self._log.error("Failed to register Raw Input devices")
             return
-        if not self._register_hotkey(hwnd):
+        if self._on_hotkey and not self._register_hotkey(hwnd):
             self._log.warning("Failed to register hotkey")
 
         msg = MSG()
@@ -222,7 +238,7 @@ class RawInputListener:
                     try:
                         self._on_hotkey()
                     except Exception as exc:  # pragma: no cover
-                        self._log.exception("Hotkey callback failed: %s", exc)
+                        self._log.exception("Hotkey callback failed: {}", exc)
                 return 0
             if msg == WM_CLOSE:
                 user32.DestroyWindow(hwnd)
@@ -241,7 +257,7 @@ class RawInputListener:
         if not user32.RegisterClassW(ctypes.byref(wndclass)):
             error = ctypes.GetLastError()
             if error != 1410:  # class already exists
-                self._log.error("RegisterClass failed: %s", error)
+                self._log.error("RegisterClass failed: {}", error)
                 return 0
 
         hwnd = user32.CreateWindowExW(
@@ -279,11 +295,22 @@ class RawInputListener:
         )
 
     def _register_hotkey(self, hwnd: int) -> bool:
+        if self._on_hotkey is None:
+            return True
+        if self._hotkey_registrar:
+            return bool(
+                self._hotkey_registrar(hwnd, self._hotkey.modifiers, self._hotkey.vk)
+            )
         return bool(
             ctypes.windll.user32.RegisterHotKey(
                 hwnd, self._hotkey_id, self._hotkey.modifiers, self._hotkey.vk
             )
         )
+
+    def _unregister_hotkey(self, hwnd: int) -> bool:
+        if self._hotkey_unregistrar:
+            return bool(self._hotkey_unregistrar(hwnd, self._hotkey_id))
+        return bool(ctypes.windll.user32.UnregisterHotKey(hwnd, self._hotkey_id))
 
     def _handle_wm_input(self, lparam: int) -> None:
         self._mark_activity()
@@ -353,7 +380,7 @@ class RawInputListener:
                     event = InputVectorEvent(ts_ms=now_ms, device="mouse", mouse=payload)
                     self._on_input_event(event)
         except Exception as exc:  # pragma: no cover - Windows-only parsing
-            self._log.debug("Raw input parse failed: %s", exc)
+            self._log.debug("Raw input parse failed: {}", exc)
 
     def _mark_activity(self) -> None:
         now = self._now_ms()
@@ -363,7 +390,7 @@ class RawInputListener:
             try:
                 self._on_activity()
             except Exception as exc:  # pragma: no cover
-                self._log.exception("Activity callback failed: %s", exc)
+                self._log.exception("Activity callback failed: {}", exc)
 
     @staticmethod
     def _now_ms() -> int:

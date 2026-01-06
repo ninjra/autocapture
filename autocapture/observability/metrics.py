@@ -59,10 +59,10 @@ class MetricsServer:
         try:
             start_http_server(self._config.prometheus_port)
             self._log.info(
-                "Prometheus metrics server running on %s", self._config.prometheus_port
+                "Prometheus metrics server running on {}", self._config.prometheus_port
             )
         except Exception as exc:  # pragma: no cover - network binding
-            self._log.warning("Failed to start metrics server: %s", exc)
+            self._log.warning("Failed to start metrics server: {}", exc)
 
     def _run_loop(self) -> None:
         process = psutil.Process()
@@ -74,7 +74,7 @@ class MetricsServer:
                 if self._config.enable_gpu_stats:
                     _update_gpu_stats()
             except Exception as exc:  # pragma: no cover - defensive
-                self._log.debug("Metrics update failed: %s", exc)
+                self._log.debug("Metrics update failed: {}", exc)
             time.sleep(5.0)
 
 

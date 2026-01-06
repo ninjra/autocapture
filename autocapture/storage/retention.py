@@ -9,6 +9,7 @@ from sqlalchemy import select
 import datetime as dt
 
 from ..config import RetentionPolicyConfig, StorageQuotaConfig
+from ..fs_utils import safe_unlink
 from ..logging_utils import get_logger
 from ..observability.metrics import retention_files_deleted_total
 from .database import DatabaseManager
@@ -54,11 +55,11 @@ class RetentionManager:
                 if event.screenshot_path:
                     path = Path(event.screenshot_path)
                     if path.exists():
-                        path.unlink(missing_ok=True)
+                        safe_unlink(path)
                 event.screenshot_path = None
                 removed += 1
         if removed:
-            self._log.info("Pruned %s screenshots beyond TTL", removed)
+            self._log.info("Pruned {} screenshots beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
         return removed
 
@@ -78,11 +79,14 @@ class RetentionManager:
                 if capture.image_path:
                     path = Path(capture.image_path)
                     if path.exists():
-                        path.unlink(missing_ok=True)
+                        safe_unlink(path)
+                    session.query(EventRecord).filter(
+                        EventRecord.screenshot_path == capture.image_path
+                    ).update({EventRecord.screenshot_path: None})
                 capture.image_path = None
                 removed += 1
         if removed:
-            self._log.info("Pruned %s ROI images beyond TTL", removed)
+            self._log.info("Pruned {} ROI images beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
         return removed
 
@@ -104,11 +108,11 @@ class RetentionManager:
                 if segment.video_path:
                     path = Path(segment.video_path)
                     if path.exists():
-                        path.unlink(missing_ok=True)
+                        safe_unlink(path)
                 segment.video_path = None
                 removed += 1
         if removed:
-            self._log.info("Pruned %s videos beyond TTL", removed)
+            self._log.info("Pruned {} videos beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
         return removed
 
@@ -133,13 +137,16 @@ class RetentionManager:
                 if capture.image_path:
                     path = Path(capture.image_path)
                     if path.exists():
-                        path.unlink(missing_ok=True)
+                        safe_unlink(path)
+                    session.query(EventRecord).filter(
+                        EventRecord.screenshot_path == capture.image_path
+                    ).update({EventRecord.screenshot_path: None})
                 capture.image_path = None
                 removed += 1
                 if self._folder_size_gb(self._media_root) <= cap_gb:
                     break
         if removed:
-            self._log.warning("Pruned %s captures to respect quota", removed)
+            self._log.warning("Pruned {} captures to respect quota", removed)
             retention_files_deleted_total.inc(removed)
         return removed
 

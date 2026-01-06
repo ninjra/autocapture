@@ -21,7 +21,7 @@ def open_db(data_dir: Path | str) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    _LOG.info("Opened SQLite DB at %s", db_path)
+    _LOG.info("Opened SQLite DB at {}", db_path)
     return conn
 
 
@@ -115,5 +115,4 @@ def upsert_segment_fts(
         (segment_id, started_at, ended_at, content),
     )
     conn.commit()
-    _LOG.info("segment_fts updated for segment %s (chars=%s)", segment_id, len(content))
-
+    _LOG.info("segment_fts updated for segment {} (chars={})", segment_id, len(content))

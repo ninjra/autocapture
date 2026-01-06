@@ -66,9 +66,9 @@ class SecretStore:
         self._path.write_bytes(key)
 
 
-def stable_token(prefix: str, value: str, secret: bytes) -> str:
+def stable_token(prefix: str, value: str, secret: bytes, length: int = 20) -> str:
     digest = hmac.new(secret, value.encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"{prefix}{digest[:4].upper()}"
+    return f"{prefix}{digest[:length].upper()}"
 
 
 class EntityResolver:
@@ -97,13 +97,9 @@ class EntityResolver:
                 return EntityToken(record.canonical_token, record.entity_type)
             if len(existing) > 1:
                 token = stable_token(f"{entity_type}_ALIAS_", alias_norm, self._secret)
-                entity = EntityRecord(
-                    entity_type=entity_type,
-                    canonical_name=alias_text,
-                    canonical_token=token,
+                entity = self._insert_entity_with_token(
+                    session, entity_type, alias_text, token
                 )
-                session.add(entity)
-                session.flush()
                 session.add(
                     EntityAliasRecord(
                         entity_id=entity.entity_id,
@@ -113,15 +109,8 @@ class EntityResolver:
                         confidence=0.5,
                     )
                 )
-                return EntityToken(token, entity_type, notes="ambiguous alias")
-            token = stable_token(f"{entity_type}_", alias_norm, self._secret)
-            entity = EntityRecord(
-                entity_type=entity_type,
-                canonical_name=alias_text,
-                canonical_token=token,
-            )
-            session.add(entity)
-            session.flush()
+                return EntityToken(entity.canonical_token, entity_type, notes="ambiguous alias")
+            entity = self._insert_entity(session, entity_type, alias_norm, alias_text)
             session.add(
                 EntityAliasRecord(
                     entity_id=entity.entity_id,
@@ -131,7 +120,7 @@ class EntityResolver:
                     confidence=confidence,
                 )
             )
-            return EntityToken(token, entity_type)
+            return EntityToken(entity.canonical_token, entity_type)
 
     def tokens_for_events(self, events: Iterable[EventRecord]) -> list[EntityToken]:
         tokens: list[EntityToken] = []
@@ -163,3 +152,90 @@ class EntityResolver:
             redacted,
         )
         return redacted
+
+    def pseudonymize_text_with_mapping(self, text: str) -> tuple[str, list[tuple[int, int, int, int]]]:
+        replacements = _collect_replacements(text, self._secret)
+        if not replacements:
+            return text, []
+        parts: list[str] = []
+        mapping: list[tuple[int, int, int, int]] = []
+        cursor = 0
+        new_index = 0
+        for start, end, token in replacements:
+            if start < cursor:
+                continue
+            parts.append(text[cursor:start])
+            new_index += start - cursor
+            parts.append(token)
+            mapping.append((start, end, new_index, new_index + len(token)))
+            new_index += len(token)
+            cursor = end
+        parts.append(text[cursor:])
+        return "".join(parts), mapping
+
+    def _insert_entity(
+        self,
+        session,
+        entity_type: str,
+        alias_norm: str,
+        alias_text: str,
+    ) -> EntityRecord:
+        base_token = stable_token(f"{entity_type}_", alias_norm, self._secret)
+        return self._insert_entity_with_token(session, entity_type, alias_text, base_token)
+
+    def _insert_entity_with_token(
+        self,
+        session,
+        entity_type: str,
+        alias_text: str,
+        base_token: str,
+    ) -> EntityRecord:
+        for attempt in range(5):
+            token = base_token if attempt == 0 else f"{base_token}-{attempt}"
+            existing = session.execute(
+                select(EntityRecord).where(EntityRecord.canonical_token == token)
+            ).scalars().first()
+            if existing and existing.canonical_name != alias_text:
+                continue
+            entity = EntityRecord(
+                entity_type=entity_type,
+                canonical_name=alias_text,
+                canonical_token=token,
+            )
+            session.add(entity)
+            try:
+                session.flush()
+                return entity
+            except Exception:
+                session.rollback()
+                continue
+        token = f"{base_token}-overflow"
+        entity = EntityRecord(
+            entity_type=entity_type,
+            canonical_name=alias_text,
+            canonical_token=token,
+        )
+        session.add(entity)
+        session.flush()
+        return entity
+
+
+def _collect_replacements(
+    text: str, secret: bytes
+) -> list[tuple[int, int, str]]:
+    replacements: list[tuple[int, int, str]] = []
+    occupied: list[tuple[int, int]] = []
+    for pattern, prefix in (
+        (EMAIL_RE, "EMAIL_"),
+        (WINDOWS_PATH_RE, "PATH_"),
+        (DOMAIN_RE, "DOMAIN_"),
+    ):
+        for match in pattern.finditer(text):
+            start, end = match.span()
+            if any(start < occ_end and end > occ_start for occ_start, occ_end in occupied):
+                continue
+            token = stable_token(prefix, match.group(0).casefold(), secret)
+            replacements.append((start, end, token))
+            occupied.append((start, end))
+    replacements.sort(key=lambda item: item[0])
+    return replacements

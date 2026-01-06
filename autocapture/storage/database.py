@@ -50,7 +50,7 @@ class DatabaseManager:
         ):
             init_schema(self._engine)
         self._session_factory = sessionmaker(bind=self._engine, expire_on_commit=False)
-        self._log.info("Database connected at %s", config.url)
+        self._log.info("Database connected at {}", config.url)
 
     @property
     def engine(self):

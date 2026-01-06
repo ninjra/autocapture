@@ -47,7 +47,7 @@ def enqueue(kind: str, payload: dict[str, Any], priority: int = 0) -> int:
     conn.commit()
     job_id = int(cursor.lastrowid)
     _LOG.info(
-        "Enqueued job %s (%s) priority=%s payload_bytes=%s",
+        "Enqueued job {} ({}) priority={} payload_bytes={}",
         job_id,
         kind,
         priority,
@@ -99,7 +99,7 @@ def lease_one(kinds: list[str] | None, lease_ms: int):
         conn.commit()
         duration_ms = (time.perf_counter() - start) * 1000
         _LOG.info(
-            "Leased job %s (%s) in %.1fms",
+            "Leased job {} ({}) in {:.1f}ms",
             row["id"],
             row["kind"],
             duration_ms,
@@ -137,7 +137,7 @@ def mark_done(job_id: int) -> None:
     )
     conn.commit()
     duration_ms = now - updated_at if updated_at else None
-    _LOG.info("Job %s (%s) done duration_ms=%s", job_id, kind, duration_ms)
+    _LOG.info("Job {} ({}) done duration_ms={}", job_id, kind, duration_ms)
 
 
 def mark_retry(job_id: int, error: str, backoff_ms: int) -> None:
@@ -157,7 +157,7 @@ def mark_retry(job_id: int, error: str, backoff_ms: int) -> None:
     conn.commit()
     duration_ms = now - updated_at if updated_at else None
     _LOG.warning(
-        "Job %s (%s) retrying duration_ms=%s backoff_ms=%s error=%s",
+        "Job {} ({}) retrying duration_ms={} backoff_ms={} error={}",
         job_id,
         kind,
         duration_ms,
@@ -182,4 +182,4 @@ def mark_failed(job_id: int, error: str) -> None:
     )
     conn.commit()
     duration_ms = now - updated_at if updated_at else None
-    _LOG.error("Job %s (%s) failed duration_ms=%s error=%s", job_id, kind, duration_ms, error)
+    _LOG.error("Job {} ({}) failed duration_ms={} error={}", job_id, kind, duration_ms, error)

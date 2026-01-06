@@ -13,6 +13,9 @@ if sys.platform != "win32":
     def get_foreground_context() -> ForegroundContext | None:
         return None
 
+    def is_fullscreen_window(hwnd: int, monitor_bounds: tuple[int, int, int, int]) -> bool:
+        return False
+
 else:
     import ctypes
 
@@ -43,5 +46,30 @@ else:
                 hwnd=int(hwnd),
             )
         except Exception as exc:  # pragma: no cover - depends on Windows APIs
-            log.debug("Failed to read foreground window: %s", exc)
+            log.debug("Failed to read foreground window: {}", exc)
             return None
+
+    class RECT(ctypes.Structure):
+        _fields_ = [
+            ("left", ctypes.c_long),
+            ("top", ctypes.c_long),
+            ("right", ctypes.c_long),
+            ("bottom", ctypes.c_long),
+        ]
+
+    def is_fullscreen_window(hwnd: int, monitor_bounds: tuple[int, int, int, int]) -> bool:
+        if not hwnd:
+            return False
+        rect = RECT()
+        if not ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            return False
+        left, top, width, height = monitor_bounds
+        win_width = rect.right - rect.left
+        win_height = rect.bottom - rect.top
+        tolerance = 2
+        return (
+            abs(rect.left - left) <= tolerance
+            and abs(rect.top - top) <= tolerance
+            and abs(win_width - width) <= tolerance
+            and abs(win_height - height) <= tolerance
+        )

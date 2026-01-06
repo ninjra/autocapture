@@ -10,8 +10,10 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from ..config import AppConfig
+from ..fs_utils import file_lock, safe_replace
 from ..logging_utils import get_logger
 from ..storage.database import DatabaseManager
 from ..storage.models import HNSWMappingRecord
@@ -77,6 +79,7 @@ class HNSWIndex:
         self._dim = dim
         self._log = get_logger("index.hnsw")
         self._index_path = Path(config.worker.data_dir) / "embeddings" / "hnsw.index"
+        self._lock_path = self._index_path.with_suffix(".lock")
         self._index_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = None
         self._index = None
@@ -91,7 +94,9 @@ class HNSWIndex:
         if self._index_path.exists():
             index.load_index(str(self._index_path))
         else:
-            index.init_index(max_elements=200000, ef_construction=200, M=16)
+            index.init_index(
+                max_elements=200000, ef_construction=200, M=16, allow_replace_deleted=True
+            )
         index.set_ef(50)
         self._index = index
 
@@ -109,23 +114,63 @@ class HNSWIndex:
         items_list = list(items)
         if not items_list:
             return
-        with self._lock, self._db.session() as session:
-            mapping_records = []
-            vectors = []
+        mapping_records = []
+        vectors = []
+        with self._db.session() as session:
             for event_id, span_key, vector, payload in items_list:
-                mapping = HNSWMappingRecord(
-                    event_id=event_id,
-                    span_key=span_key,
-                    span_id=payload.get("span_id") if isinstance(payload, dict) else None,
+                mapping = (
+                    session.execute(
+                        select(HNSWMappingRecord)
+                        .where(HNSWMappingRecord.event_id == event_id)
+                        .where(HNSWMappingRecord.span_key == span_key)
+                    )
+                    .scalars()
+                    .first()
                 )
-                session.add(mapping)
-                session.flush()
+                if mapping is None:
+                    mapping = HNSWMappingRecord(
+                        event_id=event_id,
+                        span_key=span_key,
+                        span_id=payload.get("span_id") if isinstance(payload, dict) else None,
+                    )
+                    session.add(mapping)
+                    try:
+                        session.flush()
+                    except IntegrityError:
+                        session.rollback()
+                        mapping = (
+                            session.execute(
+                                select(HNSWMappingRecord)
+                                .where(HNSWMappingRecord.event_id == event_id)
+                                .where(HNSWMappingRecord.span_key == span_key)
+                            )
+                            .scalars()
+                            .first()
+                        )
+                        if mapping is None:
+                            raise
                 mapping_records.append(mapping)
                 vectors.append(vector)
-            labels = [record.label for record in mapping_records]
+
+        labels = [record.label for record in mapping_records if record is not None]
+        if not labels:
+            return
+        with self._lock:
+            existing_labels = set(self._index.get_ids_list())
             self._ensure_capacity(len(labels))
-            self._index.add_items(vectors, labels)
-            self._index.save_index(str(self._index_path))
+            for label in labels:
+                if label in existing_labels:
+                    self._index.mark_deleted(label)
+            self._index.add_items(vectors, labels, replace_deleted=True)
+            self._save_index()
+
+    def _save_index(self) -> None:
+        if self._index is None:
+            return
+        temp_path = self._index_path.with_suffix(".tmp")
+        with file_lock(self._lock_path):
+            self._index.save_index(str(temp_path))
+            safe_replace(temp_path, self._index_path)
 
     def search(self, vector: list[float], limit: int = 20) -> list[VectorHit]:
         if self._index is None or self._lock is None:
@@ -174,7 +219,7 @@ class VectorIndex:
             self._log.info("Vector index: Qdrant")
             return
         except Exception as exc:
-            self._log.warning("Qdrant unavailable; falling back to HNSW: %s", exc)
+            self._log.warning("Qdrant unavailable; falling back to HNSW: {}", exc)
         self._backend = HNSWIndex(self._config, self._db, self._dim)
         self._log.info("Vector index: HNSW")
 

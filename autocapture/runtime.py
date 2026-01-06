@@ -48,7 +48,7 @@ class RetentionScheduler:
                 self._retention.enforce()
                 self._retention.enforce_screenshot_ttl()
             except Exception as exc:  # pragma: no cover - defensive
-                self._log.warning("Retention enforcement failed: %s", exc)
+                self._log.warning("Retention enforcement failed: {}", exc)
             self._stop.wait(self._interval_s)
 
 
@@ -74,21 +74,19 @@ class AppRuntime:
         self._raw_input = RawInputListener(
             idle_grace_ms=config.capture.hid.idle_grace_ms,
             on_activity=None,
-            on_hotkey=self._toggle_capture,
+            on_hotkey=None,
             on_input_event=self._tracker.ingest_input_event if self._tracker else None,
             track_mouse_movement=config.tracking.track_mouse_movement,
             mouse_move_sample_ms=config.tracking.mouse_move_sample_ms,
         )
         self._orchestrator = CaptureOrchestrator(
             database=self._db,
-            data_dir=Path(config.capture.data_dir),
-            idle_grace_ms=config.capture.hid.idle_grace_ms,
-            fps_soft_cap=config.capture.hid.fps_soft_cap,
+            capture_config=config.capture,
+            worker_config=config.worker,
             on_ocr_observation=self._on_ocr_observation,
             on_vision_observation=None,
             vision_sample_rate=getattr(config.capture, "vision_sample_rate", 0.0),
             raw_input=self._raw_input,
-            ocr_backlog_soft_limit=config.worker.ocr_backlog_soft_limit,
             ocr_backlog_check_s=1.0,
             media_store=MediaStore(config.capture, config.encryption),
         )
@@ -130,7 +128,7 @@ class AppRuntime:
         try:
             self._orchestrator.stop()
         except Exception as exc:  # pragma: no cover - defensive
-            self._log.warning("Failed to stop orchestrator: %s", exc)
+            self._log.warning("Failed to stop orchestrator: {}", exc)
 
         try:
             self._workers.stop()
@@ -150,11 +148,8 @@ class AppRuntime:
     def resume_capture(self) -> None:
         self._orchestrator.resume()
 
-    def _toggle_capture(self) -> None:
-        if self._orchestrator.is_paused:
-            self.resume_capture()
-        else:
-            self.pause_capture()
+    def set_hotkey_callback(self, callback) -> None:
+        self._raw_input.set_hotkey_callback(callback)
 
     def _on_ocr_observation(self, observation_id: str) -> None:
         self._workers.notify_ocr_observation(observation_id)

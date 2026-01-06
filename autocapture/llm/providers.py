@@ -54,9 +54,9 @@ class OllamaProvider(LLMProvider):
         try:
             return await self._generate_openai(system_prompt, query, context_pack_text)
         except httpx.HTTPError as exc:
-            self._log.warning("Ollama OpenAI endpoint failed: %s", exc)
+            self._log.warning("Ollama OpenAI endpoint failed: {}", exc)
         except KeyError as exc:
-            self._log.warning("Unexpected Ollama OpenAI response: %s", exc)
+            self._log.warning("Unexpected Ollama OpenAI response: {}", exc)
         return await self._generate_native(system_prompt, query, context_pack_text)
 
     async def _generate_openai(

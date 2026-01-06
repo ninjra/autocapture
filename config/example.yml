@@ -76,8 +76,14 @@ embeddings:
 worker:
   data_dir: "D:/autocapture/data"
   lease_ms: 60000
+  ocr_lease_ms: 60000
+  embedding_lease_ms: 60000
   poll_interval_s: 1.0
   ocr_backlog_soft_limit: 5000
+  ocr_max_attempts: 5
+  ocr_workers: 4
+  embed_workers: 1
+  embedding_max_attempts: 5
 retention:
   video_days: 3
   roi_days: 14

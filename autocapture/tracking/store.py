@@ -90,7 +90,7 @@ class SqliteHostEventStore:
             )
         elapsed_ms = (time.perf_counter() - start) * 1000
         self._log.info(
-            "Inserted %d host events in %.2fms",
+            "Inserted {} host events in {:.2f}ms",
             len(rows),
             elapsed_ms,
         )
@@ -102,7 +102,7 @@ class SqliteHostEventStore:
                 (cutoff_ms,),
             )
         deleted = cursor.rowcount or 0
-        self._log.info("Pruned %d host events older than %d", deleted, cutoff_ms)
+        self._log.info("Pruned {} host events older than {}", deleted, cutoff_ms)
         return deleted
 
     def query_recent(self, limit: int = 50) -> list[sqlite3.Row]:

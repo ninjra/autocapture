@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
+from collections import deque
 
 from PIL import Image
 
@@ -28,6 +29,7 @@ class VideoSegment:
     state: str
     encoder: Optional[str] = None
     frame_count: int = 0
+    error: Optional[str] = None
 
 
 def find_ffmpeg(data_dir: Path) -> Optional[Path]:
@@ -91,7 +93,7 @@ class SegmentRecorder:
     def __init__(self, capture_config: CaptureConfig) -> None:
         self._config = capture_config
         self._log = get_logger("recorder")
-        self._ffmpeg_path = find_ffmpeg(config.data_dir)
+        self._ffmpeg_path = find_ffmpeg(self._config.data_dir)
         if self._ffmpeg_path is None:
             self._log.warning("FFmpeg not found; video recording disabled.")
         self._queue: queue.Queue[list[CaptureFrame] | None] = queue.Queue(
@@ -101,6 +103,11 @@ class SegmentRecorder:
         self._segment: Optional[VideoSegment] = None
         self._process: Optional[subprocess.Popen[bytes]] = None
         self._frame_size: Optional[tuple[int, int]] = None
+        self._stop_event = threading.Event()
+        self._stderr_thread: Optional[threading.Thread] = None
+        self._stderr_lines: deque[str] = deque(maxlen=200)
+        self._dropped_frames = 0
+        self._last_drop_log = 0.0
 
     @property
     def is_available(self) -> bool:
@@ -134,6 +141,8 @@ class SegmentRecorder:
             state="recording",
         )
         self._queue = queue.Queue(maxsize=1024)
+        self._stop_event.clear()
+        self._stderr_lines.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         return self._segment
@@ -144,12 +153,20 @@ class SegmentRecorder:
         try:
             self._queue.put_nowait(frames)
         except queue.Full:
-            self._log.warning("Dropping video frame due to recorder backpressure.")
+            self._dropped_frames += 1
+            now = time.monotonic()
+            if now - self._last_drop_log > 5.0:
+                self._last_drop_log = now
+                self._log.warning(
+                    "Dropping video frames due to recorder backpressure (dropped={}).",
+                    self._dropped_frames,
+                )
 
     def stop_segment(self, timeout_s: float = 5.0) -> Optional[VideoSegment]:
         if self._segment is None:
             return None
-        self._queue.put(None)
+        self._stop_event.set()
+        self._signal_stop()
         if self._thread:
             self._thread.join(timeout=timeout_s)
         if self._thread and self._thread.is_alive():
@@ -168,7 +185,12 @@ class SegmentRecorder:
 
     def _run(self) -> None:
         while True:
-            item = self._queue.get()
+            if self._stop_event.is_set() and self._queue.empty():
+                break
+            try:
+                item = self._queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
             if item is None:
                 break
             composite = composite_frames(item, self._config.layout_mode)
@@ -182,7 +204,8 @@ class SegmentRecorder:
                 )
                 if process is None:
                     if self._segment:
-                        self._segment.state = "disabled"
+                        self._segment.state = "failed"
+                        self._segment.error = "ffmpeg_failed_to_start"
                     break
                 self._process = process
                 if self._segment:
@@ -294,19 +317,17 @@ class SegmentRecorder:
             process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
         except OSError as exc:
             self._log.warning("Failed to launch ffmpeg: {}", exc)
             return None
 
+        self._start_stderr_reader(process)
         time.sleep(0.25)
         if process.poll() is not None:
-            stderr_output = b""
-            if process.stderr:
-                stderr_output = process.stderr.read() or b""
-            stderr_text = stderr_output.decode("utf-8", errors="ignore")
+            stderr_text = self._drain_stderr_text()
             if "Unknown encoder" in stderr_text:
                 self._log.warning("FFmpeg encoder unsupported: {}", encoder)
             else:
@@ -324,26 +345,26 @@ class SegmentRecorder:
                 self._segment.frame_count += 1
         except BrokenPipeError:
             self._log.warning("FFmpeg pipe closed unexpectedly.")
+            if self._segment:
+                self._segment.state = "failed"
+                self._segment.error = "ffmpeg_broken_pipe"
             self._terminate_process()
 
     def _finalize(self) -> None:
         if self._process is None:
             return
-        if self._process.stdin:
-            try:
-                self._process.stdin.close()
-            except Exception:  # pragma: no cover - defensive
-                pass
-        try:
-            return_code = self._process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self._log.warning("FFmpeg did not exit in time; terminating.")
-            self._terminate_process()
-            return_code = -1
+        return_code = self._shutdown_process()
+        self._stop_stderr_reader()
         if self._segment:
             self._segment.state = "completed" if return_code == 0 else "failed"
+            if return_code != 0 and not self._segment.error:
+                self._segment.error = f"ffmpeg_exit_{return_code}"
+                stderr_text = self._drain_stderr_text().strip()
+                if stderr_text:
+                    self._log.warning("FFmpeg stderr tail: {}", stderr_text)
         self._process = None
         self._frame_size = None
+        self._stop_event.clear()
 
     def _terminate_process(self) -> None:
         if self._process is None:
@@ -353,4 +374,66 @@ class SegmentRecorder:
             self._process.wait(timeout=2)
         except subprocess.TimeoutExpired:
             self._process.kill()
+        self._stop_event.set()
+        self._stop_stderr_reader()
         self._process = None
+
+    def _shutdown_process(self) -> int:
+        if self._process is None:
+            return -1
+        if self._process.stdin:
+            try:
+                self._process.stdin.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+        try:
+            return self._process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._log.warning("FFmpeg did not exit in time; terminating.")
+            self._process.terminate()
+            try:
+                return self._process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                return -1
+
+    def _signal_stop(self) -> None:
+        if self._queue.empty():
+            try:
+                self._queue.put_nowait(None)
+                return
+            except queue.Full:
+                pass
+        drained = 0
+        while drained < 5:
+            try:
+                self._queue.get_nowait()
+                drained += 1
+            except queue.Empty:
+                break
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            self._log.warning("Failed to enqueue recorder stop sentinel; forcing shutdown.")
+
+    def _start_stderr_reader(self, process: subprocess.Popen[bytes]) -> None:
+        if process.stderr is None:
+            return
+
+        def _drain() -> None:
+            while not self._stop_event.is_set():
+                line = process.stderr.readline()
+                if not line:
+                    break
+                self._stderr_lines.append(line.decode("utf-8", errors="ignore"))
+
+        self._stderr_thread = threading.Thread(target=_drain, daemon=True)
+        self._stderr_thread.start()
+
+    def _stop_stderr_reader(self) -> None:
+        if self._stderr_thread and self._stderr_thread.is_alive():
+            self._stderr_thread.join(timeout=1.0)
+        self._stderr_thread = None
+
+    def _drain_stderr_text(self) -> str:
+        return "".join(self._stderr_lines)

@@ -47,16 +47,17 @@ class EncryptionManager:
 
         nonce = os.urandom(12)
         encryptor = Cipher(algorithms.AES(self._key), modes.GCM(nonce)).encryptor()
+        chunk_size = self._config.chunk_size
         with source.open("rb") as src, destination.open("wb") as dst:
             dst.write(nonce)
             while True:
-                chunk = src.read(1024 * 1024)  # 1 MiB
+                chunk = src.read(chunk_size)
                 if not chunk:
                     break
                 dst.write(encryptor.update(chunk))
             dst.write(encryptor.finalize())
             dst.write(encryptor.tag)
-        self._log.debug("Encrypted %s -> %s", source, destination)
+        self._log.debug("Encrypted {} -> {}", source, destination)
 
     def decrypt_file(self, source: Path, destination: Path) -> None:
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +73,7 @@ class EncryptionManager:
         # AES-GCM needs the final tag up front to initialize the decryptor.
         # We do a cheap seek to read the last 16 bytes (tag), then stream-decrypt.
         tag_len = 16
+        chunk_size = self._config.chunk_size
         with source.open("rb") as src, destination.open("wb") as dst:
             nonce = src.read(12)
             if len(nonce) != 12:
@@ -87,7 +89,7 @@ class EncryptionManager:
             decryptor = Cipher(algorithms.AES(self._key), modes.GCM(nonce, tag)).decryptor()
             remaining = (size - tag_len) - 12
             while remaining > 0:
-                chunk = src.read(min(1024 * 1024, remaining))
+                chunk = src.read(min(chunk_size, remaining))
                 if not chunk:
                     break
                 remaining -= len(chunk)
