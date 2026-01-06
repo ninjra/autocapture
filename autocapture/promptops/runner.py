@@ -10,6 +10,13 @@ import httpx
 
 from ..config import PromptOpsConfig
 from ..logging_utils import get_logger
+from ..resilience import (
+    CircuitBreaker,
+    RetryPolicy,
+    is_retryable_exception,
+    is_retryable_http_status,
+    retry_sync,
+)
 from ..storage.database import DatabaseManager
 from ..storage.models import PromptOpsRunRecord
 
@@ -27,12 +34,41 @@ class PromptOpsRunner:
         self._config = config
         self._db = db
         self._log = get_logger("promptops")
+        self._retry_policy = RetryPolicy()
+        self._breaker = CircuitBreaker()
 
     def run_once(self, sources: Iterable[str]) -> PromptOpsRunRecord:
         fetched: list[SourceItem] = []
         for url in sources:
-            try:
+            if not self._breaker.allow():
+                self._log.warning("PromptOps breaker open; skipping fetch {}", url)
+                fetched.append(
+                    SourceItem(
+                        url=url,
+                        fetched_at=dt.datetime.now(dt.timezone.utc).isoformat(),
+                        status=0,
+                        body="",
+                    )
+                )
+                continue
+
+            def _fetch() -> httpx.Response:
                 response = httpx.get(url, timeout=20.0)
+                if is_retryable_http_status(response.status_code):
+                    raise httpx.HTTPStatusError(
+                        "Retryable status",
+                        request=response.request,
+                        response=response,
+                    )
+                return response
+
+            try:
+                response = retry_sync(
+                    _fetch,
+                    policy=self._retry_policy,
+                    is_retryable=is_retryable_exception,
+                )
+                self._breaker.record_success()
                 fetched.append(
                     SourceItem(
                         url=url,
@@ -41,7 +77,8 @@ class PromptOpsRunner:
                         body=response.text[:5000],
                     )
                 )
-            except httpx.HTTPError as exc:
+            except Exception as exc:
+                self._breaker.record_failure(exc)
                 self._log.warning("PromptOps fetch failed for {}: {}", url, exc)
                 fetched.append(
                     SourceItem(

@@ -7,9 +7,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-import uvicorn
-
-from .api.server import create_app
 from .capture.orchestrator import CaptureOrchestrator
 from .capture.raw_input import RawInputListener
 from .capture.backends.monitor_utils import set_process_dpi_awareness
@@ -67,7 +64,7 @@ class AppRuntime:
 
         self._db = DatabaseManager(config.database)
         self._retrieval_embedder = EmbeddingService(config.embeddings)
-        self._vector_index = VectorIndex(config, self._db, self._retrieval_embedder.dim)
+        self._vector_index = VectorIndex(config, self._retrieval_embedder.dim)
         self._tracker = (
             HostVectorTracker(
                 config=config.tracking,
@@ -111,8 +108,6 @@ class AppRuntime:
         self._metrics = MetricsServer(
             config.observability, Path(config.capture.data_dir)
         )
-        self._api_server: Optional[uvicorn.Server] = None
-        self._api_thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
         with self._lock:
@@ -127,7 +122,6 @@ class AppRuntime:
         self._workers.start()
         self._retention_scheduler.start()
         self._metrics.start()
-        self._start_api()
         self._log.info("Runtime started")
 
     def stop(self) -> None:
@@ -147,7 +141,6 @@ class AppRuntime:
         finally:
             self._workers.flush()
 
-        self._stop_api()
         self._metrics.stop()
         if self._tracker:
             self._tracker.stop()
@@ -165,42 +158,6 @@ class AppRuntime:
 
     def _on_ocr_observation(self, observation_id: str) -> None:
         self._workers.notify_ocr_observation(observation_id)
-
-    def _start_api(self) -> None:
-        app = create_app(
-            self._config,
-            db_manager=self._db,
-            embedder=self._retrieval_embedder,
-            vector_index=self._vector_index,
-        )
-        config = uvicorn.Config(
-            app,
-            host=self._config.api.bind_host,
-            port=self._config.api.port,
-            log_level="info",
-            ssl_certfile=(
-                str(self._config.mode.tls_cert_path)
-                if self._config.mode.https_enabled
-                else None
-            ),
-            ssl_keyfile=(
-                str(self._config.mode.tls_key_path)
-                if self._config.mode.https_enabled
-                else None
-            ),
-        )
-        self._api_server = uvicorn.Server(config)
-        self._api_thread = threading.Thread(target=self._api_server.run, daemon=True)
-        self._api_thread.start()
-
-    def _stop_api(self) -> None:
-        if not self._api_server:
-            return
-        self._api_server.should_exit = True
-        if self._api_thread:
-            self._api_thread.join(timeout=3.0)
-        self._api_server = None
-        self._api_thread = None
 
     def wait_forever(self) -> None:
         try:

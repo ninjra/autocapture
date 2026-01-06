@@ -181,19 +181,8 @@ def upgrade() -> None:
         "ix_query_history_normalized_text", "query_history", ["normalized_text"]
     )
 
-    op.create_table(
-        "hnsw_mapping",
-        sa.Column("label", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("event_id", sa.String(length=36), nullable=False),
-        sa.Column("span_key", sa.String(length=64), nullable=False),
-        sa.Column("span_id", sa.Integer(), nullable=True),
-    )
-    op.create_index("ix_hnsw_mapping_event_id", "hnsw_mapping", ["event_id"])
-
 
 def downgrade() -> None:
-    op.drop_index("ix_hnsw_mapping_event_id", table_name="hnsw_mapping")
-    op.drop_table("hnsw_mapping")
     op.drop_index("ix_query_history_normalized_text", table_name="query_history")
     op.drop_table("query_history")
     op.drop_table("observations")

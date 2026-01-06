@@ -32,11 +32,9 @@ EventType = InputVectorEvent | ForegroundChangeEvent | ClipboardChangeEvent
 
 
 class EventSource(Protocol):
-    def start(self) -> None:
-        ...
+    def start(self) -> None: ...
 
-    def stop(self) -> None:
-        ...
+    def stop(self) -> None: ...
 
 
 class ForegroundPollSource:
@@ -131,11 +129,14 @@ class ClipboardPollSource:
         while self._running.is_set():
             sequence = get_clipboard_sequence_number()
             if sequence and sequence != self._last_sequence:
+                has_text = clipboard_has_text()
+                has_image = clipboard_has_image()
+                kind = _clipboard_kind(has_text, has_image)
                 event = ClipboardChangeEvent(
                     ts_ms=_now_ms(),
-                    sequence=sequence,
-                    has_text=clipboard_has_text(),
-                    has_image=clipboard_has_image(),
+                    has_text=has_text,
+                    has_image=has_image,
+                    kind=kind,
                 )
                 self._last_sequence = sequence
                 try:
@@ -185,7 +186,11 @@ class HostEventAggregator:
         rows: list[HostEventRow] = []
         if isinstance(event, InputVectorEvent):
             rows.extend(self._handle_input(event, now_ms))
-            if event.device == "mouse" and self._session_id and self._bucket_has_input():
+            if (
+                event.device == "mouse"
+                and self._session_id
+                and self._bucket_has_input()
+            ):
                 rows.extend(self._flush_bucket(now_ms))
         elif isinstance(event, ForegroundChangeEvent):
             rows.extend(self._handle_foreground(event, now_ms))
@@ -278,7 +283,9 @@ class HostEventAggregator:
             or bucket.mouse_wheel_delta
         ):
             return True
-        if self._track_mouse_movement and (bucket.mouse_move_dx or bucket.mouse_move_dy):
+        if self._track_mouse_movement and (
+            bucket.mouse_move_dx or bucket.mouse_move_dy
+        ):
             return True
         return False
 
@@ -329,23 +336,29 @@ class HostEventAggregator:
         )
 
     def _clipboard_row(self, event: ClipboardChangeEvent) -> HostEventRow:
+        bucket_ms = (event.ts_ms // 5000) * 5000
         payload = {
-            "sequence": event.sequence,
-            "has_text": event.has_text,
-            "has_image": event.has_image,
+            "clipboard_changed": True,
+            "clipboard_kind": event.kind,
         }
         return HostEventRow(
             id=str(uuid4()),
-            ts_start_ms=event.ts_ms,
-            ts_end_ms=event.ts_ms,
+            ts_start_ms=bucket_ms,
+            ts_end_ms=bucket_ms,
             kind="clipboard_change",
             session_id=self._session_id,
-            app_name=self._foreground_ctx.process_name if self._foreground_ctx else None,
-            window_title=self._foreground_ctx.window_title if self._foreground_ctx else None,
+            app_name=self._foreground_ctx.process_name
+            if self._foreground_ctx
+            else None,
+            window_title=self._foreground_ctx.window_title
+            if self._foreground_ctx
+            else None,
             payload_json=safe_payload(payload),
         )
 
-    def _session_row(self, ts_ms: int, kind: Literal["session_start", "session_end"]) -> HostEventRow:
+    def _session_row(
+        self, ts_ms: int, kind: Literal["session_start", "session_end"]
+    ) -> HostEventRow:
         payload = {"event": kind}
         return HostEventRow(
             id=str(uuid4()),
@@ -353,8 +366,12 @@ class HostEventAggregator:
             ts_end_ms=ts_ms,
             kind=kind,
             session_id=self._session_id,
-            app_name=self._foreground_ctx.process_name if self._foreground_ctx else None,
-            window_title=self._foreground_ctx.window_title if self._foreground_ctx else None,
+            app_name=self._foreground_ctx.process_name
+            if self._foreground_ctx
+            else None,
+            window_title=self._foreground_ctx.window_title
+            if self._foreground_ctx
+            else None,
             payload_json=safe_payload(payload),
         )
 
@@ -408,6 +425,9 @@ class HostVectorTracker:
             )
         ]
         if self._config.enable_clipboard:
+            self._log.warning(
+                "Clipboard tracking enabled: storing clipboard change metadata only."
+            )
             self._sources.append(
                 ClipboardPollSource(
                     interval_ms=self._config.clipboard_poll_ms,
@@ -478,7 +498,9 @@ class HostVectorTracker:
                 now = time.monotonic()
                 if now - last_prune_check > 60:
                     last_prune_check = now
-                    cutoff_ms = _now_ms() - int(self._config.retention_days * 86400 * 1000)
+                    cutoff_ms = _now_ms() - int(
+                        self._config.retention_days * 86400 * 1000
+                    )
                     store.prune_older_than(cutoff_ms)
         rows = aggregator.flush_all(_now_ms())
         if rows:
@@ -495,3 +517,11 @@ def _truncate(value: str, limit: int = 80) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "…"
+
+
+def _clipboard_kind(has_text: bool, has_image: bool) -> str:
+    if has_text:
+        return "text"
+    if has_image:
+        return "image"
+    return "unknown"

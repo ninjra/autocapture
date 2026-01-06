@@ -26,11 +26,19 @@ class ProviderRouter:
         if self._routing.llm.startswith("openai") and self._llm_config.openai_api_key:
             return (
                 OpenAIProvider(
-                    self._llm_config.openai_api_key, self._llm_config.openai_model
+                    self._llm_config.openai_api_key,
+                    self._llm_config.openai_model,
+                    timeout_s=self._llm_config.timeout_s,
+                    retries=self._llm_config.retries,
                 ),
                 RoutingDecision(llm_provider="openai"),
             )
         return (
-            OllamaProvider(self._llm_config.ollama_url, self._llm_config.ollama_model),
+            OllamaProvider(
+                self._llm_config.ollama_url,
+                self._llm_config.ollama_model,
+                timeout_s=self._llm_config.timeout_s,
+                retries=self._llm_config.retries,
+            ),
             RoutingDecision(llm_provider="ollama"),
         )

@@ -39,3 +39,25 @@ def test_ambiguous_alias_creates_alias_token() -> None:
 
     token = resolver.resolve_alias("Acme", "ORG", "exact", 0.9)
     assert token.token.startswith("ORG_ALIAS_")
+
+
+def test_case_insensitive_alias_resolution() -> None:
+    db = DatabaseManager(DatabaseConfig(url="sqlite:///:memory:"))
+    secret = b"secret-key"
+    resolver = EntityResolver(db, secret)
+
+    token_a = resolver.resolve_alias("Acme", "ORG", "exact", 0.9)
+    token_b = resolver.resolve_alias("ACME", "ORG", "exact", 0.9)
+
+    assert token_a.token == token_b.token
+
+
+def test_leetspeak_alias_resolution() -> None:
+    db = DatabaseManager(DatabaseConfig(url="sqlite:///:memory:"))
+    secret = b"secret-key"
+    resolver = EntityResolver(db, secret)
+
+    token_a = resolver.resolve_alias("Microsoft", "ORG", "exact", 0.9)
+    token_b = resolver.resolve_alias("Micros0ft", "ORG", "exact", 0.9)
+
+    assert token_a.token == token_b.token

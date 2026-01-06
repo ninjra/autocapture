@@ -9,6 +9,7 @@ import random
 import shutil
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -29,6 +30,8 @@ from ..observability.metrics import (
     ocr_stale_processing_gauge,
     roi_queue_depth,
     roi_queue_full_total,
+    video_backpressure_events_total,
+    video_disabled,
 )
 from ..media.store import MediaStore
 from ..storage.database import DatabaseManager
@@ -100,7 +103,10 @@ class CaptureOrchestrator:
         self._roi_queue: queue.Queue[ROIItem] = queue.Queue(maxsize=roi_queue_size)
         self._segment_recorder = SegmentRecorder(capture_config=capture_config)
         self._duplicate_detector = DuplicateDetector(
-            capture_config.hid.duplicate_threshold
+            threshold=capture_config.hid.duplicate_threshold,
+            window_s=capture_config.hid.duplicate_window_s,
+            max_items=capture_config.hid.duplicate_max_items,
+            pixel_threshold=capture_config.hid.duplicate_pixel_threshold,
         )
         self._media_store = media_store
         self._segment_video_paths: dict[str, Path] = {}
@@ -117,6 +123,12 @@ class CaptureOrchestrator:
         self._ocr_backlog_last_count = 0
         self._ocr_backlog_last_log = 0.0
         self._backoff_s = 0.0
+        self._video_sampling_divisor = 1
+        self._video_tick = 0
+        self._video_drop_window: deque[float] = deque(maxlen=200)
+        self._video_drop_window_s = 5.0
+        self._video_disabled_until = 0.0
+        self._video_last_drop = 0.0
 
     def start(self) -> None:
         if self._running.is_set():
@@ -268,7 +280,42 @@ class CaptureOrchestrator:
                 )
             )
         if capture_frames:
-            self._segment_recorder.enqueue(capture_frames)
+            now = time.monotonic()
+            if now < self._video_disabled_until:
+                video_disabled.set(1)
+                return
+            video_disabled.set(0)
+            self._video_tick += 1
+            if (
+                self._video_sampling_divisor > 1
+                and self._video_tick % self._video_sampling_divisor != 0
+            ):
+                return
+            accepted = self._segment_recorder.enqueue(capture_frames)
+            if not accepted:
+                video_backpressure_events_total.inc()
+                self._video_last_drop = now
+                self._video_drop_window.append(now)
+                while (
+                    self._video_drop_window
+                    and now - self._video_drop_window[0] > self._video_drop_window_s
+                ):
+                    self._video_drop_window.popleft()
+                self._video_sampling_divisor = min(self._video_sampling_divisor * 2, 16)
+                if len(self._video_drop_window) >= 10:
+                    self._video_disabled_until = now + 10.0
+                    self._video_drop_window.clear()
+                    self._log.warning(
+                        "Video capture disabled for cooldown due to backpressure"
+                    )
+            else:
+                if (
+                    self._video_sampling_divisor > 1
+                    and now - self._video_last_drop > 5.0
+                ):
+                    self._video_sampling_divisor = max(
+                        1, self._video_sampling_divisor - 1
+                    )
 
     def _run_roi_saver(self) -> None:
         while self._running.is_set() or not self._roi_queue.empty():

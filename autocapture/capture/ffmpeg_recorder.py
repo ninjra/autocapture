@@ -18,6 +18,7 @@ from PIL import Image
 
 from ..config import CaptureConfig
 from ..logging_utils import get_logger
+from ..observability.metrics import video_frames_dropped_total
 from .screen_capture import CaptureFrame
 
 
@@ -98,7 +99,10 @@ class SegmentRecorder:
         self._ffmpeg_path = find_ffmpeg(self._config.data_dir)
         if self._ffmpeg_path is None:
             self._log.warning("FFmpeg not found; video recording disabled.")
-        self._queue: queue.Queue[list[CaptureFrame] | None] = queue.Queue(maxsize=1024)
+        self._queue_maxsize = 512
+        self._queue: queue.Queue[list[CaptureFrame] | None] = queue.Queue(
+            maxsize=self._queue_maxsize
+        )
         self._thread: Optional[threading.Thread] = None
         self._segment: Optional[VideoSegment] = None
         self._process: Optional[subprocess.Popen[bytes]] = None
@@ -108,6 +112,8 @@ class SegmentRecorder:
         self._stderr_lines: deque[str] = deque(maxlen=200)
         self._dropped_frames = 0
         self._last_drop_log = 0.0
+        self._drop_window_s = 10.0
+        self._drop_window: deque[float] = deque(maxlen=500)
 
     @property
     def is_available(self) -> bool:
@@ -140,27 +146,36 @@ class SegmentRecorder:
             video_path=output_path,
             state="recording",
         )
-        self._queue = queue.Queue(maxsize=1024)
+        self._queue = queue.Queue(maxsize=self._queue_maxsize)
         self._stop_event.clear()
         self._stderr_lines.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         return self._segment
 
-    def enqueue(self, frames: list[CaptureFrame]) -> None:
+    def enqueue(self, frames: list[CaptureFrame]) -> bool:
         if self._segment is None or self._segment.state != "recording":
-            return
+            return False
         try:
             self._queue.put_nowait(frames)
+            return True
         except queue.Full:
             self._dropped_frames += 1
+            video_frames_dropped_total.inc()
             now = time.monotonic()
+            self._drop_window.append(now)
+            while (
+                self._drop_window and now - self._drop_window[0] > self._drop_window_s
+            ):
+                self._drop_window.popleft()
             if now - self._last_drop_log > 5.0:
                 self._last_drop_log = now
                 self._log.warning(
-                    "Dropping video frames due to recorder backpressure (dropped={}).",
+                    "Dropping video frames due to recorder backpressure (dropped={}, recent={}).",
                     self._dropped_frames,
+                    len(self._drop_window),
                 )
+            return False
 
     def stop_segment(self, timeout_s: float = 5.0) -> Optional[VideoSegment]:
         if self._segment is None:

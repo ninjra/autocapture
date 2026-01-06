@@ -33,6 +33,18 @@ retrieval_latency_ms = Histogram("retrieval_latency_ms", "Retrieval latency (ms)
 retention_files_deleted_total = Counter(
     "retention_files_deleted_total", "Retention deletions"
 )
+vector_search_failures_total = Counter(
+    "autocapture_vector_search_failures_total", "Vector search failures"
+)
+video_frames_dropped_total = Counter(
+    "autocapture_video_frames_dropped_total", "Video frames dropped"
+)
+video_backpressure_events_total = Counter(
+    "autocapture_video_backpressure_events_total", "Video backpressure events"
+)
+video_disabled = Gauge("autocapture_video_disabled", "Video capture disabled (0/1)")
+metrics_port_gauge = Gauge("autocapture_metrics_port", "Metrics server port")
+_metrics_port_value: Optional[int] = None
 worker_errors_total = Counter("worker_errors_total", "Worker errors", ["worker"])
 media_folder_size_gb = Gauge("media_folder_size_gb", "Media folder size (GB)")
 process_cpu_percent = Gauge("process_cpu_percent", "Process CPU percent")
@@ -46,34 +58,63 @@ class MetricsServer:
         self._config = config
         self._data_dir = data_dir
         self._log = get_logger("metrics")
-        self._server_thread: Optional[threading.Thread] = None
         self._loop_thread: Optional[threading.Thread] = None
         self._started = threading.Event()
+        self._actual_port: Optional[int] = None
 
     def start(self) -> None:
         if self._started.is_set():
             return
         self._started.set()
-        self._server_thread = threading.Thread(target=self._run_server, daemon=True)
         self._loop_thread = threading.Thread(target=self._run_loop, daemon=True)
-        self._server_thread.start()
+        self._run_server()
         self._loop_thread.start()
 
     def stop(self) -> None:
         self._started.clear()
         if self._loop_thread:
             self._loop_thread.join(timeout=1.0)
-        if self._server_thread:
-            self._server_thread.join(timeout=1.0)
 
     def _run_server(self) -> None:
-        try:
-            start_http_server(self._config.prometheus_port)
-            self._log.info(
-                "Prometheus metrics server running on {}", self._config.prometheus_port
-            )
-        except Exception as exc:  # pragma: no cover - network binding
-            self._log.warning("Failed to start metrics server: {}", exc)
+        bind_host = self._config.prometheus_bind_host
+        base_port = self._config.prometheus_port
+        fallbacks = self._config.prometheus_port_fallbacks
+        ports = [base_port] + [base_port + i for i in range(1, fallbacks + 1)]
+        for idx, port in enumerate(ports):
+            try:
+                start_http_server(port, addr=bind_host)
+                self._actual_port = port
+                global _metrics_port_value
+                _metrics_port_value = port
+                metrics_port_gauge.set(port)
+                if idx == 0:
+                    self._log.info(
+                        "Prometheus metrics server running on {}:{}",
+                        bind_host,
+                        port,
+                    )
+                else:
+                    self._log.warning(
+                        "Prometheus port {} in use; using fallback port {}",
+                        base_port,
+                        port,
+                    )
+                return
+            except OSError as exc:  # pragma: no cover - network binding
+                if exc.errno not in {48, 98, 10048}:
+                    self._log.warning("Failed to start metrics server: {}", exc)
+                    if self._config.prometheus_fail_fast:
+                        raise
+                    return
+                if self._config.prometheus_fail_fast:
+                    self._log.error(
+                        "Prometheus port {} in use; fail_fast enabled", base_port
+                    )
+                    raise
+        self._log.warning(
+            "Failed to bind Prometheus metrics server after {} fallbacks",
+            fallbacks,
+        )
 
     def _run_loop(self) -> None:
         process = psutil.Process()
@@ -87,6 +128,14 @@ class MetricsServer:
             except Exception as exc:  # pragma: no cover - defensive
                 self._log.debug("Metrics update failed: {}", exc)
             time.sleep(5.0)
+
+    @property
+    def actual_port(self) -> Optional[int]:
+        return self._actual_port
+
+
+def get_metrics_port() -> Optional[int]:
+    return _metrics_port_value
 
 
 def _folder_size_gb(path: Path) -> float:

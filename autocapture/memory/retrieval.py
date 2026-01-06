@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field
 import math
+import time
 from typing import Iterable
 
 from sqlalchemy import select
@@ -12,9 +13,9 @@ from sqlalchemy import select
 from ..config import AppConfig
 from ..embeddings.service import EmbeddingService
 from ..indexing.lexical_index import LexicalIndex
-from ..indexing.vector_index import VectorIndex
+from ..indexing.vector_index import VectorHit, VectorIndex
 from ..logging_utils import get_logger
-from ..observability.metrics import retrieval_latency_ms
+from ..observability.metrics import retrieval_latency_ms, vector_search_failures_total
 from ..storage.database import DatabaseManager
 from ..storage.models import EventRecord
 
@@ -48,7 +49,8 @@ class RetrievalService:
         self._log = get_logger("retrieval")
         self._lexical = LexicalIndex(db)
         self._embedder = embedder or EmbeddingService(self._config.embeddings)
-        self._vector = vector_index or VectorIndex(self._config, db, self._embedder.dim)
+        self._vector = vector_index or VectorIndex(self._config, self._embedder.dim)
+        self._last_vector_failure_log = 0.0
 
     def retrieve(
         self,
@@ -62,8 +64,22 @@ class RetrievalService:
         start = dt.datetime.now(dt.timezone.utc)
 
         lexical_hits = self._lexical.search(query, limit=limit * 3)
-        vector = self._embedder.embed_texts([query])[0]
-        vector_hits = self._vector.search(vector, limit=limit * 3)
+        vector_hits: list[VectorHit] = []
+        try:
+            vector = self._embedder.embed_texts([query])[0]
+            vector_hits = self._vector.search(
+                vector,
+                limit * 3,
+                embedding_model=self._embedder.model_name,
+            )
+        except Exception as exc:
+            vector_search_failures_total.inc()
+            now = time.monotonic()
+            if now - self._last_vector_failure_log > 5.0:
+                self._last_vector_failure_log = now
+                self._log.warning(
+                    "Vector retrieval failed; using lexical-only results: {}", exc
+                )
 
         lexical_scores = {hit.event_id: hit.score for hit in lexical_hits}
         vector_scores: dict[str, float] = {}

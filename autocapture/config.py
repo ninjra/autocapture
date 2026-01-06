@@ -28,6 +28,21 @@ class HIDConfig(BaseModel):
         le=1.0,
         description="Normalized perceptual hash distance to treat frames as duplicates.",
     )
+    duplicate_window_s: float = Field(
+        10.0,
+        gt=0.0,
+        description="Sliding window (seconds) for duplicate detection comparisons.",
+    )
+    duplicate_max_items: int = Field(
+        16,
+        ge=2,
+        description="Max recent frames to compare for duplicate detection.",
+    )
+    duplicate_pixel_threshold: float = Field(
+        2.5,
+        gt=0.0,
+        description="Mean absolute pixel diff threshold for duplicate detection.",
+    )
     fps_soft_cap: float = Field(
         4.0,
         gt=0,
@@ -98,7 +113,7 @@ class TrackingConfig(BaseModel):
     clipboard_poll_ms: int = Field(250, ge=50)
     track_mouse_movement: bool = True
     mouse_move_sample_ms: int = Field(50, ge=10)
-    enable_clipboard: bool = True
+    enable_clipboard: bool = False
     retention_days: int | None = None
 
 
@@ -213,16 +228,27 @@ class EncryptionConfig(BaseModel):
 
 
 class ObservabilityConfig(BaseModel):
+    prometheus_bind_host: str = Field("127.0.0.1")
     prometheus_port: int = Field(9005, ge=1024, le=65535)
+    prometheus_port_fallbacks: int = Field(10, ge=0, le=100)
+    prometheus_fail_fast: bool = Field(False)
     grafana_url: Optional[str] = None
     enable_gpu_stats: bool = Field(True)
 
 
 class APIConfig(BaseModel):
-    port: int = Field(5273, ge=1024, le=65535)
     bind_host: str = Field(
         "127.0.0.1", description="Bind host for the local API server."
     )
+    port: int = Field(8008, ge=1024, le=65535)
+    require_api_key: bool = Field(False)
+    api_key: Optional[str] = None
+    rate_limit_rps: float = Field(2.0, gt=0.0)
+    rate_limit_burst: int = Field(5, ge=1)
+    max_page_size: int = Field(200, ge=1)
+    default_page_size: int = Field(50, ge=1)
+    max_query_chars: int = Field(2000, ge=1)
+    max_context_k: int = Field(50, ge=1)
 
 
 class ModeConfig(BaseModel):
@@ -269,6 +295,8 @@ class LLMConfig(BaseModel):
     ollama_model: str = Field("llama3")
     openai_api_key: Optional[str] = Field(None, description="OpenAI API key")
     openai_model: str = Field("gpt-4.1-mini")
+    timeout_s: float = Field(60.0, gt=0.0)
+    retries: int = Field(3, ge=0, le=10)
 
 
 class AppConfig(BaseModel):
@@ -308,6 +336,22 @@ class AppConfig(BaseModel):
         capture = values.get("capture")
         if capture:
             capture.data_dir.mkdir(parents=True, exist_ok=True)
+        return value
+
+    @validator("api")
+    def validate_api_config(cls, value: APIConfig) -> APIConfig:  # type: ignore[name-defined]
+        loopback = {"127.0.0.1", "localhost", "::1"}
+        if value.bind_host not in loopback:
+            if not value.require_api_key:
+                raise ValueError(
+                    "api.require_api_key must be true when binding to non-loopback host"
+                )
+            if not value.api_key:
+                raise ValueError(
+                    "api.api_key is required when binding to non-loopback host"
+                )
+        if value.default_page_size > value.max_page_size:
+            raise ValueError("api.default_page_size must be <= api.max_page_size")
         return value
 
 

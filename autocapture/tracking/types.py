@@ -31,9 +31,9 @@ class ForegroundChangeEvent:
 @dataclass(slots=True)
 class ClipboardChangeEvent:
     ts_ms: int
-    sequence: int
     has_text: bool
     has_image: bool
+    kind: str
 
 
 @dataclass(slots=True)

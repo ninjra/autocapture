@@ -6,6 +6,8 @@ import hashlib
 import hmac
 import os
 import re
+import string
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -84,7 +86,7 @@ class EntityResolver:
         alias_type: str,
         confidence: float,
     ) -> EntityToken:
-        alias_norm = alias_text.strip().casefold()
+        alias_norm = normalize_alias(alias_text)
         with self._db.session() as session:
             existing = session.execute(
                 select(EntityAliasRecord, EntityRecord)
@@ -204,6 +206,7 @@ class EntityResolver:
         alias_text: str,
         base_token: str,
     ) -> EntityRecord:
+        alias_norm = normalize_alias(alias_text)
         for attempt in range(5):
             token = base_token if attempt == 0 else f"{base_token}-{attempt}"
             existing = (
@@ -213,8 +216,13 @@ class EntityResolver:
                 .scalars()
                 .first()
             )
-            if existing and existing.canonical_name != alias_text:
-                continue
+            if existing:
+                existing_norm = normalize_alias(existing.canonical_name)
+                if existing_norm == alias_norm:
+                    return existing
+                if existing.canonical_name != alias_text:
+                    continue
+                return existing
             entity = EntityRecord(
                 entity_type=entity_type,
                 canonical_name=alias_text,
@@ -257,3 +265,23 @@ def _collect_replacements(text: str, secret: bytes) -> list[tuple[int, int, str]
             occupied.append((start, end))
     replacements.sort(key=lambda item: item[0])
     return replacements
+
+
+def normalize_alias(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    leet_map = str.maketrans(
+        {
+            "0": "o",
+            "1": "l",
+            "3": "e",
+            "4": "a",
+            "5": "s",
+            "7": "t",
+            "@": "a",
+            "$": "s",
+        }
+    )
+    normalized = normalized.translate(leet_map)
+    normalized = " ".join(normalized.split())
+    normalized = normalized.strip(string.punctuation + " ")
+    return normalized

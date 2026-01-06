@@ -12,6 +12,7 @@ from autocapture.storage.models import (
     EventRecord,
     OCRSpanRecord,
 )
+from autocapture.indexing.vector_index import SpanEmbeddingUpsert
 from autocapture.worker.embedding_worker import EmbeddingWorker
 
 
@@ -28,7 +29,7 @@ class FakeIndex:
     def __init__(self) -> None:
         self.fail = True
 
-    def upsert_spans(self, items):
+    def upsert_spans(self, items: list[SpanEmbeddingUpsert]):
         if self.fail:
             raise RuntimeError("index down")
 
@@ -53,6 +54,7 @@ def test_embedding_worker_retries_indexing(tmp_path) -> None:
                 ocr_status="done",
             )
         )
+        session.flush()
         session.add(
             EventRecord(
                 event_id="cap-1",
@@ -81,6 +83,7 @@ def test_embedding_worker_retries_indexing(tmp_path) -> None:
             bbox={},
         )
         session.add(span)
+        session.flush()
         session.add(
             EmbeddingRecord(
                 capture_id="cap-1",
@@ -134,6 +137,7 @@ def test_embedding_worker_reclaims_stale_processing(tmp_path) -> None:
                 ocr_status="done",
             )
         )
+        session.flush()
         session.add(
             EventRecord(
                 event_id="cap-2",
@@ -162,6 +166,7 @@ def test_embedding_worker_reclaims_stale_processing(tmp_path) -> None:
             bbox={},
         )
         session.add(span)
+        session.flush()
         session.add(
             EmbeddingRecord(
                 capture_id="cap-2",
