@@ -134,7 +134,7 @@ class WorkerDatabase:
 
     def mark_retry(self, job_id: int, attempts: int, error: str) -> None:
         now = datetime.now(timezone.utc)
-        delay_s = min(900, 2**min(attempts, 10))
+        delay_s = min(900, 2 ** min(attempts, 10))
         next_run = now + timedelta(seconds=delay_s)
         self._conn.execute(
             """
@@ -371,17 +371,11 @@ class RetentionManager:
         if not video_dir.exists():
             return
         total = sum(
-            path.stat().st_size
-            for path in video_dir.rglob("*")
-            if path.is_file()
+            path.stat().st_size for path in video_dir.rglob("*") if path.is_file()
         )
         if total <= max_bytes:
             return
-        files = [
-            path
-            for path in video_dir.rglob("*")
-            if path.is_file()
-        ]
+        files = [path for path in video_dir.rglob("*") if path.is_file()]
         files.sort(key=lambda path: path.stat().st_mtime)
         removed = 0
         for path in files:

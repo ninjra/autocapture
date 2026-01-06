@@ -74,6 +74,10 @@ class LexicalIndex:
                     {"event_id": event.event_id},
                 )
 
+    def bulk_upsert(self, events: Iterable[EventRecord]) -> None:
+        for event in events:
+            self.upsert_event(event)
+
     def search(self, query: str, limit: int = 20) -> list[LexicalHit]:
         engine = self._db.engine
         if not query.strip():
@@ -103,8 +107,7 @@ class LexicalIndex:
                         {"query": sanitized, "limit": limit},
                     ).fetchall()
             return [
-                LexicalHit(event_id=row[0], score=1 / (1 + abs(row[1])))
-                for row in rows
+                LexicalHit(event_id=row[0], score=1 / (1 + abs(row[1]))) for row in rows
             ]
 
         if engine.dialect.name == "postgresql":
@@ -125,9 +128,13 @@ class LexicalIndex:
                     ),
                     {"query": query, "limit": limit},
                 ).fetchall()
-            return [LexicalHit(event_id=row[0], score=float(row[1] or 0.0)) for row in rows]
+            return [
+                LexicalHit(event_id=row[0], score=float(row[1] or 0.0)) for row in rows
+            ]
 
-        self._log.warning("Unsupported dialect for lexical search: {}", engine.dialect.name)
+        self._log.warning(
+            "Unsupported dialect for lexical search: {}", engine.dialect.name
+        )
         return []
 
 
@@ -137,7 +144,3 @@ def _sanitize_fts_query(query: str) -> str:
         return ""
     quoted = [f"\"{token.replace('\"', '\"\"')}\"" for token in tokens]
     return " AND ".join(quoted)
-
-    def bulk_upsert(self, events: Iterable[EventRecord]) -> None:
-        for event in events:
-            self.upsert_event(event)

@@ -74,6 +74,16 @@ class CaptureConfig(BaseModel):
         ge=100,
         description="Backpressure limit for outstanding capture tasks.",
     )
+    staging_min_free_mb: int = Field(
+        512,
+        ge=64,
+        description="Minimum free space (MB) required in staging_dir.",
+    )
+    data_min_free_mb: int = Field(
+        1024,
+        ge=64,
+        description="Minimum free space (MB) required in data_dir.",
+    )
 
 
 class TrackingConfig(BaseModel):
@@ -145,6 +155,9 @@ class RetentionPolicyConfig(BaseModel):
     screenshot_ttl_days: int = Field(
         90, ge=1, description="Days to keep raw screenshots before pruning."
     )
+    protect_recent_minutes: int = Field(
+        60, ge=1, description="Protect media newer than this window from pruning."
+    )
 
 
 class StorageQuotaConfig(BaseModel):
@@ -161,6 +174,19 @@ class DatabaseConfig(BaseModel):
     echo: bool = False
     pool_size: int = Field(10, ge=1)
     max_overflow: int = Field(10, ge=0)
+    sqlite_busy_timeout_ms: int = Field(5000, ge=0)
+    sqlite_wal: bool = True
+    sqlite_synchronous: str = Field("NORMAL")
+
+    @validator("sqlite_synchronous")
+    def validate_sqlite_synchronous(cls, value: str) -> str:  # type: ignore[name-defined]
+        allowed = {"NORMAL", "FULL", "OFF"}
+        upper = value.upper()
+        if upper not in allowed:
+            raise ValueError(
+                f"sqlite_synchronous must be one of {sorted(allowed)}; got {value!r}"
+            )
+        return upper
 
 
 class QdrantConfig(BaseModel):

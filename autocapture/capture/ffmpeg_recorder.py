@@ -53,7 +53,9 @@ def find_ffmpeg(data_dir: Path) -> Optional[Path]:
             return candidate
 
     for path_dir in os.environ.get("PATH", "").split(os.pathsep):
-        ffmpeg_path = Path(path_dir) / ("ffmpeg.exe" if sys.platform == "win32" else "ffmpeg")
+        ffmpeg_path = Path(path_dir) / (
+            "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
+        )
         if ffmpeg_path.exists():
             return ffmpeg_path
 
@@ -96,9 +98,7 @@ class SegmentRecorder:
         self._ffmpeg_path = find_ffmpeg(self._config.data_dir)
         if self._ffmpeg_path is None:
             self._log.warning("FFmpeg not found; video recording disabled.")
-        self._queue: queue.Queue[list[CaptureFrame] | None] = queue.Queue(
-            maxsize=1024
-        )
+        self._queue: queue.Queue[list[CaptureFrame] | None] = queue.Queue(maxsize=1024)
         self._thread: Optional[threading.Thread] = None
         self._segment: Optional[VideoSegment] = None
         self._process: Optional[subprocess.Popen[bytes]] = None
@@ -414,7 +414,9 @@ class SegmentRecorder:
         try:
             self._queue.put_nowait(None)
         except queue.Full:
-            self._log.warning("Failed to enqueue recorder stop sentinel; forcing shutdown.")
+            self._log.warning(
+                "Failed to enqueue recorder stop sentinel; forcing shutdown."
+            )
 
     def _start_stderr_reader(self, process: subprocess.Popen[bytes]) -> None:
         if process.stderr is None:

@@ -36,7 +36,7 @@ def run_eval(config: AppConfig, eval_path: Path) -> EvalMetrics:
     for item in items:
         evidence = retrieval.retrieve(item["query"], None, None, limit=5)
         evidence_items = [result.event for result in evidence]
-        pack = build_context_pack(
+        build_context_pack(
             query=item["query"],
             evidence=[],
             entity_tokens=entities.tokens_for_events(evidence_items),
@@ -48,7 +48,11 @@ def run_eval(config: AppConfig, eval_path: Path) -> EvalMetrics:
         if "[" in compressed.answer or compressed.citations:
             citation_hits += 1
         claims = [
-            Claim(text=compressed.answer, evidence_ids=compressed.citations, entity_tokens=[])
+            Claim(
+                text=compressed.answer,
+                evidence_ids=compressed.citations,
+                entity_tokens=[],
+            )
         ]
         errors = verifier.verify(
             claims, valid_evidence=set(compressed.citations), entity_tokens=set()

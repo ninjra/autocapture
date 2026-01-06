@@ -25,12 +25,15 @@ class EmbeddingWorker:
         config: AppConfig,
         db_manager: DatabaseManager | None = None,
         embedder: Optional[EmbeddingService] = None,
+        vector_index: VectorIndex | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.embedding")
         self._embedder = embedder or EmbeddingService(config.embeddings)
-        self._vector_index = VectorIndex(config, self._db, self._embedder.dim)
+        self._vector_index = vector_index or VectorIndex(
+            config, self._db, self._embedder.dim
+        )
         self._lexical_index = LexicalIndex(self._db)
         self._lease_timeout_s = config.worker.embedding_lease_ms / 1000
         self._max_attempts = config.worker.embedding_max_attempts
@@ -65,16 +68,21 @@ class EmbeddingWorker:
             )
             if not event_ids:
                 return 0
-            session.execute(
+
+        self._db.transaction(
+            lambda session: session.execute(
                 update(EventRecord)
                 .where(EventRecord.event_id.in_(event_ids))
                 .where(EventRecord.embedding_status == "pending")
                 .values(embedding_status="processing")
             )
+        )
 
         with self._db.session() as session:
             events = (
-                session.execute(select(EventRecord).where(EventRecord.event_id.in_(event_ids)))
+                session.execute(
+                    select(EventRecord).where(EventRecord.event_id.in_(event_ids))
+                )
                 .scalars()
                 .all()
             )
@@ -86,14 +94,16 @@ class EmbeddingWorker:
         except Exception as exc:
             self._log.warning("Event embedding failed: {}", exc)
             worker_errors_total.labels("embedding").inc()
-            with self._db.session() as session:
-                session.execute(
+            self._db.transaction(
+                lambda session: session.execute(
                     update(EventRecord)
                     .where(EventRecord.event_id.in_(event_ids))
                     .values(embedding_status="failed")
                 )
+            )
             return 0
-        with self._db.session() as session:
+
+        def _persist(session) -> None:
             for event, vector in zip(events, vectors):
                 record = session.get(EventRecord, event.event_id)
                 if not record:
@@ -101,6 +111,8 @@ class EmbeddingWorker:
                 record.embedding_vector = vector
                 record.embedding_status = "done"
                 record.embedding_model = self._embedder.model_name
+
+        self._db.transaction(_persist)
         return len(events)
 
     def _process_span_embeddings(self) -> int:
@@ -122,7 +134,9 @@ class EmbeddingWorker:
             )
             if not embedding_ids:
                 return 0
-            session.execute(
+
+        self._db.transaction(
+            lambda session: session.execute(
                 update(EmbeddingRecord)
                 .where(EmbeddingRecord.id.in_(embedding_ids))
                 .where(
@@ -136,6 +150,7 @@ class EmbeddingWorker:
                     attempts=EmbeddingRecord.attempts + 1,
                 )
             )
+        )
 
         with self._db.session() as session:
             embeddings = (
@@ -168,17 +183,22 @@ class EmbeddingWorker:
             except Exception as exc:
                 self._log.warning("Span embedding failed: {}", exc)
                 worker_errors_total.labels("embedding").inc()
-                with self._db.session() as session:
+                error = str(exc)
+
+                def _mark_failed(session) -> None:
                     session.execute(
                         update(EmbeddingRecord)
                         .where(EmbeddingRecord.id.in_(embedding_ids))
-                        .values(status="failed", last_error=str(exc))
+                        .values(status="failed", last_error=error)
                     )
+
+                self._db.transaction(_mark_failed)
                 return 0
 
         vectors_iter = iter(vectors)
         upserts = []
-        with self._db.session() as session:
+
+        def _prepare(session) -> None:
             for embedding, span, event in span_rows:
                 record = session.get(EmbeddingRecord, embedding.id)
                 if not record:
@@ -207,21 +227,27 @@ class EmbeddingWorker:
                 }
                 upserts.append((event.event_id, record.span_key, vector, payload))
 
+        self._db.transaction(_prepare)
+
         if upserts:
             try:
                 self._vector_index.upsert_spans(upserts)
             except Exception as exc:
                 self._log.warning("Span indexing failed: {}", exc)
                 worker_errors_total.labels("embedding").inc()
-                with self._db.session() as session:
+                error = str(exc)
+
+                def _mark_pending(session) -> None:
                     session.execute(
                         update(EmbeddingRecord)
                         .where(EmbeddingRecord.id.in_(embedding_ids))
-                        .values(status="index_pending", last_error=str(exc))
+                        .values(status="index_pending", last_error=error)
                     )
+
+                self._db.transaction(_mark_pending)
                 return 0
 
-        with self._db.session() as session:
+        def _finalize(session) -> None:
             for embedding, span, _event in span_rows:
                 record = session.get(EmbeddingRecord, embedding.id)
                 if not record or record.status == "failed":
@@ -230,22 +256,31 @@ class EmbeddingWorker:
                 record.last_error = None
                 record.span_key = record.span_key or span.span_key
                 record.updated_at = dt.datetime.now(dt.timezone.utc)
+
+        self._db.transaction(_finalize)
         return len(span_rows)
 
     def _recover_stale_embeddings(self) -> None:
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
             seconds=self._lease_timeout_s
         )
-        with self._db.session() as session:
+
+        def _recover(session) -> None:
             rows = (
                 session.execute(
-                    select(EmbeddingRecord).where(EmbeddingRecord.status == "processing")
+                    select(EmbeddingRecord).where(
+                        EmbeddingRecord.status == "processing"
+                    )
                 )
                 .scalars()
                 .all()
             )
             for record in rows:
-                heartbeat = record.heartbeat_at or record.processing_started_at or record.updated_at
+                heartbeat = (
+                    record.heartbeat_at
+                    or record.processing_started_at
+                    or record.updated_at
+                )
                 heartbeat = _ensure_aware(heartbeat)
                 if heartbeat and heartbeat >= cutoff:
                     continue
@@ -256,6 +291,8 @@ class EmbeddingWorker:
                     record.status = "index_pending" if record.vector else "pending"
                     record.processing_started_at = None
                     record.heartbeat_at = None
+
+        self._db.transaction(_recover)
 
 
 def _ensure_aware(timestamp: dt.datetime | None) -> dt.datetime | None:

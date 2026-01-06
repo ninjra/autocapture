@@ -25,7 +25,9 @@ class ProviderRouter:
     def select_llm(self) -> tuple[LLMProvider, RoutingDecision]:
         if self._routing.llm.startswith("openai") and self._llm_config.openai_api_key:
             return (
-                OpenAIProvider(self._llm_config.openai_api_key, self._llm_config.openai_model),
+                OpenAIProvider(
+                    self._llm_config.openai_api_key, self._llm_config.openai_model
+                ),
                 RoutingDecision(llm_provider="openai"),
             )
         return (

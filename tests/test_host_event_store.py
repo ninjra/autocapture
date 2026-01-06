@@ -38,10 +38,12 @@ def test_store_prune(tmp_path: Path) -> None:
     db_path = tmp_path / "events.sqlite"
     store = SqliteHostEventStore(db_path)
     store.init_schema()
-    store.insert_many([
-        _row(1000, 1000, "input_bucket"),
-        _row(2000, 2000, "input_bucket"),
-    ])
+    store.insert_many(
+        [
+            _row(1000, 1000, "input_bucket"),
+            _row(2000, 2000, "input_bucket"),
+        ]
+    )
     deleted = store.prune_older_than(1500)
     remaining = store.query_recent(limit=10)
     store.close()

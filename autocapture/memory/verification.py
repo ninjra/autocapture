@@ -13,7 +13,9 @@ class Claim:
 
 
 class RulesVerifier:
-    def verify(self, claims: list[Claim], valid_evidence: set[str], entity_tokens: set[str]) -> list[str]:
+    def verify(
+        self, claims: list[Claim], valid_evidence: set[str], entity_tokens: set[str]
+    ) -> list[str]:
         errors: list[str] = []
         for idx, claim in enumerate(claims, start=1):
             if not claim.evidence_ids:

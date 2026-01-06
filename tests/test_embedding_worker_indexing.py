@@ -6,7 +6,12 @@ from sqlalchemy import select
 
 from autocapture.config import AppConfig, DatabaseConfig, EmbeddingConfig
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import CaptureRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
+from autocapture.storage.models import (
+    CaptureRecord,
+    EmbeddingRecord,
+    EventRecord,
+    OCRSpanRecord,
+)
 from autocapture.worker.embedding_worker import EmbeddingWorker
 
 
@@ -170,7 +175,8 @@ def test_embedding_worker_reclaims_stale_processing(tmp_path) -> None:
                 model="fake-model",
                 status="processing",
                 span_key="S1",
-                heartbeat_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=10),
+                heartbeat_at=dt.datetime.now(dt.timezone.utc)
+                - dt.timedelta(minutes=10),
             )
         )
 

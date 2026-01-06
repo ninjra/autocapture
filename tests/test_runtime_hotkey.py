@@ -63,6 +63,7 @@ def test_runtime_sets_hotkey_callback(monkeypatch) -> None:
     config = AppConfig(
         database=DatabaseConfig(url="sqlite:///:memory:"),
         tracking={"enabled": False},
+        embeddings={"model": "local-test"},
     )
     runtime = runtime_module.AppRuntime(config)
 

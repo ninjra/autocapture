@@ -13,12 +13,16 @@ from autocapture.storage.models import EventRecord
 
 
 class BadCitationLLM:
-    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
+    async def generate_answer(
+        self, system_prompt: str, query: str, context_pack_text: str
+    ) -> str:
         return "Answer with invalid citation [E999]"
 
 
 def test_answer_citations_subset(tmp_path: Path, monkeypatch) -> None:
-    config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
+    config = AppConfig(
+        database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
+    )
     config.capture.data_dir = tmp_path
     config.embeddings.model = "local-test"
     db = DatabaseManager(config.database)
@@ -36,7 +40,16 @@ def test_answer_citations_subset(tmp_path: Path, monkeypatch) -> None:
                 screenshot_path=None,
                 screenshot_hash="hash",
                 ocr_text="Meeting notes about roadmap",
-                ocr_spans=[{"span_id": "S1", "span_key": "S1", "text": "roadmap", "start": 23, "end": 30, "conf": 0.9}],
+                ocr_spans=[
+                    {
+                        "span_id": "S1",
+                        "span_key": "S1",
+                        "text": "roadmap",
+                        "start": 23,
+                        "end": 30,
+                        "conf": 0.9,
+                    }
+                ],
                 embedding_vector=None,
                 tags={},
             )
@@ -45,12 +58,16 @@ def test_answer_citations_subset(tmp_path: Path, monkeypatch) -> None:
     def _mock_select(self):
         return BadCitationLLM(), RoutingDecision(llm_provider="mock")
 
-    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _mock_select)
+    monkeypatch.setattr(
+        "autocapture.memory.router.ProviderRouter.select_llm", _mock_select
+    )
 
     app = create_app(config, db_manager=db)
     client = TestClient(app)
 
-    response = client.post("/api/answer", json={"query": "roadmap", "extractive_only": False})
+    response = client.post(
+        "/api/answer", json={"query": "roadmap", "extractive_only": False}
+    )
     assert response.status_code == 200
     payload = response.json()
     assert payload["citations"]

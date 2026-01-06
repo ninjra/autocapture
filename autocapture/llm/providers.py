@@ -154,9 +154,7 @@ def build_prompt(query: str, context: Sequence[ContextChunk]) -> tuple[str, str]
     user_prompt = (
         "Question:\n"
         f"{query}\n\n"
-        "Context snippets (with citations):\n"
-        + "\n".join(context_lines)
-        + "\n\n"
+        "Context snippets (with citations):\n" + "\n".join(context_lines) + "\n\n"
         "Answer with inline citations like [segment_id @ 2024-01-01T12:00:00Z]."
     )
     return system_prompt, user_prompt

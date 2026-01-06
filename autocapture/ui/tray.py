@@ -73,7 +73,9 @@ class TrayApp(QtCore.QObject):
 
     def toggle_pause(self) -> None:
         self._paused = not self._paused
-        self._pause_action.setText("Resume Capture" if self._paused else "Pause Capture")
+        self._pause_action.setText(
+            "Resume Capture" if self._paused else "Pause Capture"
+        )
         if self._paused:
             self._runtime.pause_capture()
         else:
@@ -84,7 +86,9 @@ class TrayApp(QtCore.QObject):
             QtCore.QUrl.fromLocalFile(str(self._log_dir.resolve()))
         )
 
-    def _on_tray_activated(self, reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
+    def _on_tray_activated(
+        self, reason: QtWidgets.QSystemTrayIcon.ActivationReason
+    ) -> None:
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
             self.toggle_popup()
 

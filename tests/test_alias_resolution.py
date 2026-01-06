@@ -10,8 +10,12 @@ def test_ambiguous_alias_creates_alias_token() -> None:
     resolver = EntityResolver(db, secret)
 
     with db.session() as session:
-        entity_a = EntityRecord(entity_type="ORG", canonical_name="Acme A", canonical_token="ORG_AAAA")
-        entity_b = EntityRecord(entity_type="ORG", canonical_name="Acme B", canonical_token="ORG_BBBB")
+        entity_a = EntityRecord(
+            entity_type="ORG", canonical_name="Acme A", canonical_token="ORG_AAAA"
+        )
+        entity_b = EntityRecord(
+            entity_type="ORG", canonical_name="Acme B", canonical_token="ORG_BBBB"
+        )
         session.add_all([entity_a, entity_b])
         session.flush()
         session.add_all(

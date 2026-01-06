@@ -13,6 +13,7 @@ def test_popup_default_payload_types() -> None:
     from autocapture.ui.popup import SearchPopup
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    assert app is not None
     popup = SearchPopup("http://localhost")
 
     assert popup._default_payload(popup.suggestions_ready) == []

@@ -54,7 +54,7 @@ class DirectXDesktopDuplicator(ScreenCaptureBackend):  # pragma: no cover - Wind
 
     def start(self) -> None:
         # Lazy import to avoid platform issues when developing on Linux.
-        from .win_directx import DirectXSession  # type: ignore
+        from .._legacy.capture.win_directx import DirectXSession  # type: ignore
 
         self._session = DirectXSession(include_cursor=self.include_cursor)
         self._session.initialize()

@@ -47,7 +47,11 @@ def upgrade() -> None:
     op.create_table(
         "entity_aliases",
         sa.Column("alias_id", sa.String(length=36), primary_key=True),
-        sa.Column("entity_id", sa.String(length=36), sa.ForeignKey("entities.entity_id", ondelete="CASCADE")),
+        sa.Column(
+            "entity_id",
+            sa.String(length=36),
+            sa.ForeignKey("entities.entity_id", ondelete="CASCADE"),
+        ),
         sa.Column("alias_text", sa.String(length=512), nullable=False),
         sa.Column("alias_norm", sa.String(length=512), nullable=False),
         sa.Column("alias_type", sa.String(length=64), nullable=False),
@@ -106,7 +110,11 @@ def upgrade() -> None:
     op.create_table(
         "ocr_spans",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("capture_id", sa.String(length=36), sa.ForeignKey("captures.id", ondelete="CASCADE")),
+        sa.Column(
+            "capture_id",
+            sa.String(length=36),
+            sa.ForeignKey("captures.id", ondelete="CASCADE"),
+        ),
         sa.Column("span_key", sa.String(length=64), nullable=False),
         sa.Column("start", sa.Integer(), nullable=False),
         sa.Column("end", sa.Integer(), nullable=False),
@@ -118,8 +126,14 @@ def upgrade() -> None:
     op.create_table(
         "embeddings",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("capture_id", sa.String(length=36), sa.ForeignKey("captures.id", ondelete="CASCADE")),
-        sa.Column("span_id", sa.Integer(), sa.ForeignKey("ocr_spans.id", ondelete="SET NULL")),
+        sa.Column(
+            "capture_id",
+            sa.String(length=36),
+            sa.ForeignKey("captures.id", ondelete="CASCADE"),
+        ),
+        sa.Column(
+            "span_id", sa.Integer(), sa.ForeignKey("ocr_spans.id", ondelete="SET NULL")
+        ),
         sa.Column("vector", sa.JSON(), nullable=True),
         sa.Column("model", sa.String(length=128), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False),
@@ -145,7 +159,11 @@ def upgrade() -> None:
         sa.Column("id", sa.String(length=36), primary_key=True),
         sa.Column("captured_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("image_path", sa.Text(), nullable=False),
-        sa.Column("segment_id", sa.String(length=36), sa.ForeignKey("segments.id", ondelete="SET NULL")),
+        sa.Column(
+            "segment_id",
+            sa.String(length=36),
+            sa.ForeignKey("segments.id", ondelete="SET NULL"),
+        ),
         sa.Column("cursor_x", sa.Integer(), nullable=False),
         sa.Column("cursor_y", sa.Integer(), nullable=False),
         sa.Column("monitor_id", sa.String(length=64), nullable=False),
@@ -159,7 +177,9 @@ def upgrade() -> None:
         sa.Column("count", sa.Integer(), nullable=False),
         sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=False),
     )
-    op.create_index("ix_query_history_normalized_text", "query_history", ["normalized_text"])
+    op.create_index(
+        "ix_query_history_normalized_text", "query_history", ["normalized_text"]
+    )
 
     op.create_table(
         "hnsw_mapping",

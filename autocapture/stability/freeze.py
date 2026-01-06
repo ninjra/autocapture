@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any
 
+from ..logging_utils import get_logger
+
 MANIFEST_RELATIVE_PATH = Path("autocapture/stability/frozen_manifest.json")
 SCHEMA_VERSION = 1
 
-logger = logging.getLogger("autocapture.stability.freeze")
+logger = get_logger("stability.freeze")
 
 
 def _manifest_path(repo_root: Path) -> Path:
@@ -128,8 +129,6 @@ def verify_frozen(repo_root: Path) -> list[str]:
         if not path.exists() or not path.is_file():
             message = f"{rel_path}: expected {expected}, actual missing"
             violations.append(message)
-            # NOTE: stdlib logging does not support structlog-style brace formatting
-            # nor arbitrary keyword args (e.g., message=...). Use %s formatting.
             logger.error("Frozen surface violation: {}", message)
             continue
         actual = sha256_file(path)

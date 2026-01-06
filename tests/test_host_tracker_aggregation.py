@@ -16,7 +16,9 @@ def _payload(row):
 
 
 def test_aggregation_flush_and_session() -> None:
-    agg = HostEventAggregator(flush_interval_ms=500, idle_grace_ms=300, track_mouse_movement=True)
+    agg = HostEventAggregator(
+        flush_interval_ms=500, idle_grace_ms=300, track_mouse_movement=True
+    )
     ctx = ForegroundContext(process_name="demo.exe", window_title="Demo")
 
     rows = agg.handle_event(
@@ -34,7 +36,13 @@ def test_aggregation_flush_and_session() -> None:
         InputVectorEvent(
             ts_ms=1700,
             device="mouse",
-            mouse={"left_clicks": 1, "wheel_events": 1, "wheel_delta": 120, "move_dx": 5, "move_dy": -2},
+            mouse={
+                "left_clicks": 1,
+                "wheel_events": 1,
+                "wheel_delta": 120,
+                "move_dx": 5,
+                "move_dy": -2,
+            },
         ),
         now_ms=1700,
     )
@@ -69,7 +77,9 @@ def test_aggregation_flush_and_session() -> None:
 
 
 def test_payload_is_sanitized() -> None:
-    agg = HostEventAggregator(flush_interval_ms=100, idle_grace_ms=50, track_mouse_movement=False)
+    agg = HostEventAggregator(
+        flush_interval_ms=100, idle_grace_ms=50, track_mouse_movement=False
+    )
     rows = agg.handle_event(
         InputVectorEvent(ts_ms=1000, device="keyboard", mouse={"events": 2}),
         now_ms=1000,

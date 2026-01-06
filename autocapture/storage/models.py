@@ -5,7 +5,17 @@ from __future__ import annotations
 import datetime as dt
 from uuid import uuid4
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -123,6 +133,10 @@ class PromptOpsRunRecord(Base):
 
 class CaptureRecord(Base):
     __tablename__ = "captures"
+    __table_args__ = (
+        Index("ix_captures_ocr_status", "ocr_status"),
+        Index("ix_captures_ocr_status_heartbeat", "ocr_status", "ocr_heartbeat_at"),
+    )
 
     id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
@@ -155,6 +169,13 @@ class CaptureRecord(Base):
 
 class OCRSpanRecord(Base):
     __tablename__ = "ocr_spans"
+    __table_args__ = (
+        UniqueConstraint(
+            "capture_id",
+            "span_key",
+            name="uq_ocr_spans_capture_span_key",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     capture_id: Mapped[str] = mapped_column(
@@ -174,6 +195,16 @@ class OCRSpanRecord(Base):
 
 class EmbeddingRecord(Base):
     __tablename__ = "embeddings"
+    __table_args__ = (
+        UniqueConstraint(
+            "capture_id",
+            "span_key",
+            "model",
+            name="uq_embeddings_capture_span_model",
+        ),
+        Index("ix_embeddings_status", "status"),
+        Index("ix_embeddings_status_heartbeat", "status", "heartbeat_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     capture_id: Mapped[str] = mapped_column(
@@ -243,7 +274,9 @@ class QueryHistoryRecord(Base):
 
 class HNSWMappingRecord(Base):
     __tablename__ = "hnsw_mapping"
-    __table_args__ = (UniqueConstraint("event_id", "span_key", name="uq_hnsw_event_span"),)
+    __table_args__ = (
+        UniqueConstraint("event_id", "span_key", name="uq_hnsw_event_span"),
+    )
 
     label: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     event_id: Mapped[str] = mapped_column(String(36), index=True)
