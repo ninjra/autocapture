@@ -4,8 +4,10 @@ version = "0.1.0"
 description = "High-performance local activity capture and recall pipeline"
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
-packages = [{ include = "autocapture", exclude = ["autocapture/_legacy/**"] }]
+packages = [{ include = "autocapture" }]
 include = ["autocapture/prompts/**/*.yaml", "autocapture/ui/web/**"]
+# Exclude files from the built distribution (moved from tool.poetry.packages[*].exclude)
+exclude = ["autocapture/_legacy/**"]
 
 [tool.poetry.scripts]
 autocapture = "autocapture.main:main"
