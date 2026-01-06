@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import hmac
 import sys
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional
 
@@ -16,6 +20,7 @@ from sqlalchemy import select
 
 from ..config import AppConfig, ProviderRoutingConfig
 from ..logging_utils import get_logger
+from ..observability.metrics import get_metrics_port
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
 from ..memory.entities import EntityResolver, SecretStore
@@ -70,6 +75,7 @@ class AnswerRequest(BaseModel):
     model: Optional[str] = None
     time_range: Optional[tuple[dt.datetime, dt.datetime]] = None
     filters: Optional[dict[str, list[str]]] = None
+    top_k: Optional[int] = Field(None, ge=1)
 
     @model_validator(mode="before")
     @classmethod
@@ -114,6 +120,41 @@ class SuggestRequest(BaseModel):
     q: str
 
 
+class _TokenBucket:
+    def __init__(self, tokens: float, updated_at: float) -> None:
+        self.tokens = tokens
+        self.updated_at = updated_at
+
+
+class _RateLimiter:
+    def __init__(self, rps: float, burst: int, max_entries: int = 10_000) -> None:
+        self._rps = rps
+        self._burst = burst
+        self._max_entries = max_entries
+        self._buckets: OrderedDict[str, _TokenBucket] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> tuple[bool, float]:
+        now = time.monotonic()
+        with self._lock:
+            bucket = self._buckets.get(key)
+            if bucket is None:
+                bucket = _TokenBucket(tokens=self._burst, updated_at=now)
+                self._buckets[key] = bucket
+            else:
+                elapsed = max(0.0, now - bucket.updated_at)
+                bucket.tokens = min(self._burst, bucket.tokens + elapsed * self._rps)
+                bucket.updated_at = now
+                self._buckets.move_to_end(key)
+            if len(self._buckets) > self._max_entries:
+                self._buckets.popitem(last=False)
+            if bucket.tokens >= 1.0:
+                bucket.tokens -= 1.0
+                return True, 0.0
+            retry_after = max(0.0, (1.0 - bucket.tokens) / self._rps)
+            return False, retry_after
+
+
 def create_app(
     config: AppConfig,
     db_manager: DatabaseManager | None = None,
@@ -143,6 +184,12 @@ def create_app(
             config.mode.google_oauth_client_id or "",
             config.mode.google_allowed_emails,
         )
+    rate_limiter = _RateLimiter(config.api.rate_limit_rps, config.api.rate_limit_burst)
+    rate_limited_paths = {
+        "/api/answer",
+        "/api/retrieve",
+        "/api/context-pack",
+    }
 
     base_dir = Path(__file__).resolve().parents[1]
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -165,6 +212,27 @@ def create_app(
                 log.warning("OIDC verification failed: {}", exc)
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
             return await call_next(request)
+    else:
+
+        @app.middleware("http")
+        async def api_key_middleware(request: Request, call_next):  # type: ignore[no-redef]
+            if request.url.path.startswith("/api/"):
+                _require_api_key(request, config)
+            return await call_next(request)
+
+    @app.middleware("http")
+    async def rate_limit_middleware(request: Request, call_next):  # type: ignore[no-redef]
+        if request.url.path in rate_limited_paths and request.method == "POST":
+            client_host = request.client.host if request.client else "unknown"
+            key = f"{client_host}:{request.url.path}"
+            allowed, retry_after = rate_limiter.allow(key)
+            if not allowed:
+                return JSONResponse(
+                    status_code=429,
+                    headers={"Retry-After": f"{int(retry_after) + 1}"},
+                    content={"detail": "Rate limit exceeded"},
+                )
+        return await call_next(request)
 
     @app.on_event("startup")
     async def startup() -> None:
@@ -172,7 +240,11 @@ def create_app(
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        return {"status": "ok", "mode": config.mode.mode}
+        return {
+            "status": "ok",
+            "mode": config.mode.mode,
+            "metrics_port": get_metrics_port() or config.observability.prometheus_port,
+        }
 
     @app.get("/")
     async def index() -> HTMLResponse:
@@ -186,6 +258,8 @@ def create_app(
 
     @app.post("/api/retrieve")
     def retrieve(request: RetrieveRequest) -> RetrieveResponse:
+        _validate_query(request.query, config)
+        k = _cap_k(request.k, config)
         _record_query_history(db, request.query)
         evidence, events = _build_evidence(
             retrieval,
@@ -194,7 +268,7 @@ def create_app(
             request.query,
             request.time_range,
             request.filters,
-            request.k,
+            k,
             sanitized=_resolve_bool(request.sanitize, config.privacy.sanitize_default),
         )
         event_map = {event.event_id: event for event in events}
@@ -209,6 +283,8 @@ def create_app(
 
     @app.post("/api/context-pack")
     def context_pack(request: ContextPackRequest) -> ContextPackResponse:
+        _validate_query(request.query, config)
+        k = _cap_k(request.k, config)
         sanitized = _resolve_bool(request.sanitize, config.privacy.sanitize_default)
         evidence, events = _build_evidence(
             retrieval,
@@ -217,7 +293,7 @@ def create_app(
             request.query,
             request.time_range,
             request.filters,
-            request.k,
+            k,
             sanitized=sanitized,
         )
         routing_data = _merge_routing(config.routing, request.routing)
@@ -249,6 +325,8 @@ def create_app(
             request.extractive_only, config.privacy.extractive_only_default
         )
         query_text = request.query or ""
+        _validate_query(query_text, config)
+        k = _cap_k(request.top_k or 12, config)
         _record_query_history(db, query_text)
         evidence, events = await asyncio.to_thread(
             _build_evidence,
@@ -258,7 +336,7 @@ def create_app(
             query_text,
             request.time_range,
             request.filters,
-            12,
+            k,
             sanitized,
         )
         routing_data = _merge_routing(config.routing, request.routing)
@@ -284,36 +362,50 @@ def create_app(
             system_prompt = prompt_registry.get(
                 "ANSWER_WITH_CONTEXT_PACK"
             ).system_prompt
-            answer_text = await provider.generate_answer(
-                system_prompt,
-                query_text,
-                pack.to_text(extractive_only=False),
-            )
-            citations = _extract_citations(answer_text)
-            if not _valid_citations(citations, evidence):
-                retry_prompt = (
-                    system_prompt
-                    + "\n\nYou must cite evidence IDs in the form [E1], [E2], etc. "
-                    "Only cite IDs that appear in the provided context pack."
-                )
+            try:
                 answer_text = await provider.generate_answer(
-                    retry_prompt,
+                    system_prompt,
                     query_text,
                     pack.to_text(extractive_only=False),
                 )
                 citations = _extract_citations(answer_text)
-            if not _valid_citations(citations, evidence):
+                if not _valid_citations(citations, evidence):
+                    retry_prompt = (
+                        system_prompt
+                        + "\n\nYou must cite evidence IDs in the form [E1], [E2], etc. "
+                        "Only cite IDs that appear in the provided context pack."
+                    )
+                    answer_text = await provider.generate_answer(
+                        retry_prompt,
+                        query_text,
+                        pack.to_text(extractive_only=False),
+                    )
+                    citations = _extract_citations(answer_text)
+                if not _valid_citations(citations, evidence):
+                    compressed = extractive_answer(evidence)
+                    answer_text = compressed.answer
+                    citations = compressed.citations
+                else:
+                    verifier = RulesVerifier()
+                    verifier.verify(
+                        [
+                            Claim(
+                                text=answer_text,
+                                evidence_ids=citations,
+                                entity_tokens=[],
+                            )
+                        ],
+                        {item.evidence_id for item in evidence},
+                        set(),
+                    )
+                log.info("LLM routed to {}", decision.llm_provider)
+            except Exception as exc:
+                log.warning(
+                    "LLM unavailable; falling back to extractive answer: {}", exc
+                )
                 compressed = extractive_answer(evidence)
                 answer_text = compressed.answer
                 citations = compressed.citations
-            else:
-                verifier = RulesVerifier()
-                verifier.verify(
-                    [Claim(text=answer_text, evidence_ids=citations, entity_tokens=[])],
-                    {item.evidence_id for item in evidence},
-                    set(),
-                )
-            log.info("LLM routed to {}", decision.llm_provider)
         latency = (dt.datetime.now(dt.timezone.utc) - start).total_seconds() * 1000
         return AnswerResponse(
             answer=answer_text,
@@ -325,6 +417,8 @@ def create_app(
     @app.post("/api/suggest")
     def suggest(request: SuggestRequest) -> list[dict[str, Any]]:
         query = request.q.strip()
+        if query:
+            _validate_query(query, config)
         if not query:
             return []
         normalized = _normalize_query(query)
@@ -384,6 +478,32 @@ def create_app(
 
 def _resolve_bool(value: Optional[bool], default: bool) -> bool:
     return default if value is None else value
+
+
+def _require_api_key(request: Request, config: AppConfig) -> None:
+    if not config.api.require_api_key:
+        return
+    key = request.headers.get("X-API-Key")
+    auth = request.headers.get("Authorization", "")
+    if not key and auth.startswith("Bearer "):
+        key = auth.split(" ", 1)[1]
+    if not key or not config.api.api_key:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not hmac.compare_digest(key, config.api.api_key):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _validate_query(query: str, config: AppConfig) -> None:
+    if not query or not query.strip():
+        raise HTTPException(status_code=422, detail="Query cannot be empty")
+    if len(query) > config.api.max_query_chars:
+        raise HTTPException(status_code=413, detail="Query too long")
+
+
+def _cap_k(k: int, config: AppConfig) -> int:
+    if k > config.api.max_context_k:
+        raise HTTPException(status_code=422, detail="k exceeds maximum allowed")
+    return k
 
 
 def _model_dump(model: Any) -> dict[str, Any]:

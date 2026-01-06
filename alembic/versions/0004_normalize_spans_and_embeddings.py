@@ -79,7 +79,9 @@ def upgrade() -> None:
                             "start": int(span.get("start", 0)),
                             "end": int(span.get("end", 0)),
                             "text": str(span.get("text", "")),
-                            "confidence": float(span.get("conf", span.get("confidence", 0.0))),
+                            "confidence": float(
+                                span.get("conf", span.get("confidence", 0.0))
+                            ),
                             "bbox": span.get("bbox", []),
                         }
                     )
@@ -150,18 +152,13 @@ def upgrade() -> None:
                 ondelete="CASCADE",
             )
 
-    if _has_column(inspector, "hnsw_mapping", "span_id"):
-        with op.batch_alter_table("hnsw_mapping") as batch:
-            batch.drop_column("span_id")
-
 
 def downgrade() -> None:
-    with op.batch_alter_table("hnsw_mapping") as batch:
-        batch.add_column(sa.Column("span_id", sa.Integer(), nullable=True))
-
     with op.batch_alter_table("embeddings") as batch:
         batch.drop_constraint("fk_embeddings_capture_span", type_="foreignkey")
-        batch.alter_column("span_key", existing_type=sa.String(length=64), nullable=True)
+        batch.alter_column(
+            "span_key", existing_type=sa.String(length=64), nullable=True
+        )
         batch.add_column(sa.Column("span_id", sa.Integer(), nullable=True))
 
     with op.batch_alter_table("events") as batch:

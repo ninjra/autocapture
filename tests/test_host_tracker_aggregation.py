@@ -67,10 +67,13 @@ def test_aggregation_flush_and_session() -> None:
     assert any(row.kind == "foreground_change" for row in rows)
 
     rows = agg.handle_event(
-        ClipboardChangeEvent(ts_ms=1600, sequence=3, has_text=True, has_image=False),
+        ClipboardChangeEvent(ts_ms=1600, has_text=True, has_image=False, kind="text"),
         now_ms=1600,
     )
     assert rows and rows[0].kind == "clipboard_change"
+    payload = _payload(rows[0])
+    assert payload["clipboard_kind"] == "text"
+    assert "sequence" not in payload
 
     rows = agg.handle_tick(now_ms=2000)
     assert any(row.kind == "session_end" for row in rows)

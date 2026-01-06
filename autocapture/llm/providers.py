@@ -8,6 +8,13 @@ from typing import Iterable, Sequence
 import httpx
 
 from ..logging_utils import get_logger
+from ..resilience import (
+    CircuitBreaker,
+    RetryPolicy,
+    is_retryable_exception,
+    is_retryable_http_status,
+    retry_async,
+)
 
 
 @dataclass(frozen=True)
@@ -40,23 +47,38 @@ class LLMProvider:
         raise NotImplementedError
 
 
+def _format_evidence_message(context_pack_text: str) -> str:
+    return f"EVIDENCE_JSON:\n```json\n{context_pack_text}\n```"
+
+
+def _is_retryable_http_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return is_retryable_http_status(exc.response.status_code)
+    return is_retryable_exception(exc)
+
+
 class OllamaProvider(LLMProvider):
     """Use a local Ollama instance for answers."""
 
-    def __init__(self, base_url: str, model: str) -> None:
+    def __init__(
+        self, base_url: str, model: str, *, timeout_s: float, retries: int
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._log = get_logger("llm.ollama")
+        self._timeout = timeout_s
+        self._retry_policy = RetryPolicy(max_retries=retries)
+        self._breaker = CircuitBreaker()
 
     async def generate_answer(
         self, system_prompt: str, query: str, context_pack_text: str
     ) -> str:
+        if not self._breaker.allow():
+            raise RuntimeError("LLM circuit open")
         try:
             return await self._generate_openai(system_prompt, query, context_pack_text)
-        except httpx.HTTPError as exc:
+        except Exception as exc:
             self._log.warning("Ollama OpenAI endpoint failed: {}", exc)
-        except KeyError as exc:
-            self._log.warning("Unexpected Ollama OpenAI response: {}", exc)
         return await self._generate_native(system_prompt, query, context_pack_text)
 
     async def _generate_openai(
@@ -67,17 +89,34 @@ class OllamaProvider(LLMProvider):
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": query},
-                {"role": "user", "content": context_pack_text},
+                {
+                    "role": "user",
+                    "content": _format_evidence_message(context_pack_text),
+                },
             ],
             "temperature": 0.2,
         }
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.post(
-                f"{self._base_url}/v1/chat/completions", json=payload
+
+        async def _request() -> str:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    f"{self._base_url}/v1/chat/completions", json=payload
+                )
+                response.raise_for_status()
+                data = response.json()
+            return data["choices"][0]["message"]["content"].strip()
+
+        try:
+            result = await retry_async(
+                _request,
+                policy=self._retry_policy,
+                is_retryable=_is_retryable_http_error,
             )
-            response.raise_for_status()
-            data = response.json()
-        return data["choices"][0]["message"]["content"].strip()
+            self._breaker.record_success()
+            return result
+        except Exception as exc:
+            self._breaker.record_failure(exc)
+            raise
 
     async def _generate_native(
         self, system: str, query: str, context_pack_text: str
@@ -87,28 +126,52 @@ class OllamaProvider(LLMProvider):
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": query},
-                {"role": "user", "content": context_pack_text},
+                {
+                    "role": "user",
+                    "content": _format_evidence_message(context_pack_text),
+                },
             ],
             "stream": False,
         }
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(f"{self._base_url}/api/chat", json=payload)
-            response.raise_for_status()
-            data = response.json()
-        return data["message"]["content"].strip()
+
+        async def _request() -> str:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(f"{self._base_url}/api/chat", json=payload)
+                response.raise_for_status()
+                data = response.json()
+            return data["message"]["content"].strip()
+
+        try:
+            result = await retry_async(
+                _request,
+                policy=self._retry_policy,
+                is_retryable=_is_retryable_http_error,
+            )
+            self._breaker.record_success()
+            return result
+        except Exception as exc:
+            self._breaker.record_failure(exc)
+            raise
 
 
 class OpenAIProvider(LLMProvider):
     """OpenAI Responses API provider."""
 
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(
+        self, api_key: str, model: str, *, timeout_s: float, retries: int
+    ) -> None:
         self._api_key = api_key
         self._model = model
         self._log = get_logger("llm.openai")
+        self._timeout = timeout_s
+        self._retry_policy = RetryPolicy(max_retries=retries)
+        self._breaker = CircuitBreaker()
 
     async def generate_answer(
         self, system_prompt: str, query: str, context_pack_text: str
     ) -> str:
+        if not self._breaker.allow():
+            raise RuntimeError("LLM circuit open")
         payload = {
             "model": self._model,
             "input": [
@@ -122,7 +185,12 @@ class OpenAIProvider(LLMProvider):
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": context_pack_text}],
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": _format_evidence_message(context_pack_text),
+                        }
+                    ],
                 },
             ],
             "temperature": 0.2,
@@ -131,14 +199,28 @@ class OpenAIProvider(LLMProvider):
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                "https://api.openai.com/v1/responses",
-                json=payload,
-                headers=headers,
+
+        async def _request() -> dict:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/responses",
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+                return response.json()
+
+        try:
+            data = await retry_async(
+                _request,
+                policy=self._retry_policy,
+                is_retryable=_is_retryable_http_error,
             )
-            response.raise_for_status()
-            data = response.json()
+            self._breaker.record_success()
+        except Exception as exc:
+            self._breaker.record_failure(exc)
+            self._log.warning("OpenAI request failed: {}", exc)
+            raise
         return extract_response_text(data)
 
 

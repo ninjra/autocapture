@@ -6,7 +6,7 @@ A local-first desktop recall app for Windows 11 that runs as a single binary: tr
 
 - **Tray + local web UI** with a lightweight search popup and dashboard.
 - **Local capture + OCR** using DXCam (with MSS fallback) and on-device OCR.
-- **Embedded search** with local vector indexes (HNSW) and fast embeddings.
+- **Embedded search** with Qdrant-backed vector indexes and fast embeddings (falls back to lexical-only retrieval if Qdrant is unavailable).
 - **Private by default** with local storage and optional cloud LLM fallback.
 
 ## Repository Layout

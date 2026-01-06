@@ -5,7 +5,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "0003_indexes_and_uniques"
-down_revision = "0002_worker_leases_and_hnsw_unique"
+down_revision = "0002_worker_leases"
 branch_labels = None
 depends_on = None
 

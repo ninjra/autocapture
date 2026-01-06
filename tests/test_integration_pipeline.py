@@ -7,7 +7,7 @@ from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.memory.router import RoutingDecision
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import EventRecord, OCRSpanRecord
+from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 
 
 class MockLLM:
@@ -25,6 +25,19 @@ def test_retrieve_context_pack_answer(monkeypatch, tmp_path: Path) -> None:
     db = DatabaseManager(config.database)
 
     with db.session() as session:
+        session.add(
+            CaptureRecord(
+                id="event-1",
+                captured_at=dt.datetime.now(dt.timezone.utc),
+                image_path=None,
+                foreground_process="Notion",
+                foreground_window="Notes",
+                monitor_id="m1",
+                is_fullscreen=False,
+                ocr_status="done",
+            )
+        )
+        session.flush()
         session.add(
             EventRecord(
                 event_id="event-1",
@@ -69,4 +82,4 @@ def test_retrieve_context_pack_answer(monkeypatch, tmp_path: Path) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert "Answer based on evidence" in payload["answer"]
-    assert payload["used_context_pack"]["version"] == "ac_context_pack_v1"
+    assert payload["used_context_pack"]["version"] == 1

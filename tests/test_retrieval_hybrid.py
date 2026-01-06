@@ -6,7 +6,7 @@ from pathlib import Path
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.memory.retrieval import RetrievalService
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import EventRecord, OCRSpanRecord
+from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 from autocapture.indexing.lexical_index import LexicalHit
 from autocapture.indexing.vector_index import VectorHit
 
@@ -34,7 +34,9 @@ class FakeVector:
     def __init__(self, hits):
         self._hits = hits
 
-    def search(self, vector, limit=20):
+    def search(
+        self, vector, limit=20, *, filters=None, embedding_model: str | None = None
+    ):
         return self._hits
 
 
@@ -74,6 +76,31 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
         tags={},
     )
     with db.session() as session:
+        session.add(
+            CaptureRecord(
+                id="EOLD",
+                captured_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=5),
+                image_path=None,
+                foreground_process="Notion",
+                foreground_window="Roadmap",
+                monitor_id="m1",
+                is_fullscreen=False,
+                ocr_status="done",
+            )
+        )
+        session.add(
+            CaptureRecord(
+                id="ENEW",
+                captured_at=dt.datetime.now(dt.timezone.utc),
+                image_path=None,
+                foreground_process="Slack",
+                foreground_window="Chat",
+                monitor_id="m1",
+                is_fullscreen=False,
+                ocr_status="done",
+            )
+        )
+        session.flush()
         session.add(old_event)
         session.add(new_event)
         session.add(

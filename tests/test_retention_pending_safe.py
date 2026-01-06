@@ -19,8 +19,10 @@ def test_retention_preserves_pending(tmp_path: Path) -> None:
     db = DatabaseManager(DatabaseConfig(url=f"sqlite:///{db_path}"))
     now = dt.datetime.now(dt.timezone.utc)
     pending_path = tmp_path / "media" / "pending.webp"
+    processing_path = tmp_path / "media" / "processing.webp"
     done_path = tmp_path / "media" / "done.webp"
     _write_dummy(pending_path)
+    _write_dummy(processing_path)
     _write_dummy(done_path)
 
     def _seed(session) -> None:
@@ -34,6 +36,18 @@ def test_retention_preserves_pending(tmp_path: Path) -> None:
                 monitor_id="m1",
                 is_fullscreen=False,
                 ocr_status="pending",
+            )
+        )
+        session.add(
+            CaptureRecord(
+                id="processing-1",
+                captured_at=now - dt.timedelta(days=3),
+                image_path=str(processing_path),
+                foreground_process="app",
+                foreground_window="win",
+                monitor_id="m1",
+                is_fullscreen=False,
+                ocr_status="processing",
             )
         )
         session.add(
@@ -60,4 +74,5 @@ def test_retention_preserves_pending(tmp_path: Path) -> None:
     retention.enforce()
 
     assert pending_path.exists()
+    assert processing_path.exists()
     assert not done_path.exists()

@@ -1,23 +1,39 @@
-"""Vector index utilities (Qdrant or local HNSW)."""
+"""Vector index utilities (Qdrant backend only)."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-import time
-from typing import Iterable, Optional
+import threading
+from typing import Optional, Protocol
 
 from qdrant_client import QdrantClient
-from qdrant_client.http.models import Distance, VectorParams, PointStruct
-
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from qdrant_client.http.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchAny,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
 
 from ..config import AppConfig
-from ..fs_utils import file_lock, safe_replace
 from ..logging_utils import get_logger
-from ..storage.database import DatabaseManager
-from ..storage.models import HNSWMappingRecord
+from ..observability.metrics import vector_search_failures_total
+from ..resilience import (
+    CircuitBreaker,
+    RetryPolicy,
+    is_retryable_exception,
+    retry_sync,
+)
+
+
+class IndexUnavailable(RuntimeError):
+    pass
+
+
+class IndexMisconfigured(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -27,263 +43,237 @@ class VectorHit:
     score: float
 
 
-class QdrantIndex:
-    def __init__(self, config: AppConfig, dim: int) -> None:
+@dataclass(frozen=True)
+class SpanEmbeddingUpsert:
+    capture_id: str
+    span_key: str
+    vector: list[float]
+    payload: dict
+    embedding_model: str
+
+
+class VectorBackend(Protocol):
+    def upsert_spans(self, upserts: list[SpanEmbeddingUpsert]) -> None: ...
+
+    def search(
+        self,
+        query_vector: list[float],
+        k: int,
+        *,
+        filters: dict | None = None,
+        embedding_model: str,
+    ) -> list[VectorHit]: ...
+
+
+class QdrantBackend:
+    def __init__(
+        self,
+        config: AppConfig,
+        dim: int,
+        *,
+        retry_policy: RetryPolicy | None = None,
+        breaker: CircuitBreaker | None = None,
+    ) -> None:
         self._config = config
         self._client = QdrantClient(url=config.qdrant.url, timeout=2.0)
         self._collection = config.qdrant.collection_name
         self._dim = dim
         self._log = get_logger("index.qdrant")
-        self._ensure_collection()
+        self._retry_policy = retry_policy or RetryPolicy()
+        self._breaker = breaker or CircuitBreaker()
+        self._collection_ready = False
+        self._collection_lock = threading.Lock()
+
+    def allow(self) -> bool:
+        return self._breaker.allow()
+
+    def _run_resilient(self, fn):
+        if not self._breaker.allow():
+            raise IndexUnavailable("vector index unavailable (circuit open)")
+        try:
+            result = retry_sync(
+                fn,
+                policy=self._retry_policy,
+                is_retryable=is_retryable_exception,
+            )
+        except Exception as exc:
+            self._breaker.record_failure(exc)
+            if is_retryable_exception(exc):
+                raise IndexUnavailable("vector index unavailable") from exc
+            raise
+        self._breaker.record_success()
+        return result
 
     def _ensure_collection(self) -> None:
-        if self._client.collection_exists(self._collection):
+        if self._collection_ready:
             return
-        distance = getattr(
-            Distance, self._config.qdrant.distance.upper(), Distance.COSINE
-        )
-        self._client.create_collection(
-            self._collection,
-            vectors_config=VectorParams(size=self._dim, distance=distance),
-        )
+        with self._collection_lock:
+            if self._collection_ready:
+                return
 
-    def upsert_spans(self, items: Iterable[tuple[str, str, list[float], dict]]) -> None:
-        points = []
-        for event_id, span_key, vector, payload in items:
-            point_id = f"{event_id}:{span_key}"
-            points.append(PointStruct(id=point_id, vector=vector, payload=payload))
-        if points:
+            def _ensure() -> None:
+                if not self._client.collection_exists(self._collection):
+                    distance = getattr(
+                        Distance, self._config.qdrant.distance.upper(), Distance.COSINE
+                    )
+                    self._client.create_collection(
+                        self._collection,
+                        vectors_config=VectorParams(size=self._dim, distance=distance),
+                    )
+                    return
+                info = self._client.get_collection(self._collection)
+                vectors = info.config.params.vectors
+                size = None
+                if isinstance(vectors, VectorParams):
+                    size = vectors.size
+                elif isinstance(vectors, dict) and vectors:
+                    first = next(iter(vectors.values()))
+                    size = getattr(first, "size", None)
+                if size is not None and int(size) != int(self._dim):
+                    raise IndexMisconfigured(
+                        "Collection dim mismatch; change collection_name or delete collection."
+                    )
+
+            self._run_resilient(_ensure)
+            self._collection_ready = True
+
+    def upsert_spans(self, upserts: list[SpanEmbeddingUpsert]) -> None:
+        if not upserts:
+            return
+        if not self._breaker.allow():
+            raise IndexUnavailable("vector index unavailable (circuit open)")
+        self._ensure_collection()
+        points: list[PointStruct] = []
+        for item in upserts:
+            point_id = f"{item.embedding_model}:{item.capture_id}:{item.span_key}"
+            payload = dict(item.payload)
+            payload.update(
+                {
+                    "capture_id": item.capture_id,
+                    "span_key": item.span_key,
+                    "embedding_model": item.embedding_model,
+                }
+            )
+            points.append(PointStruct(id=point_id, vector=item.vector, payload=payload))
+        if not points:
+            return
+
+        def _upsert() -> None:
             self._client.upsert(self._collection, points=points)
 
-    def search(self, vector: list[float], limit: int = 20) -> list[VectorHit]:
-        hits = self._client.search(
-            collection_name=self._collection,
-            query_vector=vector,
-            limit=limit,
-            with_payload=True,
-        )
+        self._run_resilient(_upsert)
+
+    def search(
+        self,
+        query_vector: list[float],
+        k: int,
+        *,
+        filters: dict | None = None,
+        embedding_model: str,
+    ) -> list[VectorHit]:
+        if not self._breaker.allow():
+            raise IndexUnavailable("vector index unavailable (circuit open)")
+        self._ensure_collection()
+        must_conditions = [
+            FieldCondition(
+                key="embedding_model",
+                match=MatchValue(value=embedding_model),
+            )
+        ]
+        if filters:
+            for key, value in filters.items():
+                if value is None:
+                    continue
+                if isinstance(value, list):
+                    if value:
+                        must_conditions.append(
+                            FieldCondition(key=key, match=MatchAny(any=value))
+                        )
+                else:
+                    must_conditions.append(
+                        FieldCondition(key=key, match=MatchValue(value=value))
+                    )
+        filter_obj = Filter(must=must_conditions)
+
+        def _search():
+            return self._client.search(
+                collection_name=self._collection,
+                query_vector=query_vector,
+                limit=k,
+                with_payload=True,
+                query_filter=filter_obj,
+            )
+
+        hits = self._run_resilient(_search)
         results: list[VectorHit] = []
         for hit in hits:
             payload = hit.payload or {}
+            capture_id = str(payload.get("capture_id") or payload.get("event_id") or "")
+            span_key = str(payload.get("span_key") or "")
+            if not capture_id or not span_key:
+                continue
             results.append(
                 VectorHit(
-                    event_id=str(payload.get("event_id", "")),
-                    span_key=str(payload.get("span_key", "")),
+                    event_id=capture_id,
+                    span_key=span_key,
                     score=float(hit.score or 0.0),
                 )
             )
         return results
 
 
-class HNSWIndex:
-    def __init__(self, config: AppConfig, db: DatabaseManager, dim: int) -> None:
-        self._config = config
-        self._db = db
-        self._dim = dim
-        self._log = get_logger("index.hnsw")
-        self._index_path = Path(config.worker.data_dir) / "embeddings" / "hnsw.index"
-        self._lock_path = self._index_path.with_suffix(".lock")
-        self._index_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = None
-        self._index = None
-        self._index_mtime: float | None = None
-        self._last_mtime_check = 0.0
-        self._load()
-
-    def _load(self) -> None:
-        import hnswlib  # type: ignore
-        import threading
-
-        self._lock = threading.Lock()
-        index = hnswlib.Index(space="cosine", dim=self._dim)
-        if self._index_path.exists():
-            index.load_index(str(self._index_path))
-            self._index_mtime = self._index_path.stat().st_mtime
-        else:
-            index.init_index(
-                max_elements=200000,
-                ef_construction=200,
-                M=16,
-                allow_replace_deleted=True,
-            )
-        index.set_ef(50)
-        self._index = index
-
-    def _ensure_capacity(self, count: int) -> None:
-        if self._index is None:
-            return
-        current = self._index.get_current_count()
-        max_elements = self._index.get_max_elements()
-        if current + count >= max_elements:
-            self._index.resize_index(max_elements + max(10000, count * 2))
-
-    def upsert_spans(self, items: Iterable[tuple[str, str, list[float], dict]]) -> None:
-        if self._index is None or self._lock is None:
-            return
-        items_list = list(items)
-        if not items_list:
-            return
-        mapping_records = []
-        vectors = []
-
-        def _persist(session) -> None:
-            for event_id, span_key, vector, payload in items_list:
-                mapping = (
-                    session.execute(
-                        select(HNSWMappingRecord)
-                        .where(HNSWMappingRecord.event_id == event_id)
-                        .where(HNSWMappingRecord.span_key == span_key)
-                    )
-                    .scalars()
-                    .first()
-                )
-                if mapping is None:
-                    mapping = HNSWMappingRecord(
-                        event_id=event_id,
-                        span_key=span_key,
-                    )
-                    with session.begin_nested():
-                        session.add(mapping)
-                        try:
-                            session.flush()
-                        except IntegrityError:
-                            session.rollback()
-                            mapping = (
-                                session.execute(
-                                    select(HNSWMappingRecord)
-                                    .where(HNSWMappingRecord.event_id == event_id)
-                                    .where(HNSWMappingRecord.span_key == span_key)
-                                )
-                                .scalars()
-                                .first()
-                            )
-                            if mapping is None:
-                                raise
-                mapping_records.append(mapping)
-                vectors.append(vector)
-
-        self._db.transaction(_persist)
-
-        labels = [record.label for record in mapping_records if record is not None]
-        if not labels:
-            return
-        with self._lock:
-            existing_labels = set(self._index.get_ids_list())
-            self._ensure_capacity(len(labels))
-            for label in labels:
-                if label in existing_labels:
-                    self._index.mark_deleted(label)
-            self._index.add_items(vectors, labels, replace_deleted=True)
-            self._save_index()
-
-    def _save_index(self) -> None:
-        if self._index is None:
-            return
-        temp_path = self._index_path.with_suffix(".tmp")
-        with file_lock(self._lock_path):
-            self._index.save_index(str(temp_path))
-            safe_replace(temp_path, self._index_path)
-            self._index_mtime = self._index_path.stat().st_mtime
-
-    def _maybe_reload(self) -> None:
-        if not self._index_path.exists():
-            return
-        now = time.monotonic()
-        if now - self._last_mtime_check < 1.0:
-            return
-        self._last_mtime_check = now
-        try:
-            current_mtime = self._index_path.stat().st_mtime
-        except FileNotFoundError:
-            return
-        if self._index_mtime is not None and current_mtime <= self._index_mtime:
-            return
-        try:
-            import hnswlib  # type: ignore
-
-            with file_lock(self._lock_path):
-                new_index = hnswlib.Index(space="cosine", dim=self._dim)
-                new_index.load_index(str(self._index_path))
-                new_index.set_ef(50)
-            with self._lock:
-                self._index = new_index
-                self._index_mtime = current_mtime
-                self._log.info("Reloaded HNSW index from disk")
-        except Exception as exc:
-            self._log.warning("Failed to reload HNSW index: {}", exc)
-
-    def search(self, vector: list[float], limit: int = 20) -> list[VectorHit]:
-        if self._index is None or self._lock is None:
-            return []
-        self._maybe_reload()
-        current = self._index.get_current_count()
-        if current == 0:
-            return []
-        k = min(limit, current)
-        with self._lock:
-            labels, distances = self._index.knn_query([vector], k=k)
-        label_list = (
-            labels[0].tolist() if hasattr(labels[0], "tolist") else list(labels[0])
-        )
-        dist_list = (
-            distances[0].tolist()
-            if hasattr(distances[0], "tolist")
-            else list(distances[0])
-        )
-        if not label_list:
-            return []
-        with self._db.session() as session:
-            mappings = (
-                session.execute(
-                    select(HNSWMappingRecord).where(
-                        HNSWMappingRecord.label.in_(label_list)
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        mapping_by_label = {m.label: m for m in mappings}
-        hits: list[VectorHit] = []
-        for label, distance in zip(label_list, dist_list):
-            mapping = mapping_by_label.get(label)
-            if not mapping:
-                continue
-            score = 1.0 - float(distance)
-            hits.append(
-                VectorHit(
-                    event_id=mapping.event_id, span_key=mapping.span_key, score=score
-                )
-            )
-        return hits
-
-
 class VectorIndex:
-    def __init__(self, config: AppConfig, db: DatabaseManager, dim: int) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        dim: int,
+        *,
+        backend: Optional[VectorBackend] = None,
+    ) -> None:
         self._config = config
-        self._db = db
         self._dim = dim
         self._log = get_logger("index.vector")
-        self._backend: Optional[object] = None
-        self._select_backend()
-
-    def _select_backend(self) -> None:
-        try:
-            qdrant = QdrantIndex(self._config, self._dim)
-            _ = qdrant.search([0.0] * self._dim, limit=1)
-            self._backend = qdrant
+        self._backend: Optional[VectorBackend] = backend
+        if self._backend is None:
+            self._backend = QdrantBackend(config, dim)
             self._log.info("Vector index: Qdrant")
-            return
-        except Exception as exc:
-            self._log.warning("Qdrant unavailable; falling back to HNSW: {}", exc)
-        self._backend = HNSWIndex(self._config, self._db, self._dim)
-        self._log.info("Vector index: HNSW")
 
-    def upsert_spans(self, items: Iterable[tuple[str, str, list[float], dict]]) -> None:
+    def _backend_allows(self) -> bool:
+        backend = self._backend
+        if backend is None:
+            return False
+        allow = getattr(backend, "allow", None)
+        return bool(allow() if callable(allow) else True)
+
+    def upsert_spans(self, upserts: list[SpanEmbeddingUpsert]) -> None:
         if self._backend is None:
             return
-        self._backend.upsert_spans(items)
+        if not self._backend_allows():
+            raise IndexUnavailable("vector index unavailable (circuit open)")
+        self._backend.upsert_spans(upserts)
 
-    def search(self, vector: list[float], limit: int = 20) -> list[VectorHit]:
+    def search(
+        self,
+        query_vector: list[float],
+        k: int,
+        *,
+        filters: dict | None = None,
+        embedding_model: str | None = None,
+    ) -> list[VectorHit]:
         if self._backend is None:
             return []
-        return self._backend.search(vector, limit=limit)
+        if not self._backend_allows():
+            vector_search_failures_total.inc()
+            return []
+        model = embedding_model or self._config.embeddings.model
+        try:
+            return self._backend.search(
+                query_vector,
+                k,
+                filters=filters,
+                embedding_model=model,
+            )
+        except IndexUnavailable:
+            self._log.warning("Vector index unavailable; returning empty results")
+            vector_search_failures_total.inc()
+            return []

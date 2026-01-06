@@ -9,7 +9,7 @@ from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.memory.router import RoutingDecision
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import EventRecord, OCRSpanRecord
+from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 
 
 class BadCitationLLM:
@@ -28,6 +28,19 @@ def test_answer_citations_subset(tmp_path: Path, monkeypatch) -> None:
     db = DatabaseManager(config.database)
 
     with db.session() as session:
+        session.add(
+            CaptureRecord(
+                id="event-1",
+                captured_at=dt.datetime.now(dt.timezone.utc),
+                image_path=None,
+                foreground_process="Docs",
+                foreground_window="Notes",
+                monitor_id="m1",
+                is_fullscreen=False,
+                ocr_status="done",
+            )
+        )
+        session.flush()
         session.add(
             EventRecord(
                 event_id="event-1",

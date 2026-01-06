@@ -8,8 +8,16 @@ mode:
   google_oauth_client_secret: null
   google_allowed_emails: []
 api:
-  port: 5273
   bind_host: "127.0.0.1"
+  port: 8008
+  require_api_key: false
+  api_key: null
+  rate_limit_rps: 2.0
+  rate_limit_burst: 5
+  max_page_size: 200
+  default_page_size: 50
+  max_query_chars: 2000
+  max_context_k: 50
 privacy:
   cloud_enabled: false
   sanitize_default: true
@@ -29,6 +37,8 @@ llm:
   ollama_model: "llama3"
   openai_api_key: null
   openai_model: "gpt-4.1-mini"
+  timeout_s: 60.0
+  retries: 3
 promptops:
   enabled: false
   schedule_cron: "0 6 * * 1"
@@ -40,6 +50,9 @@ capture:
     min_interval_ms: 500
     idle_grace_ms: 1500
     duplicate_threshold: 0.02
+    duplicate_window_s: 10.0
+    duplicate_max_items: 16
+    duplicate_pixel_threshold: 2.5
     fps_soft_cap: 4.0
     block_fullscreen: true
   staging_dir: "D:/autocapture/staging"
@@ -98,6 +111,9 @@ encryption:
   key_name: "autocapture/nas-aes-key"
   chunk_size: 4194304
 observability:
+  prometheus_bind_host: "127.0.0.1"
   prometheus_port: 9005
+  prometheus_port_fallbacks: 10
+  prometheus_fail_fast: false
   grafana_url: "http://tnas:3000"
   enable_gpu_stats: true

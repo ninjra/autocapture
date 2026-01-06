@@ -12,7 +12,7 @@ from sqlalchemy import select, update
 from ..config import AppConfig
 from ..embeddings.service import EmbeddingService
 from ..indexing.lexical_index import LexicalIndex
-from ..indexing.vector_index import VectorIndex
+from ..indexing.vector_index import IndexUnavailable, SpanEmbeddingUpsert, VectorIndex
 from ..logging_utils import get_logger
 from ..observability.metrics import embedding_latency_ms, worker_errors_total
 from ..storage.database import DatabaseManager
@@ -31,12 +31,11 @@ class EmbeddingWorker:
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.embedding")
         self._embedder = embedder or EmbeddingService(config.embeddings)
-        self._vector_index = vector_index or VectorIndex(
-            config, self._db, self._embedder.dim
-        )
+        self._vector_index = vector_index or VectorIndex(config, self._embedder.dim)
         self._lexical_index = LexicalIndex(self._db)
         self._lease_timeout_s = config.worker.embedding_lease_ms / 1000
         self._max_attempts = config.worker.embedding_max_attempts
+        self._index_backoff_s = 0.0
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         poll_interval = self._config.worker.poll_interval_s
@@ -204,7 +203,7 @@ class EmbeddingWorker:
                 return 0
 
         vectors_iter = iter(vectors)
-        upserts = []
+        upserts: list[SpanEmbeddingUpsert] = []
 
         def _prepare(session) -> None:
             for embedding, span, event in span_rows:
@@ -232,13 +231,38 @@ class EmbeddingWorker:
                     "app_name": event.app_name,
                     "domain": event.domain or "",
                 }
-                upserts.append((event.event_id, record.span_key, vector, payload))
+                upserts.append(
+                    SpanEmbeddingUpsert(
+                        capture_id=event.event_id,
+                        span_key=record.span_key,
+                        vector=vector,
+                        payload=payload,
+                        embedding_model=self._embedder.model_name,
+                    )
+                )
 
         self._db.transaction(_prepare)
 
         if upserts:
             try:
                 self._vector_index.upsert_spans(upserts)
+                self._index_backoff_s = 0.0
+            except IndexUnavailable as exc:
+                self._log.warning("Vector index unavailable: {}", exc)
+                worker_errors_total.labels("embedding").inc()
+                error = str(exc)
+                self._index_backoff_s = min(5.0, self._index_backoff_s * 2 or 0.5)
+                time.sleep(self._index_backoff_s)
+
+                def _mark_pending(session) -> None:
+                    session.execute(
+                        update(EmbeddingRecord)
+                        .where(EmbeddingRecord.id.in_(embedding_ids))
+                        .values(status="index_pending", last_error=error)
+                    )
+
+                self._db.transaction(_mark_pending)
+                return 0
             except Exception as exc:
                 self._log.warning("Span indexing failed: {}", exc)
                 worker_errors_total.labels("embedding").inc()

@@ -45,6 +45,8 @@ class RetentionManager:
         )
         removed = 0
 
+        paths: list[Path] = []
+
         def _prune(session) -> None:
             nonlocal removed
             stmt = (
@@ -55,13 +57,12 @@ class RetentionManager:
             )
             for event in session.scalars(stmt):
                 if event.screenshot_path:
-                    path = Path(event.screenshot_path)
-                    if path.exists():
-                        safe_unlink(path)
+                    paths.append(Path(event.screenshot_path))
                 event.screenshot_path = None
                 removed += 1
 
         self._db.transaction(_prune)
+        self._delete_files(paths)
         if removed:
             self._log.info("Pruned {} screenshots beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
@@ -77,6 +78,8 @@ class RetentionManager:
         )
         removed = 0
 
+        paths: list[Path] = []
+
         def _prune(session) -> None:
             nonlocal removed
             stmt = (
@@ -89,9 +92,7 @@ class RetentionManager:
             )
             for capture in session.scalars(stmt):
                 if capture.image_path:
-                    path = Path(capture.image_path)
-                    if path.exists():
-                        safe_unlink(path)
+                    paths.append(Path(capture.image_path))
                     session.query(EventRecord).filter(
                         EventRecord.screenshot_path == capture.image_path
                     ).update({EventRecord.screenshot_path: None})
@@ -99,6 +100,7 @@ class RetentionManager:
                 removed += 1
 
         self._db.transaction(_prune)
+        self._delete_files(paths)
         if removed:
             self._log.info("Pruned {} ROI images beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
@@ -110,6 +112,8 @@ class RetentionManager:
         )
         removed = 0
         from .models import SegmentRecord
+
+        paths: list[Path] = []
 
         def _prune(session) -> None:
             nonlocal removed
@@ -123,13 +127,12 @@ class RetentionManager:
             )
             for segment in session.scalars(stmt):
                 if segment.video_path:
-                    path = Path(segment.video_path)
-                    if path.exists():
-                        safe_unlink(path)
+                    paths.append(Path(segment.video_path))
                 segment.video_path = None
                 removed += 1
 
         self._db.transaction(_prune)
+        self._delete_files(paths)
         if removed:
             self._log.info("Pruned {} videos beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
@@ -148,6 +151,8 @@ class RetentionManager:
             minutes=self._retention_config.protect_recent_minutes
         )
 
+        paths: list[Path] = []
+
         def _prune(session) -> None:
             nonlocal removed
             captures = (
@@ -164,9 +169,7 @@ class RetentionManager:
             )
             for capture in captures:
                 if capture.image_path:
-                    path = Path(capture.image_path)
-                    if path.exists():
-                        safe_unlink(path)
+                    paths.append(Path(capture.image_path))
                     session.query(EventRecord).filter(
                         EventRecord.screenshot_path == capture.image_path
                     ).update({EventRecord.screenshot_path: None})
@@ -176,10 +179,19 @@ class RetentionManager:
                     break
 
         self._db.transaction(_prune)
+        self._delete_files(paths)
         if removed:
             self._log.warning("Pruned {} captures to respect quota", removed)
             retention_files_deleted_total.inc(removed)
         return removed
+
+    def _delete_files(self, paths: list[Path]) -> None:
+        for path in paths:
+            try:
+                if path.exists():
+                    safe_unlink(path)
+            except Exception as exc:  # pragma: no cover - filesystem issues
+                self._log.error("Failed to delete {}: {}", path, exc)
 
     @staticmethod
     def _folder_size_gb(path: Path) -> float:

@@ -274,17 +274,6 @@ class QueryHistoryRecord(Base):
     )
 
 
-class HNSWMappingRecord(Base):
-    __tablename__ = "hnsw_mapping"
-    __table_args__ = (
-        UniqueConstraint("event_id", "span_key", name="uq_hnsw_event_span"),
-    )
-
-    label: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    event_id: Mapped[str] = mapped_column(String(36), index=True)
-    span_key: Mapped[str] = mapped_column(String(64))
-
-
 class ObservationRecord(Base):
     __tablename__ = "observations"
 

@@ -8,7 +8,12 @@ from fastapi.testclient import TestClient
 from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import EventRecord, OCRSpanRecord, QueryHistoryRecord
+from autocapture.storage.models import (
+    CaptureRecord,
+    EventRecord,
+    OCRSpanRecord,
+    QueryHistoryRecord,
+)
 
 
 def _make_app(tmp_path: Path) -> tuple[TestClient, DatabaseManager]:
@@ -31,6 +36,19 @@ def test_dashboard_redirect(tmp_path: Path) -> None:
 def test_api_suggest_returns_snippets(tmp_path: Path) -> None:
     client, db = _make_app(tmp_path)
     with db.session() as session:
+        session.add(
+            CaptureRecord(
+                id="event-1",
+                captured_at=dt.datetime.now(dt.timezone.utc),
+                image_path=None,
+                foreground_process="Notes",
+                foreground_window="Example",
+                monitor_id="m1",
+                is_fullscreen=False,
+                ocr_status="done",
+            )
+        )
+        session.flush()
         session.add(
             EventRecord(
                 event_id="event-1",
