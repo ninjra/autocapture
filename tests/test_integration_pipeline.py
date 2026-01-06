@@ -7,7 +7,7 @@ from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.memory.router import RoutingDecision
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import EventRecord
+from autocapture.storage.models import EventRecord, OCRSpanRecord
 
 
 class MockLLM:
@@ -27,6 +27,7 @@ def test_retrieve_context_pack_answer(monkeypatch, tmp_path: Path) -> None:
     with db.session() as session:
         session.add(
             EventRecord(
+                event_id="event-1",
                 ts_start=dt.datetime.now(dt.timezone.utc),
                 ts_end=None,
                 app_name="Notion",
@@ -36,17 +37,19 @@ def test_retrieve_context_pack_answer(monkeypatch, tmp_path: Path) -> None:
                 screenshot_path=None,
                 screenshot_hash="hash",
                 ocr_text="Sample meeting notes about roadmap",
-                ocr_spans=[
-                    {
-                        "span_id": "S1",
-                        "text": "Sample",
-                        "start": 0,
-                        "end": 6,
-                        "conf": 0.9,
-                    }
-                ],
                 embedding_vector=None,
                 tags={},
+            )
+        )
+        session.add(
+            OCRSpanRecord(
+                capture_id="event-1",
+                span_key="S1",
+                start=0,
+                end=6,
+                text="Sample",
+                confidence=0.9,
+                bbox={},
             )
         )
 

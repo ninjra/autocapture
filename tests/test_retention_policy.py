@@ -108,7 +108,6 @@ def test_retention_clears_event_screenshot_path(tmp_path: Path) -> None:
                 screenshot_path=str(roi_path),
                 screenshot_hash="hash",
                 ocr_text="text",
-                ocr_spans=[],
                 embedding_vector=None,
                 embedding_status="pending",
                 embedding_model=None,

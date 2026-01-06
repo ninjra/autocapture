@@ -162,7 +162,15 @@ class EmbeddingWorker:
             )
             span_rows = []
             for embedding in embeddings:
-                span = session.get(OCRSpanRecord, embedding.span_id)
+                span = (
+                    session.execute(
+                        select(OCRSpanRecord)
+                        .where(OCRSpanRecord.capture_id == embedding.capture_id)
+                        .where(OCRSpanRecord.span_key == embedding.span_key)
+                    )
+                    .scalars()
+                    .first()
+                )
                 event = session.get(EventRecord, embedding.capture_id)
                 if not span or not event:
                     continue
@@ -220,7 +228,6 @@ class EmbeddingWorker:
                 payload = {
                     "event_id": event.event_id,
                     "span_key": record.span_key,
-                    "span_id": span.id,
                     "ts_start": event.ts_start.isoformat(),
                     "app_name": event.app_name,
                     "domain": event.domain or "",

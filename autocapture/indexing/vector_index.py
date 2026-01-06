@@ -141,9 +141,6 @@ class HNSWIndex:
                     mapping = HNSWMappingRecord(
                         event_id=event_id,
                         span_key=span_key,
-                        span_id=payload.get("span_id")
-                        if isinstance(payload, dict)
-                        else None,
                     )
                     with session.begin_nested():
                         session.add(mapping)

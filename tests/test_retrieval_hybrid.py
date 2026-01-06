@@ -6,7 +6,7 @@ from pathlib import Path
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.memory.retrieval import RetrievalService
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import EventRecord
+from autocapture.storage.models import EventRecord, OCRSpanRecord
 from autocapture.indexing.lexical_index import LexicalHit
 from autocapture.indexing.vector_index import VectorHit
 
@@ -56,16 +56,6 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
         screenshot_path=None,
         screenshot_hash="hash",
         ocr_text="Project roadmap details",
-        ocr_spans=[
-            {
-                "span_id": "S1",
-                "span_key": "S1",
-                "text": "roadmap",
-                "start": 8,
-                "end": 15,
-                "conf": 0.9,
-            }
-        ],
         embedding_vector=None,
         tags={},
     )
@@ -80,22 +70,34 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
         screenshot_path=None,
         screenshot_hash="hash2",
         ocr_text="Random chatter",
-        ocr_spans=[
-            {
-                "span_id": "S1",
-                "span_key": "S1",
-                "text": "Random",
-                "start": 0,
-                "end": 6,
-                "conf": 0.9,
-            }
-        ],
         embedding_vector=None,
         tags={},
     )
     with db.session() as session:
         session.add(old_event)
         session.add(new_event)
+        session.add(
+            OCRSpanRecord(
+                capture_id="EOLD",
+                span_key="S1",
+                start=8,
+                end=15,
+                text="roadmap",
+                confidence=0.9,
+                bbox={},
+            )
+        )
+        session.add(
+            OCRSpanRecord(
+                capture_id="ENEW",
+                span_key="S1",
+                start=0,
+                end=6,
+                text="Random",
+                confidence=0.9,
+                bbox={},
+            )
+        )
 
     retrieval = RetrievalService(db, config)
     retrieval._embedder = FakeEmbedder()  # type: ignore[attr-defined]

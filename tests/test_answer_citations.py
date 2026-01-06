@@ -9,7 +9,7 @@ from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.memory.router import RoutingDecision
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import EventRecord
+from autocapture.storage.models import EventRecord, OCRSpanRecord
 
 
 class BadCitationLLM:
@@ -40,18 +40,19 @@ def test_answer_citations_subset(tmp_path: Path, monkeypatch) -> None:
                 screenshot_path=None,
                 screenshot_hash="hash",
                 ocr_text="Meeting notes about roadmap",
-                ocr_spans=[
-                    {
-                        "span_id": "S1",
-                        "span_key": "S1",
-                        "text": "roadmap",
-                        "start": 23,
-                        "end": 30,
-                        "conf": 0.9,
-                    }
-                ],
                 embedding_vector=None,
                 tags={},
+            )
+        )
+        session.add(
+            OCRSpanRecord(
+                capture_id="event-1",
+                span_key="S1",
+                start=23,
+                end=30,
+                text="roadmap",
+                confidence=0.9,
+                bbox={},
             )
         )
 

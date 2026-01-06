@@ -160,11 +160,12 @@ class EventIngestWorker:
             return False
 
         existing_event = self._load_event(capture_id)
-        if existing_event and existing_event.ocr_spans:
+        existing_spans = self._load_spans(capture_id) if existing_event else []
+        if existing_event and existing_event.ocr_text and existing_spans:
             self._persist_ocr_results(
                 capture,
                 existing_event.ocr_text or "",
-                existing_event.ocr_spans,
+                existing_spans,
                 event_existing=True,
             )
             self._lexical.upsert_event(existing_event)
@@ -230,6 +231,30 @@ class EventIngestWorker:
         with self._db.session() as session:
             return session.get(EventRecord, event_id)
 
+    def _load_spans(self, capture_id: str) -> list[dict]:
+        with self._db.session() as session:
+            rows = (
+                session.execute(
+                    select(OCRSpanRecord)
+                    .where(OCRSpanRecord.capture_id == capture_id)
+                    .order_by(OCRSpanRecord.start.asc())
+                )
+                .scalars()
+                .all()
+            )
+        return [
+            {
+                "span_key": row.span_key,
+                "span_id": row.span_key,
+                "start": row.start,
+                "end": row.end,
+                "conf": row.confidence,
+                "bbox": row.bbox,
+                "text": row.text,
+            }
+            for row in rows
+        ]
+
     def _heartbeat_loop(self, capture_id: str, stop_event: threading.Event) -> None:
         interval = max(self._lease_timeout_s / 3, 1.0)
         while not stop_event.wait(interval):
@@ -269,7 +294,6 @@ class EventIngestWorker:
                     screenshot_path=capture.image_path,
                     screenshot_hash=screenshot_hash or "",
                     ocr_text=ocr_text,
-                    ocr_spans=ocr_spans,
                     embedding_vector=None,
                     embedding_status="pending",
                     embedding_model=self._config.embeddings.model,
@@ -280,9 +304,8 @@ class EventIngestWorker:
                     session.flush()
             else:
                 event = session.get(EventRecord, capture.capture_id)
-                if event and not event.ocr_spans:
+                if event and not event.ocr_text:
                     event.ocr_text = ocr_text
-                    event.ocr_spans = ocr_spans
                     if screenshot_hash and not event.screenshot_hash:
                         event.screenshot_hash = screenshot_hash
             if ocr_spans:
@@ -357,7 +380,6 @@ class EventIngestWorker:
             rows.append(
                 {
                     "capture_id": capture_id,
-                    "span_id": span.id,
                     "vector": None,
                     "model": self._config.embeddings.model,
                     "status": "pending",

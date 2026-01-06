@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import EventRecord, QueryHistoryRecord
+from autocapture.storage.models import EventRecord, OCRSpanRecord, QueryHistoryRecord
 
 
 def _make_app(tmp_path: Path) -> tuple[TestClient, DatabaseManager]:
@@ -33,6 +33,7 @@ def test_api_suggest_returns_snippets(tmp_path: Path) -> None:
     with db.session() as session:
         session.add(
             EventRecord(
+                event_id="event-1",
                 ts_start=dt.datetime.now(dt.timezone.utc),
                 ts_end=None,
                 app_name="Notes",
@@ -42,17 +43,19 @@ def test_api_suggest_returns_snippets(tmp_path: Path) -> None:
                 screenshot_path=None,
                 screenshot_hash="hash",
                 ocr_text="Hello world from autocapture",
-                ocr_spans=[
-                    {
-                        "span_id": "S1",
-                        "text": "Hello",
-                        "start": 0,
-                        "end": 5,
-                        "conf": 0.9,
-                    }
-                ],
                 embedding_vector=None,
                 tags={},
+            )
+        )
+        session.add(
+            OCRSpanRecord(
+                capture_id="event-1",
+                span_key="S1",
+                start=0,
+                end=5,
+                text="Hello",
+                confidence=0.9,
+                bbox={},
             )
         )
         session.add(
