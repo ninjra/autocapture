@@ -129,31 +129,56 @@ class CaptureOrchestrator:
         self._video_drop_window_s = 5.0
         self._video_disabled_until = 0.0
         self._video_last_drop = 0.0
+        self._state_lock = threading.Lock()
 
     def start(self) -> None:
-        if self._running.is_set():
-            return
-        self._running.set()
-        self._paused.clear()
+        with self._state_lock:
+            if self._running.is_set():
+                return
+            self._running.set()
+            self._paused.clear()
+
         self._raw_input.start()
-        self._roi_thread = threading.Thread(target=self._run_roi_saver, daemon=True)
+        self._roi_thread = threading.Thread(
+            target=self._run_roi_saver, daemon=True, name="autocapture-roi-saver"
+        )
         self._roi_thread.start()
         self._capture_thread = threading.Thread(
-            target=self._run_capture_loop, daemon=True
+            target=self._run_capture_loop,
+            daemon=True,
+            name="autocapture-capture-loop",
         )
         self._capture_thread.start()
         self._log.info("Capture orchestrator started")
 
     def stop(self) -> None:
-        if not self._running.is_set():
-            return
-        self._running.clear()
+        with self._state_lock:
+            if not self._running.is_set():
+                return
+            self._running.clear()
+            self._paused.clear()
+
         self._raw_input.stop()
-        self._segment_recorder.stop_segment()
+
         if self._capture_thread:
-            self._capture_thread.join(timeout=2.0)
+            self._capture_thread.join(timeout=5.0)
+
+        if self._capture_thread and self._capture_thread.is_alive():
+            self._log.warning("Capture thread did not stop in time; forcing shutdown.")
+            segment_id = self._active_segment_id
+            self._active_segment_id = None
+            try:
+                self._close_segment(segment_id)
+            except Exception as exc:
+                self._log.exception("Forced segment close failed: {}", exc)
+                try:
+                    self._segment_recorder.stop_segment(timeout_s=1.0)
+                except Exception:
+                    pass
+
         if self._roi_thread:
-            self._roi_thread.join(timeout=2.0)
+            self._roi_thread.join(timeout=5.0)
+
         self._log.info("Capture orchestrator stopped")
 
     def pause(self) -> None:
@@ -173,27 +198,47 @@ class CaptureOrchestrator:
         interval = max(
             1.0 / max(self._capture_config.hid.fps_soft_cap, 0.01), min_interval
         )
-        while self._running.is_set():
-            loop_start = time.monotonic()
-            now_ms = int(loop_start * 1000)
-            active = (
-                now_ms < self._raw_input.active_until_ts
-            ) and not self._paused.is_set()
+        try:
+            while self._running.is_set():
+                loop_start = time.monotonic()
+                now_ms = int(loop_start * 1000)
+                active = (
+                    now_ms < self._raw_input.active_until_ts
+                ) and not self._paused.is_set()
 
-            if active:
-                if not self._was_active:
-                    self._active_segment_id = self._start_segment()
-                self._capture_tick()
-                elapsed = time.monotonic() - loop_start
-                sleep_for = max(0.0, interval - elapsed)
-                time.sleep(sleep_for)
-            else:
-                if self._was_active:
-                    self._close_segment(self._active_segment_id)
-                    self._active_segment_id = None
-                time.sleep(0.1)
+                if active:
+                    if not self._was_active:
+                        try:
+                            self._active_segment_id = self._start_segment()
+                        except Exception as exc:
+                            self._log.exception("Failed to start segment: {}", exc)
+                            self._active_segment_id = None
+                    try:
+                        self._capture_tick()
+                    except Exception as exc:
+                        self._log.exception("Capture tick failed: {}", exc)
+                        time.sleep(min(1.0, interval))
+                    elapsed = time.monotonic() - loop_start
+                    time.sleep(max(0.0, interval - elapsed))
+                else:
+                    if self._was_active:
+                        try:
+                            self._close_segment(self._active_segment_id)
+                        except Exception as exc:
+                            self._log.exception("Failed to close segment: {}", exc)
+                        self._active_segment_id = None
+                    time.sleep(0.1)
 
-            self._was_active = active
+                self._was_active = active
+        finally:
+            segment_id = self._active_segment_id
+            self._active_segment_id = None
+            if segment_id:
+                try:
+                    self._close_segment(segment_id)
+                except Exception as exc:
+                    self._log.exception("Failed to close segment on shutdown: {}", exc)
+            self._was_active = False
 
     def _capture_tick(self) -> None:
         frames = self._backend.grab_all()

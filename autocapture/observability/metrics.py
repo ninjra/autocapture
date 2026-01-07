@@ -177,7 +177,7 @@ def _folder_size_bytes(path: Path) -> int:
     return _walk(path)
 
 
-def _update_gpu_stats() -> None:
+def _update_gpu_stats() -> bool:
     try:
         result = subprocess.run(
             [
@@ -190,13 +190,52 @@ def _update_gpu_stats() -> None:
             check=False,
         )
     except FileNotFoundError:
-        return
+        return False
     if result.returncode != 0:
-        return
+        return False
     lines = result.stdout.strip().splitlines()
     if not lines:
-        return
+        return False
     parts = lines[0].split(",")
-    if len(parts) >= 2:
+    if len(parts) < 2:
+        return False
+    try:
         gpu_utilization.set(float(parts[0].strip()))
         gpu_memory_used_mb.set(float(parts[1].strip()))
+    except ValueError:
+        return False
+    return True
+
+
+_gpu_probe_lock = threading.Lock()
+_last_gpu_probe = 0.0
+_last_gpu_ok: bool | None = None
+
+
+def get_gpu_snapshot(refresh: bool = True, min_interval_s: float = 2.0) -> dict:
+    global _last_gpu_probe, _last_gpu_ok
+    now = time.monotonic()
+    if refresh:
+        with _gpu_probe_lock:
+            if now - _last_gpu_probe >= min_interval_s:
+                try:
+                    _last_gpu_ok = _update_gpu_stats()
+                except Exception:
+                    _last_gpu_ok = False
+                _last_gpu_probe = now
+
+    ok = bool(_last_gpu_ok)
+    if not ok:
+        return {
+            "available": False,
+            "utilization_percent": None,
+            "memory_used_mb": None,
+        }
+
+    util = float(getattr(gpu_utilization, "_value").get())
+    mem = float(getattr(gpu_memory_used_mb, "_value").get())
+    return {
+        "available": True,
+        "utilization_percent": util,
+        "memory_used_mb": mem,
+    }

@@ -6,6 +6,7 @@ import asyncio
 import datetime as dt
 import hmac
 import sys
+import tempfile
 import threading
 import time
 from collections import OrderedDict
@@ -13,14 +14,21 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, model_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ..config import AppConfig, ProviderRoutingConfig
+from ..encryption import EncryptionManager
 from ..logging_utils import get_logger
-from ..observability.metrics import get_metrics_port
+from ..observability.metrics import get_gpu_snapshot, get_metrics_port
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
 from ..memory.entities import EntityResolver, SecretStore
@@ -32,7 +40,7 @@ from ..memory.router import ProviderRouter
 from ..memory.verification import Claim, RulesVerifier
 from ..security.oidc import GoogleOIDCVerifier
 from ..storage.database import DatabaseManager
-from ..storage.models import EventRecord, OCRSpanRecord, QueryHistoryRecord
+from ..storage.models import CaptureRecord, EventRecord, OCRSpanRecord, QueryHistoryRecord
 from ..storage.retention import RetentionManager
 
 
@@ -170,6 +178,7 @@ def create_app(
         embedder=embedder,
         vector_index=vector_index,
     )
+    encryption_mgr = EncryptionManager(config.encryption)
     secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
     entities = EntityResolver(db, secret)
     prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
@@ -255,6 +264,82 @@ def create_app(
     @app.get("/dashboard")
     async def dashboard_redirect() -> RedirectResponse:
         return RedirectResponse(url="/")
+
+    @app.get("/api/status")
+    def status_snapshot() -> dict:
+        with db.session() as session:
+            ocr_pending = session.execute(
+                select(func.count())
+                .select_from(CaptureRecord)
+                .where(CaptureRecord.ocr_status == "pending")
+            ).scalar_one()
+            ocr_processing = session.execute(
+                select(func.count())
+                .select_from(CaptureRecord)
+                .where(CaptureRecord.ocr_status == "processing")
+            ).scalar_one()
+            span_embed_pending = session.execute(
+                select(func.count())
+                .select_from(OCRSpanRecord)
+                .where(OCRSpanRecord.embedding_status == "pending")
+            ).scalar_one()
+            event_embed_pending = session.execute(
+                select(func.count())
+                .select_from(EventRecord)
+                .where(EventRecord.embedding_status == "pending")
+            ).scalar_one()
+
+        gpu = get_gpu_snapshot()
+        return {
+            "ok": True,
+            "time_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "ocr": {"pending": int(ocr_pending), "processing": int(ocr_processing)},
+            "embeddings": {
+                "pending_spans": int(span_embed_pending),
+                "pending_events": int(event_embed_pending),
+            },
+            "gpu": gpu,
+        }
+
+    @app.get("/api/screenshot/{event_id}")
+    def screenshot(event_id: str) -> Response:
+        with db.session() as session:
+            event = session.get(EventRecord, event_id)
+            if not event or not event.screenshot_path:
+                raise HTTPException(status_code=404, detail="Screenshot not found")
+            path = Path(event.screenshot_path)
+
+        if not path.is_absolute():
+            path = config.capture.data_dir / path
+
+        try:
+            root = config.capture.data_dir.resolve()
+            resolved = path.resolve()
+            if root not in resolved.parents and resolved != root:
+                raise HTTPException(status_code=403, detail="Invalid screenshot path")
+            path = resolved
+        except FileNotFoundError:
+            pass
+
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="Screenshot file missing")
+
+        headers = {"Cache-Control": "private, max-age=60"}
+
+        if path.suffix == ".acenc":
+            with tempfile.NamedTemporaryFile(suffix=".webp", delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+            try:
+                encryption_mgr.decrypt_file(path, tmp_path)
+                data = tmp_path.read_bytes()
+            finally:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            return Response(content=data, media_type="image/webp", headers=headers)
+
+        return FileResponse(path, headers=headers)
 
     @app.post("/api/retrieve")
     def retrieve(request: RetrieveRequest) -> RetrieveResponse:

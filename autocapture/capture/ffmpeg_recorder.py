@@ -114,6 +114,8 @@ class SegmentRecorder:
         self._last_drop_log = 0.0
         self._drop_window_s = 10.0
         self._drop_window: deque[float] = deque(maxlen=500)
+        self._lock = threading.Lock()
+        self._accepting_frames = False
 
     @property
     def is_available(self) -> bool:
@@ -129,65 +131,81 @@ class SegmentRecorder:
             return None
         if self._ffmpeg_path is None:
             return None
-        if self._segment is not None and self._segment.state == "recording":
+        with self._lock:
+            if self._segment is not None and self._segment.state == "recording":
+                return self._segment
+            if self._segment is not None and self._segment.state != "recording":
+                self._segment = None
+
+            if output_path is None:
+                date_prefix = started_at.strftime("%Y/%m/%d")
+                output_dir = self._config.data_dir / "media" / "video" / date_prefix
+                output_dir.mkdir(parents=True, exist_ok=True)
+                output_path = output_dir / f"segment_{segment_id}.mp4"
+
+            self._segment = VideoSegment(
+                id=segment_id,
+                started_at=started_at,
+                video_path=output_path,
+                state="recording",
+            )
+            self._queue = queue.Queue(maxsize=self._queue_maxsize)
+            self._stop_event.clear()
+            self._stderr_lines.clear()
+            self._accepting_frames = True
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
             return self._segment
-        if self._segment is not None and self._segment.state != "recording":
-            self._segment = None
-
-        if output_path is None:
-            date_prefix = started_at.strftime("%Y/%m/%d")
-            output_dir = self._config.data_dir / "media" / "video" / date_prefix
-            output_dir.mkdir(parents=True, exist_ok=True)
-            output_path = output_dir / f"segment_{segment_id}.mp4"
-
-        self._segment = VideoSegment(
-            id=segment_id,
-            started_at=started_at,
-            video_path=output_path,
-            state="recording",
-        )
-        self._queue = queue.Queue(maxsize=self._queue_maxsize)
-        self._stop_event.clear()
-        self._stderr_lines.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-        return self._segment
 
     def enqueue(self, frames: list[CaptureFrame]) -> bool:
-        if self._segment is None or self._segment.state != "recording":
-            return False
+        with self._lock:
+            if (
+                self._segment is None
+                or self._segment.state != "recording"
+                or not self._accepting_frames
+            ):
+                return False
+            queue_ref = self._queue
         try:
-            self._queue.put_nowait(frames)
+            queue_ref.put_nowait(frames)
             return True
         except queue.Full:
-            self._dropped_frames += 1
-            video_frames_dropped_total.inc()
-            now = time.monotonic()
-            self._drop_window.append(now)
-            while (
-                self._drop_window and now - self._drop_window[0] > self._drop_window_s
-            ):
-                self._drop_window.popleft()
-            if now - self._last_drop_log > 5.0:
-                self._last_drop_log = now
-                self._log.warning(
-                    "Dropping video frames due to recorder backpressure (dropped={}, recent={}).",
-                    self._dropped_frames,
-                    len(self._drop_window),
-                )
+            with self._lock:
+                self._dropped_frames += 1
+                video_frames_dropped_total.inc()
+                now = time.monotonic()
+                self._drop_window.append(now)
+                while (
+                    self._drop_window and now - self._drop_window[0] > self._drop_window_s
+                ):
+                    self._drop_window.popleft()
+                if now - self._last_drop_log > 5.0:
+                    self._last_drop_log = now
+                    self._log.warning(
+                        "Dropping video frames due to recorder backpressure (dropped={}, recent={}).",
+                        self._dropped_frames,
+                        len(self._drop_window),
+                    )
             return False
 
     def stop_segment(self, timeout_s: float = 5.0) -> Optional[VideoSegment]:
-        if self._segment is None:
-            return None
+        with self._lock:
+            if self._segment is None:
+                return None
+            self._accepting_frames = False
+            thread = self._thread
+            segment = self._segment
+            queue_ref = self._queue
         self._stop_event.set()
-        self._signal_stop()
-        if self._thread:
-            self._thread.join(timeout=timeout_s)
-        if self._thread and self._thread.is_alive():
+        self._signal_stop(queue_ref)
+        if thread:
+            thread.join(timeout=timeout_s)
+        if thread and thread.is_alive():
             self._log.warning("Recorder thread timeout; forcing shutdown.")
             self._terminate_process()
-        segment = self._segment
+            with self._lock:
+                if self._segment:
+                    self._segment.state = "failed"
         if segment:
             self._log.info(
                 "Segment {} finalized with state={} path={}",
@@ -195,7 +213,8 @@ class SegmentRecorder:
                 segment.state,
                 segment.video_path,
             )
-        self._segment = None
+        with self._lock:
+            self._segment = None
         return segment
 
     def _run(self) -> None:
@@ -412,22 +431,23 @@ class SegmentRecorder:
                 self._process.kill()
                 return -1
 
-    def _signal_stop(self) -> None:
-        if self._queue.empty():
+    def _signal_stop(self, q: queue.Queue[list[CaptureFrame] | None] | None = None) -> None:
+        queue_ref = q or self._queue
+        if queue_ref.empty():
             try:
-                self._queue.put_nowait(None)
+                queue_ref.put_nowait(None)
                 return
             except queue.Full:
                 pass
         drained = 0
         while drained < 5:
             try:
-                self._queue.get_nowait()
+                queue_ref.get_nowait()
                 drained += 1
             except queue.Empty:
                 break
         try:
-            self._queue.put_nowait(None)
+            queue_ref.put_nowait(None)
         except queue.Full:
             self._log.warning(
                 "Failed to enqueue recorder stop sentinel; forcing shutdown."
