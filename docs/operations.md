@@ -42,15 +42,15 @@
    - Extend the NAS-hosted `prometheus.yml` with alert rules such as:
      ```yaml
      groups:
-       - name: autocapture
-         rules:
-           - alert: OCRBacklogHigh
-             expr: autocapture_ocr_backlog > 2000
-             for: 15m
-           - alert: StorageQuota
-             expr: autocapture_disk_usage_gb > 2600
-             for: 10m
-     ```
+        - name: autocapture
+          rules:
+            - alert: OCRBacklogHigh
+              expr: ocr_backlog > 2000
+              for: 15m
+            - alert: StorageQuota
+              expr: media_folder_size_gb > 2600
+              for: 10m
+      ```
    - Use Grafana Alerting, SMTP, or a webhook integration from the NAS to
      deliver notifications when metrics cross thresholds.
 

@@ -241,9 +241,9 @@ and observable.
    * In the NAS Compose file, set `restart: unless-stopped` on
      Prometheus, Grafana, Postgres, and Qdrant so they recover automatically.
 2. **Storage hygiene.**
-   * Monitor the `autocapture_disk_usage_gb` metric. When the quota is reached,
-     the retention worker prunes oldest images; still, set quarterly reminders
-     to audit usage manually.
+   * Monitor the `media_folder_size_gb` metric. When the quota is reached,
+      the retention worker prunes oldest images; still, set quarterly reminders
+      to audit usage manually.
    * Periodically validate the NAS share’s protection—confirm permissions remain
      locked down and that Autocapture’s AES-GCM encryption is still enabled in
      configuration.

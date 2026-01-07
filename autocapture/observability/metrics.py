@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import threading
 import time
@@ -52,6 +53,9 @@ process_rss_mb = Gauge("process_rss_mb", "Process RSS (MB)")
 gpu_utilization = Gauge("gpu_utilization_percent", "GPU utilization percent")
 gpu_memory_used_mb = Gauge("gpu_memory_used_mb", "GPU memory used (MB)")
 
+# Folder size stats are expensive on large trees; only refresh periodically.
+_FOLDER_SIZE_UPDATE_INTERVAL_S = 60.0
+
 
 class MetricsServer:
     def __init__(self, config: ObservabilityConfig, data_dir: Path) -> None:
@@ -61,6 +65,8 @@ class MetricsServer:
         self._loop_thread: Optional[threading.Thread] = None
         self._started = threading.Event()
         self._actual_port: Optional[int] = None
+        self._folder_size_cache_gb: float = 0.0
+        self._folder_size_last_ts: float = 0.0
 
     def start(self) -> None:
         if self._started.is_set():
@@ -120,7 +126,11 @@ class MetricsServer:
         process = psutil.Process()
         while self._started.is_set():
             try:
-                media_folder_size_gb.set(_folder_size_gb(self._data_dir / "media"))
+                now = time.monotonic()
+                if now - self._folder_size_last_ts >= _FOLDER_SIZE_UPDATE_INTERVAL_S:
+                    self._folder_size_last_ts = now
+                    self._folder_size_cache_gb = _folder_size_gb(self._data_dir / "media")
+                media_folder_size_gb.set(self._folder_size_cache_gb)
                 process_cpu_percent.set(process.cpu_percent(interval=None))
                 process_rss_mb.set(process.memory_info().rss / (1024**2))
                 if self._config.enable_gpu_stats:
@@ -139,13 +149,32 @@ def get_metrics_port() -> Optional[int]:
 
 
 def _folder_size_gb(path: Path) -> float:
-    total = 0
-    if not path.exists():
-        return 0.0
-    for item in path.rglob("*"):
-        if item.is_file():
-            total += item.stat().st_size
-    return total / (1024**3)
+    return _folder_size_bytes(path) / (1024**3)
+
+
+def _folder_size_bytes(path: Path) -> int:
+    """Best-effort recursive folder size (bytes).
+
+    Uses os.scandir for performance and tolerates files disappearing mid-walk.
+    """
+
+    def _walk(p: Path) -> int:
+        total = 0
+        try:
+            with os.scandir(p) as it:
+                for entry in it:
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                        elif entry.is_dir(follow_symlinks=False):
+                            total += _walk(Path(entry.path))
+                    except (FileNotFoundError, PermissionError, OSError):
+                        continue
+        except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
+            return 0
+        return total
+
+    return _walk(path)
 
 
 def _update_gpu_stats() -> None:

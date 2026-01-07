@@ -7,6 +7,7 @@ from pathlib import Path
 from sqlalchemy import select
 
 import datetime as dt
+import os
 
 from ..config import RetentionPolicyConfig, StorageQuotaConfig
 from ..fs_utils import safe_unlink
@@ -27,7 +28,8 @@ class RetentionManager:
         self._storage_config = storage_config
         self._retention_config = retention_config
         self._db = db
-        self._media_root = media_root
+        # Callers pass the data dir; quota checks should apply to the media subtree.
+        self._media_root = media_root if media_root.name == "media" else media_root / "media"
         self._log = get_logger("retention")
 
     def enforce(self) -> None:
@@ -139,11 +141,12 @@ class RetentionManager:
         return removed
 
     def _prune_quota(self) -> int:
-        usage_gb = self._folder_size_gb(self._media_root)
         cap_gb = min(
             self._storage_config.image_quota_gb, self._retention_config.max_media_gb
         )
-        if usage_gb <= cap_gb:
+        cap_bytes = int(cap_gb * (1024**3))
+        remaining_bytes = self._folder_size_bytes(self._media_root)
+        if remaining_bytes <= cap_bytes:
             return 0
         removed = 0
         safe_statuses = {"done", "failed", "skipped"}
@@ -154,7 +157,7 @@ class RetentionManager:
         paths: list[Path] = []
 
         def _prune(session) -> None:
-            nonlocal removed
+            nonlocal removed, remaining_bytes
             captures = (
                 session.execute(
                     select(CaptureRecord)
@@ -169,13 +172,18 @@ class RetentionManager:
             )
             for capture in captures:
                 if capture.image_path:
-                    paths.append(Path(capture.image_path))
+                    path = Path(capture.image_path)
+                    paths.append(path)
                     session.query(EventRecord).filter(
                         EventRecord.screenshot_path == capture.image_path
                     ).update({EventRecord.screenshot_path: None})
+                    try:
+                        remaining_bytes -= path.stat().st_size
+                    except OSError:
+                        pass
                 capture.image_path = None
                 removed += 1
-                if self._folder_size_gb(self._media_root) <= cap_gb:
+                if remaining_bytes <= cap_bytes:
                     break
 
         self._db.transaction(_prune)
@@ -195,8 +203,26 @@ class RetentionManager:
 
     @staticmethod
     def _folder_size_gb(path: Path) -> float:
-        total = 0
-        for item in path.rglob("*"):
-            if item.is_file():
-                total += item.stat().st_size
-        return total / (1024**3)
+        return RetentionManager._folder_size_bytes(path) / (1024**3)
+
+    @staticmethod
+    def _folder_size_bytes(path: Path) -> int:
+        """Best-effort recursive folder size (bytes) using os.scandir."""
+
+        def _walk(p: Path) -> int:
+            total = 0
+            try:
+                with os.scandir(p) as it:
+                    for entry in it:
+                        try:
+                            if entry.is_file(follow_symlinks=False):
+                                total += entry.stat(follow_symlinks=False).st_size
+                            elif entry.is_dir(follow_symlinks=False):
+                                total += _walk(Path(entry.path))
+                        except (FileNotFoundError, PermissionError, OSError):
+                            continue
+            except (FileNotFoundError, NotADirectoryError, PermissionError, OSError):
+                return 0
+            return total
+
+        return _walk(path)
