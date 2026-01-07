@@ -367,6 +367,14 @@ class SegmentRecorder:
 
     def _finalize(self) -> None:
         if self._process is None:
+            if self._segment and self._segment.state == "recording":
+                if self._segment.frame_count == 0:
+                    self._segment.state = "closed_no_video"
+                else:
+                    self._segment.state = "failed"
+                    if not self._segment.error:
+                        self._segment.error = "ffmpeg_not_started"
+            self._stop_event.clear()
             return
         return_code = self._shutdown_process()
         self._stop_stderr_reader()
