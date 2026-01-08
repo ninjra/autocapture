@@ -443,7 +443,9 @@ def create_app(
             answer_text = compressed.answer
             citations = compressed.citations
         else:
-            provider, decision = ProviderRouter(routing_data, config.llm).select_llm()
+            provider, decision = ProviderRouter(
+                routing_data, config.llm, offline=config.offline, privacy=config.privacy
+            ).select_llm()
             system_prompt = prompt_registry.get(
                 "ANSWER_WITH_CONTEXT_PACK"
             ).system_prompt

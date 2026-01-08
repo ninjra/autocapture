@@ -48,7 +48,7 @@ class RetrievalService:
         self._config = config or AppConfig()
         self._log = get_logger("retrieval")
         self._lexical = LexicalIndex(db)
-        self._embedder = embedder or EmbeddingService(self._config.embeddings)
+        self._embedder = embedder or EmbeddingService(self._config.embed)
         self._vector = vector_index or VectorIndex(self._config, self._embedder.dim)
         self._last_vector_failure_log = 0.0
 

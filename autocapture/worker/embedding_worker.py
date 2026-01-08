@@ -30,7 +30,7 @@ class EmbeddingWorker:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.embedding")
-        self._embedder = embedder or EmbeddingService(config.embeddings)
+        self._embedder = embedder or EmbeddingService(config.embed)
         self._vector_index = vector_index or VectorIndex(config, self._embedder.dim)
         self._lexical_index = LexicalIndex(self._db)
         self._lease_timeout_s = config.worker.embedding_lease_ms / 1000
@@ -54,7 +54,7 @@ class EmbeddingWorker:
         return processed
 
     def _process_event_embeddings(self) -> int:
-        batch_size = self._config.embeddings.batch_size
+        batch_size = self._config.embed.text_batch_size
         with self._db.session() as session:
             event_ids = (
                 session.execute(
@@ -115,7 +115,7 @@ class EmbeddingWorker:
         return len(events)
 
     def _process_span_embeddings(self) -> int:
-        batch_size = self._config.embeddings.batch_size
+        batch_size = self._config.embed.text_batch_size
         self._recover_stale_embeddings()
         with self._db.session() as session:
             embedding_ids = (

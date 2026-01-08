@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..config import LLMConfig, ProviderRoutingConfig
+from ..config import LLMConfig, ProviderRoutingConfig, PrivacyConfig
 from ..llm.providers import LLMProvider, OpenAIProvider, OllamaProvider
 
 
@@ -18,11 +18,22 @@ class ProviderRouter:
         self,
         routing: ProviderRoutingConfig,
         llm_config: LLMConfig,
+        *,
+        offline: bool,
+        privacy: PrivacyConfig,
     ) -> None:
         self._routing = routing
         self._llm_config = llm_config
+        self._offline = offline
+        self._privacy = privacy
 
     def select_llm(self) -> tuple[LLMProvider, RoutingDecision]:
+        if self._offline and not self._privacy.cloud_enabled:
+            if self._routing.llm.startswith("openai"):
+                raise RuntimeError(
+                    "Offline mode enabled; cloud provider blocked. Enable a cloud profile "
+                    "(privacy.cloud_enabled=true and offline=false) to allow egress."
+                )
         if self._routing.llm.startswith("openai") and self._llm_config.openai_api_key:
             return (
                 OpenAIProvider(

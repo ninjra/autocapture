@@ -21,7 +21,7 @@ def test_retrieve_context_pack_answer(monkeypatch, tmp_path: Path) -> None:
     config = AppConfig()
     config.database = DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
     config.capture.data_dir = tmp_path
-    config.embeddings.model = "local-test"
+    config.embed.text_model = "local-test"
     db = DatabaseManager(config.database)
 
     with db.session() as session:

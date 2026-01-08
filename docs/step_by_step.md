@@ -40,7 +40,7 @@ and observable.
    * `capture.hid.min_interval_ms` / `fps_soft_cap` → tune cadence.
    * `capture.hid.block_fullscreen` → leave `true` so fullscreen apps are
      ignored automatically.
-   * `ocr`, `embeddings`, `database`, `qdrant`, `encryption`, and
+   * `ocr`, `embed`, `database`, `qdrant`, `encryption`, and
      `observability` URLs → point at placeholders for now; you will update them
      again after the NAS stack is online.
 4. **Create directories referenced in the config.** For example:
@@ -223,7 +223,7 @@ and observable.
    ```powershell
    C:\Path\To\repo\.venv\Scripts\python.exe -m autocapture.embeddings.pipeline --config C:\Path\To\autocapture.yml
    ```
-   on the cron-like schedule defined in `embeddings.schedule_cron`. For manual
+   on the cron-like schedule defined in `embed.schedule_cron`. For manual
    execution, run the same command in a console to ensure vectors land in
    Qdrant (`autocapture_embedding_indexed_total` metric should rise).
 5. **Verify data flow end-to-end.** Confirm captures transition from the staging

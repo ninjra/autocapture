@@ -55,7 +55,7 @@ def test_event_ingest_idempotent(tmp_path: Path) -> None:
                 ocr_text="hello",
                 embedding_vector=None,
                 embedding_status="pending",
-                embedding_model=config.embeddings.model,
+                embedding_model=config.embed.text_model,
                 tags={},
             )
         )

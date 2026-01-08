@@ -63,7 +63,7 @@ class AppRuntime:
         self._running = False
 
         self._db = DatabaseManager(config.database)
-        self._retrieval_embedder = EmbeddingService(config.embeddings)
+        self._retrieval_embedder = EmbeddingService(config.embed)
         self._vector_index = VectorIndex(config, self._retrieval_embedder.dim)
         self._tracker = (
             HostVectorTracker(
@@ -92,6 +92,7 @@ class AppRuntime:
             raw_input=self._raw_input,
             ocr_backlog_check_s=1.0,
             media_store=MediaStore(config.capture, config.encryption),
+            ffmpeg_config=config.ffmpeg,
         )
         self._workers = WorkerSupervisor(
             config=config,

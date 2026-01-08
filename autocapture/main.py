@@ -18,6 +18,7 @@ from . import claim_single_instance, ensure_expected_interpreter
 from .config import AppConfig, load_config
 from .logging_utils import configure_logging
 from .runtime import AppRuntime
+from .security.offline_guard import apply_offline_guard
 from .storage.database import DatabaseManager
 from .worker.supervisor import WorkerSupervisor
 
@@ -112,6 +113,10 @@ def main(argv: list[str] | None = None) -> None:
     config_path = Path(args.config)
     config = load_config(config_path)
     configure_logging(getattr(config, "logging", None))
+    apply_offline_guard(
+        enabled=config.offline and not config.privacy.cloud_enabled,
+        allowed_hosts={"127.0.0.1", "::1", "localhost"},
+    )
 
     if cmd == "print-config":
         # Avoid importing rich; keep it simple and predictable.

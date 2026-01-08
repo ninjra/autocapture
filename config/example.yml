@@ -18,10 +18,17 @@ api:
   default_page_size: 50
   max_query_chars: 2000
   max_context_k: 50
+offline: true
 privacy:
   cloud_enabled: false
   sanitize_default: true
   extractive_only_default: true
+  paused: false
+  snooze_until_utc: null
+  exclude_monitors: []
+  exclude_processes: []
+  exclude_window_title_regex: []
+  exclude_regions: []
 routing:
   capture: "local"
   ocr: "local"
@@ -55,6 +62,13 @@ capture:
     duplicate_pixel_threshold: 2.5
     fps_soft_cap: 4.0
     block_fullscreen: true
+  fps_min: 0.5
+  fps_max: 2.0
+  tile_size: 512
+  diff_epsilon: 0.04
+  downscale_width: 256
+  always_store_fullres: true
+  thumbnail_width: 640
   staging_dir: "D:/autocapture/staging"
   data_dir: "D:/autocapture/data"
   encoder: "nvenc_webp"
@@ -78,14 +92,21 @@ ocr:
   queue_maxsize: 4000
   batch_size: 32
   max_latency_s: 900
-  engine: "paddleocr-cuda"
+  engine: "rapidocr-onnxruntime"
+  device: "cuda"
   languages: ["en"]
   output_format: "json"
-embeddings:
-  model: "sentence-transformers/all-MiniLM-L6-v2"
-  batch_size: 256
+embed:
+  text_model: "BAAI/bge-base-en-v1.5"
+  image_model: "google/siglip2-so400m-patch14-384"
+  text_batch_size: 256
+  image_batch_size: 32
   schedule_cron: "0 */6 * * *"
   use_half_precision: true
+reranker:
+  enabled: true
+  model: "BAAI/bge-reranker-v2-m3"
+  top_k: 100
 worker:
   data_dir: "D:/autocapture/data"
   lease_ms: 60000
@@ -112,10 +133,22 @@ database:
   pool_size: 10
   max_overflow: 10
 qdrant:
-  url: "http://localhost:6333"
-  collection_name: "autocapture_spans"
-  vector_size: 384
+  enabled: true
+  url: "http://127.0.0.1:6333"
+  text_collection: "text_spans"
+  image_collection: "image_tiles"
+  text_vector_size: 768
+  image_vector_size: 768
   distance: "Cosine"
+  hnsw_ef_construct: 128
+  hnsw_m: 16
+  search_ef: 64
+ffmpeg:
+  enabled: true
+  require_bundled: true
+  relative_path_candidates:
+    - "ffmpeg/bin/ffmpeg.exe"
+    - "ffmpeg/ffmpeg.exe"
 encryption:
   enabled: true
   key_provider: "windows-credential-manager"

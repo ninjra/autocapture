@@ -44,7 +44,7 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
     config = AppConfig(
         database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
     )
-    config.embeddings.model = "local-test"
+    config.embed.text_model = "local-test"
     db = DatabaseManager(config.database)
 
     old_event = EventRecord(

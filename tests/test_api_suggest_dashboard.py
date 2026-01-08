@@ -20,7 +20,7 @@ def _make_app(tmp_path: Path) -> tuple[TestClient, DatabaseManager]:
     config = AppConfig()
     config.database = DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
     config.capture.data_dir = tmp_path
-    config.embeddings.model = "local-test"
+    config.embed.text_model = "local-test"
     db = DatabaseManager(config.database)
     app = create_app(config, db_manager=db)
     return TestClient(app), db

@@ -296,7 +296,7 @@ class EventIngestWorker:
                     ocr_text=ocr_text,
                     embedding_vector=None,
                     embedding_status="pending",
-                    embedding_model=self._config.embeddings.model,
+                    embedding_model=self._config.embed.text_model,
                     tags={},
                 )
                 session.add(event)
@@ -381,7 +381,7 @@ class EventIngestWorker:
                 {
                     "capture_id": capture_id,
                     "vector": None,
-                    "model": self._config.embeddings.model,
+                    "model": self._config.embed.text_model,
                     "status": "pending",
                     "span_key": span_key,
                 }

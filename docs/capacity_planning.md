@@ -25,7 +25,7 @@ Assumptions:
 
 ## GPU Utilization Targets
 - **Capture encoding:** NVENC keeps per-frame encode time under 20 ms.
-- **OCR batches:** 32-image batches processed within ~2.5 s on RTX 4090 (PaddleOCR CUDA).
+- **OCR batches:** 32-image batches processed within ~2.5 s on RTX 4090 (RapidOCR ONNXRuntime GPU).
 - **Embedding batches:** 256-span nightly jobs complete in under 5 minutes using CUDA-accelerated SentenceTransformer.
 
 Keep GPU scheduling windows outside peak CPU-bound tasks to avoid contention.

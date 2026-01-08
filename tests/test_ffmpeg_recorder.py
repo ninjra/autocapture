@@ -8,18 +8,18 @@ import time
 from pathlib import Path
 
 from autocapture.capture.ffmpeg_recorder import SegmentRecorder, VideoSegment
-from autocapture.config import CaptureConfig
+from autocapture.config import CaptureConfig, FFmpegConfig
 
 
 def test_segment_recorder_constructs(tmp_path: Path) -> None:
     config = CaptureConfig(data_dir=tmp_path)
-    recorder = SegmentRecorder(config)
+    recorder = SegmentRecorder(config, FFmpegConfig(enabled=False))
     assert recorder is not None
 
 
 def test_stop_segment_non_blocking_when_queue_full(tmp_path: Path) -> None:
     config = CaptureConfig(data_dir=tmp_path)
-    recorder = SegmentRecorder(config)
+    recorder = SegmentRecorder(config, FFmpegConfig(enabled=False))
     recorder._segment = VideoSegment(
         id="seg-1",
         started_at=dt.datetime.now(dt.timezone.utc),
@@ -38,7 +38,7 @@ def test_stop_segment_non_blocking_when_queue_full(tmp_path: Path) -> None:
 
 def test_ffmpeg_stderr_is_drained(tmp_path: Path) -> None:
     config = CaptureConfig(data_dir=tmp_path)
-    recorder = SegmentRecorder(config)
+    recorder = SegmentRecorder(config, FFmpegConfig(enabled=False))
     rfd, wfd = os.pipe()
     read_handle = os.fdopen(rfd, "rb", closefd=True)
 
