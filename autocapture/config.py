@@ -100,13 +100,15 @@ class CaptureConfig(BaseModel):
     )
     staging_min_free_mb: int = Field(
         512,
-        ge=64,
-        description="Minimum free space (MB) required in staging_dir.",
+        ge=0,
+        description=(
+            "Minimum free space (MB) required in staging_dir. Set to 0 to disable."
+        ),
     )
     data_min_free_mb: int = Field(
         1024,
-        ge=64,
-        description="Minimum free space (MB) required in data_dir.",
+        ge=0,
+        description="Minimum free space (MB) required in data_dir. Set to 0 to disable.",
     )
 
 
@@ -259,9 +261,11 @@ class FFmpegConfig(BaseModel):
 class EncryptionConfig(BaseModel):
     enabled: bool = Field(True)
     key_provider: str = Field(
-        default_factory=lambda: "windows-credential-manager"
-        if sys.platform == "win32"
-        else "file:./data/autocapture.key",
+        default_factory=lambda: (
+            "windows-credential-manager"
+            if sys.platform == "win32"
+            else "file:./data/autocapture.key"
+        ),
         description="Strategy to fetch AES key (file, env, kms).",
     )
     key_name: str = Field("autocapture/nas-aes-key")
@@ -436,9 +440,7 @@ def load_config(path: Path | str) -> AppConfig:
     ocr = data.get("ocr")
     legacy_ocr_engine = "paddle" + "ocr-cuda"
     if isinstance(ocr, dict) and ocr.get("engine") == legacy_ocr_engine:
-        logger.warning(
-            "Replacing legacy OCR engine with rapidocr-onnxruntime"
-        )
+        logger.warning("Replacing legacy OCR engine with rapidocr-onnxruntime")
         ocr["engine"] = "rapidocr-onnxruntime"
 
     qdrant = data.get("qdrant")

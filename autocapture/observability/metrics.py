@@ -129,7 +129,9 @@ class MetricsServer:
                 now = time.monotonic()
                 if now - self._folder_size_last_ts >= _FOLDER_SIZE_UPDATE_INTERVAL_S:
                     self._folder_size_last_ts = now
-                    self._folder_size_cache_gb = _folder_size_gb(self._data_dir / "media")
+                    self._folder_size_cache_gb = _folder_size_gb(
+                        self._data_dir / "media"
+                    )
                 media_folder_size_gb.set(self._folder_size_cache_gb)
                 process_cpu_percent.set(process.cpu_percent(interval=None))
                 process_rss_mb.set(process.memory_info().rss / (1024**2))

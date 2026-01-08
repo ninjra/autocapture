@@ -62,7 +62,9 @@ def composite_frames(
 class SegmentRecorder:
     """Manage a single FFmpeg process per active activity segment."""
 
-    def __init__(self, capture_config: CaptureConfig, ffmpeg_config: FFmpegConfig) -> None:
+    def __init__(
+        self, capture_config: CaptureConfig, ffmpeg_config: FFmpegConfig
+    ) -> None:
         self._config = capture_config
         self._log = get_logger("recorder")
         try:
@@ -147,7 +149,8 @@ class SegmentRecorder:
                 now = time.monotonic()
                 self._drop_window.append(now)
                 while (
-                    self._drop_window and now - self._drop_window[0] > self._drop_window_s
+                    self._drop_window
+                    and now - self._drop_window[0] > self._drop_window_s
                 ):
                     self._drop_window.popleft()
                 if now - self._last_drop_log > 5.0:
@@ -410,7 +413,9 @@ class SegmentRecorder:
                 self._process.kill()
                 return -1
 
-    def _signal_stop(self, q: queue.Queue[list[CaptureFrame] | None] | None = None) -> None:
+    def _signal_stop(
+        self, q: queue.Queue[list[CaptureFrame] | None] | None = None
+    ) -> None:
         queue_ref = q or self._queue
         if queue_ref.empty():
             try:

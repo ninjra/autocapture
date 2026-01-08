@@ -29,7 +29,9 @@ class RetentionManager:
         self._retention_config = retention_config
         self._db = db
         # Callers pass the data dir; quota checks should apply to the media subtree.
-        self._media_root = media_root if media_root.name == "media" else media_root / "media"
+        self._media_root = (
+            media_root if media_root.name == "media" else media_root / "media"
+        )
         self._log = get_logger("retention")
 
     def enforce(self) -> None:

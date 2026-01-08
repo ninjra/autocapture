@@ -347,12 +347,12 @@ class HostEventAggregator:
             ts_end_ms=bucket_ms,
             kind="clipboard_change",
             session_id=self._session_id,
-            app_name=self._foreground_ctx.process_name
-            if self._foreground_ctx
-            else None,
-            window_title=self._foreground_ctx.window_title
-            if self._foreground_ctx
-            else None,
+            app_name=(
+                self._foreground_ctx.process_name if self._foreground_ctx else None
+            ),
+            window_title=(
+                self._foreground_ctx.window_title if self._foreground_ctx else None
+            ),
             payload_json=safe_payload(payload),
         )
 
@@ -366,12 +366,12 @@ class HostEventAggregator:
             ts_end_ms=ts_ms,
             kind=kind,
             session_id=self._session_id,
-            app_name=self._foreground_ctx.process_name
-            if self._foreground_ctx
-            else None,
-            window_title=self._foreground_ctx.window_title
-            if self._foreground_ctx
-            else None,
+            app_name=(
+                self._foreground_ctx.process_name if self._foreground_ctx else None
+            ),
+            window_title=(
+                self._foreground_ctx.window_title if self._foreground_ctx else None
+            ),
             payload_json=safe_payload(payload),
         )
 
