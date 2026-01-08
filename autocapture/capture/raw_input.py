@@ -349,15 +349,15 @@ class RawInputListener:
             elif raw.header.dwType == RIM_TYPEMOUSE:
                 mouse = raw.data.mouse
                 payload: dict[str, int] = {
-                    "left_clicks": 1
-                    if mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN
-                    else 0,
-                    "right_clicks": 1
-                    if mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN
-                    else 0,
-                    "middle_clicks": 1
-                    if mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN
-                    else 0,
+                    "left_clicks": (
+                        1 if mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN else 0
+                    ),
+                    "right_clicks": (
+                        1 if mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN else 0
+                    ),
+                    "middle_clicks": (
+                        1 if mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN else 0
+                    ),
                 }
                 if mouse.usButtonFlags & RI_MOUSE_WHEEL:
                     payload["wheel_events"] = 1

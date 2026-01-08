@@ -40,7 +40,12 @@ from ..memory.router import ProviderRouter
 from ..memory.verification import Claim, RulesVerifier
 from ..security.oidc import GoogleOIDCVerifier
 from ..storage.database import DatabaseManager
-from ..storage.models import CaptureRecord, EventRecord, OCRSpanRecord, QueryHistoryRecord
+from ..storage.models import (
+    CaptureRecord,
+    EventRecord,
+    OCRSpanRecord,
+    QueryHistoryRecord,
+)
 from ..storage.retention import RetentionManager
 
 
@@ -221,6 +226,7 @@ def create_app(
                 log.warning("OIDC verification failed: {}", exc)
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
             return await call_next(request)
+
     else:
 
         @app.middleware("http")
