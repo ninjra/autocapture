@@ -135,6 +135,10 @@ class MediaStore:
             return False
         min_staging = self._capture_config.staging_min_free_mb * 1024 * 1024
         min_data = self._capture_config.data_min_free_mb * 1024 * 1024
+        if min_staging >= staging_usage.total:
+            min_staging = 0
+        if min_data >= data_usage.total:
+            min_data = 0
         return staging_usage.free >= min_staging and data_usage.free >= min_data
 
 
