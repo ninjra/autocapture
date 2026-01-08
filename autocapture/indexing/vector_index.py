@@ -76,7 +76,7 @@ class QdrantBackend:
     ) -> None:
         self._config = config
         self._client = QdrantClient(url=config.qdrant.url, timeout=2.0)
-        self._collection = config.qdrant.collection_name
+        self._collection = config.qdrant.text_collection
         self._dim = dim
         self._log = get_logger("index.qdrant")
         self._retry_policy = retry_policy or RetryPolicy()
@@ -265,7 +265,7 @@ class VectorIndex:
         if not self._backend_allows():
             vector_search_failures_total.inc()
             return []
-        model = embedding_model or self._config.embeddings.model
+        model = embedding_model or self._config.embed.text_model
         try:
             return self._backend.search(
                 query_vector,

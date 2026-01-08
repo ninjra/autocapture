@@ -4,7 +4,7 @@ import datetime as dt
 
 from sqlalchemy import select
 
-from autocapture.config import AppConfig, DatabaseConfig, EmbeddingConfig
+from autocapture.config import AppConfig, DatabaseConfig, EmbedConfig
 from autocapture.storage.database import DatabaseManager
 from autocapture.storage.models import (
     CaptureRecord,
@@ -37,7 +37,7 @@ class FakeIndex:
 def test_embedding_worker_retries_indexing(tmp_path) -> None:
     config = AppConfig(
         database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"),
-        embeddings=EmbeddingConfig(model="fake-model"),
+        embed=EmbedConfig(text_model="fake-model"),
     )
     db = DatabaseManager(config.database)
 
@@ -120,7 +120,7 @@ def test_embedding_worker_retries_indexing(tmp_path) -> None:
 def test_embedding_worker_reclaims_stale_processing(tmp_path) -> None:
     config = AppConfig(
         database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"),
-        embeddings=EmbeddingConfig(model="fake-model"),
+        embed=EmbedConfig(text_model="fake-model"),
     )
     db = DatabaseManager(config.database)
 

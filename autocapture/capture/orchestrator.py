@@ -19,7 +19,7 @@ import numpy as np
 from PIL import Image
 from sqlalchemy import func, select
 
-from ..config import CaptureConfig, WorkerConfig
+from ..config import CaptureConfig, FFmpegConfig, WorkerConfig
 from ..logging_utils import get_logger
 from ..observability.metrics import (
     captures_skipped_backpressure_total,
@@ -81,6 +81,7 @@ class CaptureOrchestrator:
         raw_input: RawInputListener | None = None,
         ocr_backlog_check_s: float = 1.0,
         media_store: MediaStore | None = None,
+        ffmpeg_config: FFmpegConfig | None = None,
         backend: object | None = None,
     ) -> None:
         self._log = get_logger("orchestrator")
@@ -101,7 +102,10 @@ class CaptureOrchestrator:
             on_hotkey=hotkey_callback,
         )
         self._roi_queue: queue.Queue[ROIItem] = queue.Queue(maxsize=roi_queue_size)
-        self._segment_recorder = SegmentRecorder(capture_config=capture_config)
+        self._segment_recorder = SegmentRecorder(
+            capture_config=capture_config,
+            ffmpeg_config=ffmpeg_config or FFmpegConfig(),
+        )
         self._duplicate_detector = DuplicateDetector(
             threshold=capture_config.hid.duplicate_threshold,
             window_s=capture_config.hid.duplicate_window_s,

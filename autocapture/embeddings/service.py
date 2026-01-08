@@ -4,19 +4,19 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from ..config import EmbeddingConfig
+from ..config import EmbedConfig
 from ..logging_utils import get_logger
 
 
 class EmbeddingService:
-    def __init__(self, config: EmbeddingConfig) -> None:
+    def __init__(self, config: EmbedConfig) -> None:
         self._config = config
         self._log = get_logger("embeddings")
         self._backend = None
         self._dim = None
-        self._model_name = config.model
+        self._model_name = config.text_model
 
-        if config.model == "local-test":
+        if self._model_name == "local-test":
             self._backend = "local-test"
             self._dim = 16
             self._log.info("Embedding backend: local-test")
@@ -26,18 +26,18 @@ class EmbeddingService:
         if importlib.util.find_spec("fastembed") is not None:
             from fastembed import TextEmbedding  # type: ignore
 
-            self._backend = TextEmbedding(model_name=config.model)
+            self._backend = TextEmbedding(model_name=self._model_name)
             self._dim = self._backend.embedding_size
-            self._log.info("Embedding backend: fastembed ({})", config.model)
+            self._log.info("Embedding backend: fastembed ({})", self._model_name)
             return
 
         if importlib.util.find_spec("sentence_transformers") is not None:
             from sentence_transformers import SentenceTransformer  # type: ignore
 
-            self._backend = SentenceTransformer(config.model)
+            self._backend = SentenceTransformer(self._model_name)
             self._dim = self._backend.get_sentence_embedding_dimension()
             self._log.info(
-                "Embedding backend: sentence-transformers ({})", config.model
+                "Embedding backend: sentence-transformers ({})", self._model_name
             )
             return
 
@@ -72,7 +72,7 @@ class EmbeddingService:
 
         vectors = self._backend.encode(
             text_list,
-            batch_size=self._config.batch_size,
+            batch_size=self._config.text_batch_size,
             convert_to_numpy=True,
             normalize_embeddings=True,
         )

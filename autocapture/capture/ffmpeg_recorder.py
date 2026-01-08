@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
-import os
 import queue
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -16,9 +14,10 @@ from collections import deque
 
 from PIL import Image
 
-from ..config import CaptureConfig
+from ..config import CaptureConfig, FFmpegConfig
 from ..logging_utils import get_logger
 from ..observability.metrics import video_frames_dropped_total
+from ..paths import find_bundled_ffmpeg
 from .screen_capture import CaptureFrame
 
 
@@ -31,36 +30,6 @@ class VideoSegment:
     encoder: Optional[str] = None
     frame_count: int = 0
     error: Optional[str] = None
-
-
-def find_ffmpeg(data_dir: Path) -> Optional[Path]:
-    candidates: list[Path] = []
-    if sys.platform == "win32":
-        candidates.append(data_dir / "bin" / "ffmpeg.exe")
-    else:
-        candidates.append(data_dir / "bin" / "ffmpeg")
-
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        exe_dir = Path(getattr(sys, "_MEIPASS"))
-        candidates.append(exe_dir / "ffmpeg.exe")
-        candidates.append(exe_dir / "ffmpeg")
-
-    exe_path = Path(sys.executable).resolve()
-    candidates.append(exe_path.parent / "ffmpeg.exe")
-    candidates.append(exe_path.parent / "ffmpeg")
-
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    for path_dir in os.environ.get("PATH", "").split(os.pathsep):
-        ffmpeg_path = Path(path_dir) / (
-            "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
-        )
-        if ffmpeg_path.exists():
-            return ffmpeg_path
-
-    return None
 
 
 def _virtual_bounds(frames: Iterable[CaptureFrame]) -> tuple[int, int, int, int]:
@@ -93,12 +62,14 @@ def composite_frames(
 class SegmentRecorder:
     """Manage a single FFmpeg process per active activity segment."""
 
-    def __init__(self, capture_config: CaptureConfig) -> None:
+    def __init__(self, capture_config: CaptureConfig, ffmpeg_config: FFmpegConfig) -> None:
         self._config = capture_config
         self._log = get_logger("recorder")
-        self._ffmpeg_path = find_ffmpeg(self._config.data_dir)
-        if self._ffmpeg_path is None:
-            self._log.warning("FFmpeg not found; video recording disabled.")
+        try:
+            self._ffmpeg_path = find_bundled_ffmpeg(ffmpeg_config)
+        except FileNotFoundError as exc:
+            self._ffmpeg_path = None
+            self._log.warning("%s", exc)
         self._queue_maxsize = 512
         self._queue: queue.Queue[list[CaptureFrame] | None] = queue.Queue(
             maxsize=self._queue_maxsize

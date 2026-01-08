@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import logging
 import os
 import sys
 from pathlib import Path
@@ -56,6 +58,13 @@ class HIDConfig(BaseModel):
 
 class CaptureConfig(BaseModel):
     hid: HIDConfig = HIDConfig()
+    fps_min: float = Field(0.5, gt=0.0)
+    fps_max: float = Field(2.0, gt=0.0)
+    tile_size: int = Field(512, ge=256, le=2048)
+    diff_epsilon: float = Field(0.04, ge=0.0, le=1.0)
+    downscale_width: int = Field(256, ge=64)
+    always_store_fullres: bool = Field(True)
+    thumbnail_width: int = Field(640, ge=64)
     staging_dir: Path = Field(
         Path("./staging"),
         description="Local NVMe-backed directory for temporary assets.",
@@ -121,20 +130,35 @@ class OCRConfig(BaseModel):
     queue_maxsize: int = Field(2000, ge=100)
     batch_size: int = Field(32, ge=1)
     max_latency_s: int = Field(900, ge=10)
-    engine: str = Field("paddleocr-cuda")
+    engine: str = Field("rapidocr-onnxruntime")
+    device: str = Field("cuda", description="cuda|cpu; cuda preferred when available")
     languages: list[str] = Field(default_factory=lambda: ["en"])
     output_format: str = Field("json")
 
 
-class EmbeddingConfig(BaseModel):
-    model: str = Field("sentence-transformers/all-MiniLM-L6-v2")
-    batch_size: int = Field(256, ge=1)
-    schedule_cron: str = Field(
-        "0 2 * * *", description="Cron string for nightly batches."
-    )
+class EmbedConfig(BaseModel):
+    text_model: str = Field("BAAI/bge-base-en-v1.5")
+    image_model: str = Field("google/siglip2-so400m-patch14-384")
+    text_batch_size: int = Field(256, ge=1)
+    image_batch_size: int = Field(32, ge=1)
     use_half_precision: bool = Field(
         True, description="Use float16 embeddings to shrink storage bandwidth."
     )
+    schedule_cron: str = Field(
+        "0 2 * * *", description="Cron string for nightly batches."
+    )
+    model: Optional[str] = Field(
+        None, description="Legacy alias for text_model (deprecated)."
+    )
+    batch_size: Optional[int] = Field(
+        None, description="Legacy alias for text_batch_size (deprecated)."
+    )
+
+
+class RerankerConfig(BaseModel):
+    enabled: bool = True
+    model: str = Field("BAAI/bge-reranker-v2-m3")
+    top_k: int = Field(100, ge=1)
 
 
 class WorkerConfig(BaseModel):
@@ -205,10 +229,31 @@ class DatabaseConfig(BaseModel):
 
 
 class QdrantConfig(BaseModel):
-    url: str = Field("http://localhost:6333")
-    collection_name: str = Field("autocapture_spans")
-    vector_size: int = Field(384, ge=64)
+    enabled: bool = True
+    url: str = Field("http://127.0.0.1:6333")
+    text_collection: str = Field("text_spans")
+    image_collection: str = Field("image_tiles")
+    text_vector_size: int = Field(768, ge=64)
+    image_vector_size: int = Field(768, ge=64)
     distance: str = Field("Cosine")
+    hnsw_ef_construct: int = Field(128, ge=1)
+    hnsw_m: int = Field(16, ge=1)
+    search_ef: int = Field(64, ge=1)
+
+    collection_name: Optional[str] = Field(
+        None, description="Legacy alias for text_collection (deprecated)."
+    )
+    vector_size: Optional[int] = Field(
+        None, description="Legacy alias for text_vector_size (deprecated)."
+    )
+
+
+class FFmpegConfig(BaseModel):
+    enabled: bool = Field(True)
+    require_bundled: bool = Field(True)
+    relative_path_candidates: list[str] = Field(
+        default_factory=lambda: ["ffmpeg/bin/ffmpeg.exe", "ffmpeg/ffmpeg.exe"]
+    )
 
 
 class EncryptionConfig(BaseModel):
@@ -279,6 +324,12 @@ class PrivacyConfig(BaseModel):
     cloud_enabled: bool = Field(False)
     sanitize_default: bool = Field(True)
     extractive_only_default: bool = Field(True)
+    paused: bool = Field(False)
+    snooze_until_utc: dt.datetime | None = None
+    exclude_monitors: list[str] = Field(default_factory=list)
+    exclude_processes: list[str] = Field(default_factory=list)
+    exclude_window_title_regex: list[str] = Field(default_factory=list)
+    exclude_regions: list[dict] = Field(default_factory=list)
 
 
 class PromptOpsConfig(BaseModel):
@@ -300,15 +351,21 @@ class LLMConfig(BaseModel):
 
 
 class AppConfig(BaseModel):
+    offline: bool = Field(
+        True,
+        description="Hard offline mode: blocks all network egress unless a cloud profile is active.",
+    )
     capture: CaptureConfig = CaptureConfig()
     tracking: TrackingConfig = TrackingConfig()
     ocr: OCRConfig = OCRConfig()
-    embeddings: EmbeddingConfig = EmbeddingConfig()
+    embed: EmbedConfig = EmbedConfig()
+    reranker: RerankerConfig = RerankerConfig()
     worker: WorkerConfig = WorkerConfig()
     retention: RetentionPolicyConfig = RetentionPolicyConfig()
     storage: StorageQuotaConfig = StorageQuotaConfig()
     database: DatabaseConfig = DatabaseConfig()
     qdrant: QdrantConfig = QdrantConfig()
+    ffmpeg: FFmpegConfig = FFmpegConfig()
     encryption: EncryptionConfig = EncryptionConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
     api: APIConfig = APIConfig()
@@ -360,7 +417,37 @@ def load_config(path: Path | str) -> AppConfig:
 
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
+        data = yaml.safe_load(fh) or {}
+    logger = logging.getLogger(__name__)
+
+    if "offline" not in data:
+        data["offline"] = True
+
+    if "embeddings" in data and "embed" not in data:
+        data["embed"] = data.pop("embeddings")
+
+    embed = data.get("embed")
+    if isinstance(embed, dict):
+        if "text_model" not in embed and "model" in embed:
+            embed["text_model"] = embed.get("model")
+        if "text_batch_size" not in embed and "batch_size" in embed:
+            embed["text_batch_size"] = embed.get("batch_size")
+
+    ocr = data.get("ocr")
+    legacy_ocr_engine = "paddle" + "ocr-cuda"
+    if isinstance(ocr, dict) and ocr.get("engine") == legacy_ocr_engine:
+        logger.warning(
+            "Replacing legacy OCR engine with rapidocr-onnxruntime"
+        )
+        ocr["engine"] = "rapidocr-onnxruntime"
+
+    qdrant = data.get("qdrant")
+    if isinstance(qdrant, dict):
+        if "text_collection" not in qdrant and qdrant.get("collection_name"):
+            logger.warning("Mapping legacy qdrant.collection_name to text_collection")
+            qdrant["text_collection"] = qdrant.get("collection_name")
+        if "text_vector_size" not in qdrant and qdrant.get("vector_size"):
+            qdrant["text_vector_size"] = qdrant.get("vector_size")
     # Pydantic v2 compatibility (model_validate) with v1 fallback (parse_obj).
     if hasattr(AppConfig, "model_validate"):
         return AppConfig.model_validate(data)
