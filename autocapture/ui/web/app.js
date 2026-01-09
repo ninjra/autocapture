@@ -21,7 +21,31 @@ const timeRange = document.getElementById('timeRange');
 function appendMessage(author, text) {
   const div = document.createElement('div');
   div.className = 'msg';
-  div.innerHTML = `<strong>${author}</strong><span>${text}</span>`;
+  const strong = document.createElement('strong');
+  strong.textContent = author;
+  const span = document.createElement('span');
+  span.textContent = text;
+  div.appendChild(strong);
+  div.appendChild(span);
+  thread.appendChild(div);
+  thread.scrollTop = thread.scrollHeight;
+}
+
+function appendAssistantMessage(answer, citations) {
+  const div = document.createElement('div');
+  div.className = 'msg';
+  const strong = document.createElement('strong');
+  strong.textContent = 'Assistant';
+  const span = document.createElement('span');
+  span.textContent = answer;
+  div.appendChild(strong);
+  div.appendChild(span);
+  if (Array.isArray(citations) && citations.length > 0) {
+    const citationText = document.createElement('small');
+    citationText.className = 'citations';
+    citationText.textContent = `Citations: ${citations.join(', ')}`;
+    div.appendChild(citationText);
+  }
   thread.appendChild(div);
   thread.scrollTop = thread.scrollHeight;
 }
@@ -54,13 +78,29 @@ chatForm.addEventListener('submit', async (event) => {
     time_range: rangeToTuple(timeRange.value)
   };
 
-  const response = await fetch('/api/answer', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  const data = await response.json();
-  appendMessage('Assistant', `${data.answer}<br/><small>Citations: ${data.citations.join(', ')}</small>`);
+  let response;
+  let data = {};
+  try {
+    response = await fetch('/api/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    try {
+      data = await response.json();
+    } catch (err) {
+      data = {};
+    }
+  } catch (err) {
+    appendAssistantMessage('Error: failed to reach the local API server.', []);
+    return;
+  }
+  if (!response.ok) {
+    const detail = typeof data.detail === 'string' ? data.detail : 'request failed';
+    appendAssistantMessage(`Error: ${detail}.`, []);
+    return;
+  }
+  appendAssistantMessage(data.answer || '', data.citations || []);
 });
 
 const searchForm = document.getElementById('searchForm');
@@ -71,17 +111,48 @@ searchForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const query = searchInput.value.trim();
   if (!query) return;
-  searchResults.innerHTML = '';
-  const response = await fetch('/api/retrieve', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, k: 10 })
-  });
-  const data = await response.json();
-  data.evidence.forEach((item) => {
+  searchResults.textContent = '';
+  let response;
+  let data = {};
+  try {
+    response = await fetch('/api/retrieve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, k: 10 })
+    });
+    try {
+      data = await response.json();
+    } catch (err) {
+      data = {};
+    }
+  } catch (err) {
     const card = document.createElement('div');
     card.className = 'result-card';
-    card.innerHTML = `<strong>${item.app}</strong><p>${item.text}</p><small>${item.event_id}</small>`;
+    card.textContent = 'failed to reach the local API server.';
+    searchResults.appendChild(card);
+    return;
+  }
+  if (!response.ok) {
+    const detail = typeof data.detail === 'string' ? data.detail : 'request failed';
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    card.textContent = `Error: ${detail}.`;
+    searchResults.appendChild(card);
+    return;
+  }
+  const evidence = Array.isArray(data.evidence) ? data.evidence : [];
+  evidence.forEach((item) => {
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    const strong = document.createElement('strong');
+    strong.textContent = item.app || 'Unknown app';
+    const paragraph = document.createElement('p');
+    paragraph.textContent = item.text || '';
+    const small = document.createElement('small');
+    small.textContent = item.event_id || '';
+    card.appendChild(strong);
+    card.appendChild(paragraph);
+    card.appendChild(small);
     searchResults.appendChild(card);
   });
 });

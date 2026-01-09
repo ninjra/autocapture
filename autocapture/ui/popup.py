@@ -78,6 +78,9 @@ class SearchPopup(QtWidgets.QWidget):
         self._suggestions.itemActivated.connect(self._use_suggestion)
 
         self._preview = QtWidgets.QLabel("")
+        self._preview.setTextFormat(QtCore.Qt.PlainText)
+        self._preview.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        self._preview.setOpenExternalLinks(False)
         self._preview.setWordWrap(True)
         self._preview.setStyleSheet("color: #9ad1ff; font-size: 12px;")
 

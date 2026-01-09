@@ -5,6 +5,7 @@
 - If you bind the API to a non-loopback address, an API key is required (fail closed).
 - Cloud calls are disabled unless `privacy.cloud_enabled` is set.
 - Screenshots are pruned after `retention.screenshot_ttl_days`.
+- The bundled dashboard enforces a strict Content Security Policy and renders API output as plain text.
 
 ## Phase 2 (Remote mode)
 - Requires a private overlay network (Tailscale or WireGuard).

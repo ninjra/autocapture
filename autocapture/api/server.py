@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -71,6 +72,7 @@ class ContextPackRequest(BaseModel):
     sanitize: Optional[bool] = None
     extractive_only: Optional[bool] = None
     pack_format: str = Field("json", description="json or text")
+    routing: Optional[dict[str, str]] = None
 
 
 class ContextPackResponse(BaseModel):
@@ -175,7 +177,7 @@ def create_app(
     embedder: EmbeddingService | None = None,
     vector_index: VectorIndex | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Autocapture Memory Engine")
+    db_owned = db_manager is None
     db = db_manager or DatabaseManager(config.database)
     retrieval = RetrievalService(
         db,
@@ -192,6 +194,30 @@ def create_app(
         config.storage, config.retention, db, Path(config.capture.data_dir)
     )
     log = get_logger("api")
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        try:
+            await asyncio.to_thread(retention.enforce_screenshot_ttl)
+        except Exception as exc:
+            log.warning("Retention enforcement failed: {}", exc)
+        yield
+        if db_owned:
+            try:
+                db.engine.dispose()
+            except Exception as exc:
+                log.warning("Database dispose failed: {}", exc)
+
+    app_kwargs: dict[str, Any] = {
+        "title": "Autocapture Memory Engine",
+        "lifespan": lifespan,
+    }
+    if config.api.require_api_key and config.mode.mode != "remote":
+        app_kwargs["docs_url"] = None
+        app_kwargs["redoc_url"] = None
+        app_kwargs["openapi_url"] = None
+    app = FastAPI(**app_kwargs)
+
     oidc_verifier: GoogleOIDCVerifier | None = None
     if config.mode.mode == "remote":
         oidc_verifier = GoogleOIDCVerifier(
@@ -211,6 +237,34 @@ def create_app(
     ui_dir = base_dir / "ui" / "web"
     if ui_dir.exists():
         app.mount("/static", StaticFiles(directory=ui_dir), name="static")
+
+    @app.middleware("http")
+    async def security_headers_middleware(request: Request, call_next):  # type: ignore[no-redef]
+        response = await call_next(request)
+        headers = response.headers
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        headers.setdefault("X-Frame-Options", "DENY")
+        headers.setdefault("Referrer-Policy", "no-referrer")
+        headers.setdefault(
+            "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
+        )
+        headers.setdefault("X-Robots-Tag", "noindex, nofollow")
+        content_type = headers.get("content-type", "").lower()
+        if content_type.startswith("text/html"):
+            headers.setdefault(
+                "Content-Security-Policy",
+                "default-src 'self'; "
+                "img-src 'self' data:; "
+                "script-src 'self'; "
+                "style-src 'self'; "
+                "object-src 'none'; "
+                "base-uri 'none'; "
+                "frame-ancestors 'none'",
+            )
+            headers.setdefault("Cache-Control", "no-store")
+        if request.url.path.startswith("/api/"):
+            headers.setdefault("Cache-Control", "no-store")
+        return response
 
     if config.mode.mode == "remote":
 
@@ -248,10 +302,6 @@ def create_app(
                     content={"detail": "Rate limit exceeded"},
                 )
         return await call_next(request)
-
-    @app.on_event("startup")
-    async def startup() -> None:
-        await asyncio.to_thread(retention.enforce_screenshot_ttl)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
