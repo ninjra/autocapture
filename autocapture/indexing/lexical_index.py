@@ -142,5 +142,7 @@ def _sanitize_fts_query(query: str) -> str:
     tokens = re.findall(r"[\w\.-]+", query)
     if not tokens:
         return ""
-    quoted = [f"\"{token.replace('\"', '\"\"')}\"" for token in tokens]
+    # Avoid f-string backslash escapes inside the expression part.
+    # SQLite FTS5 requires embedded quotes to be escaped by doubling them.
+    quoted = ['"' + token.replace('"', '""') + '"' for token in tokens]
     return " AND ".join(quoted)
