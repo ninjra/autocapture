@@ -75,6 +75,17 @@ main {
   margin-bottom: 4px;
 }
 
+.thread .msg span {
+  white-space: pre-wrap;
+}
+
+.thread .msg .citations {
+  display: block;
+  margin-top: 4px;
+  color: #93c5fd;
+  font-size: 12px;
+}
+
 form {
   display: flex;
   gap: 12px;

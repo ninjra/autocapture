@@ -18,7 +18,7 @@ autocapture/
   config.py           # YAML configuration loader and validation models
   encryption.py       # AES-GCM helpers for local artifacts
   logging_utils.py    # Structured logging configuration
-  main.py             # Legacy shim entry point
+  main.py             # CLI entry point (run/api/tray)
   __main__.py         # Primary CLI entry point
 config/
   example.yml         # Reference configuration with detailed tuning knobs
