@@ -8,7 +8,7 @@ and observable.
 > **Prerequisites**
 >
 > * Windows 11 workstation with administrator privileges, CUDA-capable GPU,
->   and Python 3.11+.
+>   and Python 3.12.
 > * TNAS appliance with Docker support and sufficient capacity for long-term storage.
 > * Basic familiarity with PowerShell on Windows and a POSIX shell on the NAS.
 
@@ -23,13 +23,13 @@ and observable.
    .\.venv\Scripts\Activate.ps1
    python -m pip install --upgrade pip
    ```
-2. **Install Autocapture with Windows extras and tooling.**
+2. **Install Autocapture (and optional dev tooling).**
    ```powershell
-   python -m pip install -e .[windows]
-   python -m pip install ruff black
+   python -m pip install -e .
+   poetry install --with dev
    ```
-   This pulls in `mss` and `psutil` for the Windows capture backend and sets up
-   the linting stack used by the repository.
+   The runtime install is enough to run captures. Use Poetry if you need the
+   dev stack (ruff/black/pytest/pyinstaller) that CI uses.
 3. **Duplicate and customize the configuration.**
    ```powershell
    Copy-Item config/example.yml autocapture.yml
