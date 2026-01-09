@@ -8,7 +8,7 @@ and observable.
 > **Prerequisites**
 >
 > * Windows 11 workstation with administrator privileges, CUDA-capable GPU,
->   and Python 3.11+.
+>   and Python 3.12.
 > * TNAS appliance with Docker support and sufficient capacity for long-term storage.
 > * Basic familiarity with PowerShell on Windows and a POSIX shell on the NAS.
 
@@ -23,7 +23,7 @@ and observable.
    .\.venv\Scripts\Activate.ps1
    python -m pip install --upgrade pip poetry
    ```
-2. **Install Autocapture with Windows extras and tooling.**
+2. **Install Autocapture (and optional dev tooling).**
    ```powershell
    poetry install --with dev --extras "ui windows ocr embed-fast"
    # Optional extras: ocr-gpu, embed-st

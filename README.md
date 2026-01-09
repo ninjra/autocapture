@@ -48,6 +48,15 @@ pyproject.toml        # Project dependencies and tooling configuration
    ```
    On first run, Autocapture creates `%LOCALAPPDATA%/Autocapture/config.yml` and opens a folder picker to choose your data directory.
 
+### Development & Testing
+
+```powershell
+poetry install --with dev
+poetry run ruff check .
+poetry run black --check .
+poetry run pytest -q
+```
+
 ### Daily Use
 
 - `Ctrl+Shift+Space` opens the search popup.

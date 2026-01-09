@@ -26,6 +26,11 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 15
         run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
+
+      - name: Lint (ruff)
+        run: poetry run ruff check .
+      - name: Format check (black)
+        run: poetry run black --check .
       - name: Run tests
         env:
           STRICT_FROZEN_SURFACES: "1"

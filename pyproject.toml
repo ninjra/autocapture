@@ -2,7 +2,6 @@
 name = "autocapture"
 version = "0.1.0"
 description = "High-performance local activity capture and recall pipeline"
-authors = ["Your Name <you@example.com>"]
 readme = "README.md"
 packages = [{ include = "autocapture" }]
 include = ["autocapture/prompts/**/*.yaml", "autocapture/ui/web/**"]
@@ -55,6 +54,24 @@ ocr = ["rapidocr-onnxruntime"]
 ocr-gpu = ["onnxruntime-gpu"]
 embed-fast = ["fastembed"]
 embed-st = ["sentence-transformers"]
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [".venv", ".ruff_cache", ".mypy_cache", "build", "dist", "__pycache__"]
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+exclude = '''
+/(
+    \.venv
+  | \.ruff_cache
+  | \.mypy_cache
+  | build
+  | dist
+  | __pycache__
+)/
+'''
 
 [build-system]
 requires = ["poetry-core"]
