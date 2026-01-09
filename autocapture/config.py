@@ -551,13 +551,13 @@ def load_config(path: Path | str) -> AppConfig:
     ocr = data.get("ocr")
     legacy_ocr_engine = "paddle" + "ocr-cuda"
     if isinstance(ocr, dict) and ocr.get("engine") == legacy_ocr_engine:
-        logger.warning("Replacing legacy OCR engine with rapidocr-onnxruntime")
+        logger.debug("Replacing legacy OCR engine with rapidocr-onnxruntime")
         ocr["engine"] = "rapidocr-onnxruntime"
 
     qdrant = data.get("qdrant")
     if isinstance(qdrant, dict):
         if "text_collection" not in qdrant and qdrant.get("collection_name"):
-            logger.warning("Mapping legacy qdrant.collection_name to text_collection")
+            logger.debug("Mapping legacy qdrant.collection_name to text_collection")
             qdrant["text_collection"] = qdrant.get("collection_name")
         if "text_vector_size" not in qdrant and qdrant.get("vector_size"):
             qdrant["text_vector_size"] = qdrant.get("vector_size")

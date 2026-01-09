@@ -86,8 +86,12 @@ def _doctor(config: AppConfig) -> int:
 
     try:
         import rapidocr_onnxruntime  # noqa: F401
-    except Exception as exc:
-        logger.error("OCR dependency missing (rapidocr_onnxruntime): %s", exc)
+    except ImportError:
+        print(
+            "rapidocr-onnxruntime is not installed. Install with: poetry install --extras 'ocr' "
+            "(optionally add 'ocr-gpu' for GPU support).",
+            file=sys.stderr,
+        )
         ok = False
 
     logger.info("Doctor result: %s", "OK" if ok else "FAILED")
@@ -191,7 +195,15 @@ def main(argv: list[str] | None = None) -> None:
                 "Autocapture already active in another interpreter. Exiting."
             )
             raise SystemExit(0)
-        from .ui.tray import run_tray
+        try:
+            from .ui.tray import run_tray
+        except ImportError:
+            print(
+                "PySide6 is not installed. Install with: poetry install --extras 'ui' "
+                "(and 'windows' on Windows).",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
 
         log_dir = Path(config.capture.data_dir) / "logs"
         run_tray(config_path, log_dir)

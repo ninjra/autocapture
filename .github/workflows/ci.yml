@@ -14,15 +14,26 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "poetry"
+          cache-dependency-path: poetry.lock
       - name: Install Poetry
-        run: pip install poetry
+        run: pip install poetry==1.8.3
+      - name: Show versions
+        run: |
+          python --version
+          pip --version
+          poetry --version
       - name: Install dependencies
-        run: poetry install --with dev
+        timeout-minutes: 15
+        run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
+
       - name: Lint (ruff)
         run: poetry run ruff check .
       - name: Format check (black)
         run: poetry run black --check .
       - name: Run tests
+        env:
+          STRICT_FROZEN_SURFACES: "1"
         run: poetry run pytest -q
 
   windows-build:
@@ -34,9 +45,17 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "poetry"
+          cache-dependency-path: poetry.lock
       - name: Install Poetry
-        run: pip install poetry
+        run: pip install poetry==1.8.3
+      - name: Show versions
+        run: |
+          python --version
+          pip --version
+          poetry --version
       - name: Install dependencies
-        run: poetry install --with dev
+        timeout-minutes: 20
+        run: poetry install --with dev --extras "ui windows ocr embed-fast" --no-interaction --no-ansi --sync -vvv
       - name: Build PyInstaller bundle
         run: poetry run pyinstaller pyinstaller.spec
