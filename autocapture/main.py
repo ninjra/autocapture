@@ -15,7 +15,7 @@ from pathlib import Path
 from loguru import logger
 
 from . import claim_single_instance, ensure_expected_interpreter
-from .config import AppConfig, load_config
+from .config import AppConfig, is_loopback_host, load_config, overlay_interface_ips
 from .logging_utils import configure_logging
 from .runtime import AppRuntime
 from .security.offline_guard import apply_offline_guard
@@ -113,8 +113,20 @@ def main(argv: list[str] | None = None) -> None:
     config_path = Path(args.config)
     config = load_config(config_path)
     configure_logging(getattr(config, "logging", None))
+    if (
+        config.offline
+        and not config.privacy.cloud_enabled
+        and config.mode.mode == "remote"
+    ):
+        logger.warning(
+            "Offline guard disabled in remote mode (OIDC/JWKS requires outbound HTTPS)."
+        )
     apply_offline_guard(
-        enabled=config.offline and not config.privacy.cloud_enabled,
+        enabled=(
+            config.offline
+            and not config.privacy.cloud_enabled
+            and config.mode.mode != "remote"
+        ),
         allowed_hosts={"127.0.0.1", "::1", "localhost"},
     )
 
@@ -216,8 +228,21 @@ def _validate_remote_mode(config: AppConfig) -> None:
         missing.append("Google OIDC client")
     if not config.mode.google_allowed_emails:
         missing.append("mode.google_allowed_emails")
-    if config.api.bind_host in ("0.0.0.0", "127.0.0.1"):
+    # Bind host should be on the overlay interface, not wildcard or loopback.
+    if config.api.bind_host in ("0.0.0.0", "::", ""):
+        missing.append("api.bind_host must not be wildcard in remote mode")
+    elif is_loopback_host(config.api.bind_host):
         missing.append("api.bind_host (overlay IP)")
+    elif config.mode.overlay_interface:
+        ips = overlay_interface_ips(config.mode.overlay_interface)
+        if not ips:
+            missing.append(
+                f"overlay_interface has no usable IPs: {config.mode.overlay_interface}"
+            )
+        elif config.api.bind_host not in ips:
+            missing.append(
+                "api.bind_host must be an IP assigned to mode.overlay_interface"
+            )
     if missing:
         raise RuntimeError("Remote mode misconfigured. Missing: " + ", ".join(missing))
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 
 class HIDConfig(BaseModel):
@@ -219,8 +219,9 @@ class DatabaseConfig(BaseModel):
     sqlite_wal: bool = True
     sqlite_synchronous: str = Field("NORMAL")
 
-    @validator("sqlite_synchronous")
-    def validate_sqlite_synchronous(cls, value: str) -> str:  # type: ignore[name-defined]
+    @field_validator("sqlite_synchronous")
+    @classmethod
+    def validate_sqlite_synchronous(cls, value: str) -> str:
         allowed = {"NORMAL", "FULL", "OFF"}
         upper = value.upper()
         if upper not in allowed:
@@ -298,6 +299,12 @@ class APIConfig(BaseModel):
     default_page_size: int = Field(50, ge=1)
     max_query_chars: int = Field(2000, ge=1)
     max_context_k: int = Field(50, ge=1)
+
+    @model_validator(mode="after")
+    def validate_paging(self) -> "APIConfig":
+        if self.default_page_size > self.max_page_size:
+            raise ValueError("api.default_page_size must be <= api.max_page_size")
+        return self
 
 
 class ModeConfig(BaseModel):
@@ -379,41 +386,120 @@ class AppConfig(BaseModel):
     privacy: PrivacyConfig = PrivacyConfig()
     promptops: PromptOpsConfig = PromptOpsConfig()
 
-    @validator("capture")
-    def validate_staging_dir(cls, value: CaptureConfig) -> CaptureConfig:  # type: ignore[name-defined]
+    @field_validator("capture")
+    @classmethod
+    def validate_staging_dir(cls, value: CaptureConfig) -> CaptureConfig:
         value.staging_dir.mkdir(parents=True, exist_ok=True)
         value.data_dir.mkdir(parents=True, exist_ok=True)
         return value
 
-    @validator("worker")
-    def validate_data_dir(cls, value: WorkerConfig) -> WorkerConfig:  # type: ignore[name-defined]
+    @field_validator("worker")
+    @classmethod
+    def validate_data_dir(cls, value: WorkerConfig) -> WorkerConfig:
         value.data_dir.mkdir(parents=True, exist_ok=True)
         return value
 
-    @validator("tracking")
+    @field_validator("tracking")
+    @classmethod
     def validate_tracking_dir(
-        cls, value: TrackingConfig, values: dict
-    ) -> TrackingConfig:  # type: ignore[name-defined]
-        capture = values.get("capture")
+        cls, value: TrackingConfig, info: ValidationInfo
+    ) -> TrackingConfig:
+        capture = info.data.get("capture")
         if capture:
             capture.data_dir.mkdir(parents=True, exist_ok=True)
         return value
 
-    @validator("api")
-    def validate_api_config(cls, value: APIConfig) -> APIConfig:  # type: ignore[name-defined]
-        loopback = {"127.0.0.1", "localhost", "::1"}
-        if value.bind_host not in loopback:
-            if not value.require_api_key:
+    @model_validator(mode="after")
+    def validate_api_security(self) -> "AppConfig":
+        """Fail closed when binding to a non-loopback host in local mode.
+
+        Remote mode is authenticated via Google OIDC (see api.server), so we do not
+        require an API key there.
+        """
+
+        # If a user explicitly enables API-key auth, ensure a key is actually set.
+        if self.api.require_api_key and not self.api.api_key:
+            raise ValueError("api.api_key is required when api.require_api_key=true")
+
+        if self.mode.mode != "remote" and not is_loopback_host(self.api.bind_host):
+            if not self.api.require_api_key:
                 raise ValueError(
                     "api.require_api_key must be true when binding to non-loopback host"
                 )
-            if not value.api_key:
+            if not self.api.api_key:
                 raise ValueError(
                     "api.api_key is required when binding to non-loopback host"
                 )
-        if value.default_page_size > value.max_page_size:
-            raise ValueError("api.default_page_size must be <= api.max_page_size")
-        return value
+        return self
+
+
+def is_loopback_host(host: str) -> bool:
+    """Return True if *host* is loopback.
+
+    Accepts common hostnames (localhost) and any 127.0.0.0/8 or ::1 style IPs.
+    """
+
+    if host.lower() == "localhost":
+        return True
+    try:
+        import ipaddress
+
+        return ipaddress.ip_address(host).is_loopback
+    except Exception:
+        return False
+
+
+def overlay_interface_ips(interface: str) -> list[str]:
+    """Return a list of candidate IPs bound to a network interface.
+
+    We prefer globally reachable addresses on overlay adapters (e.g. tailscale0, wg0).
+    """
+
+    try:
+        import socket
+
+        import psutil
+    except Exception:
+        return []
+
+    addrs = psutil.net_if_addrs().get(interface) or []
+    results: list[str] = []
+    seen: set[str] = set()
+
+    def _add(ip: str) -> None:
+        ip = ip.split("%", 1)[0]
+        if not ip or ip in seen:
+            return
+        if ip == "0.0.0.0":
+            return
+        if is_loopback_host(ip):
+            return
+        # Skip IPv6 link-local.
+        if ip.lower().startswith("fe80:"):
+            return
+        seen.add(ip)
+        results.append(ip)
+
+    for addr in addrs:
+        if addr.family == socket.AF_INET:
+            _add(addr.address)
+    for addr in addrs:
+        if addr.family == socket.AF_INET6:
+            _add(addr.address)
+    return results
+
+
+def resolve_overlay_bind_host(interface: str) -> str | None:
+    """Return the best bind host for an overlay interface."""
+
+    ips = overlay_interface_ips(interface)
+    if not ips:
+        return None
+    # Prefer IPv4 when available for maximum client compatibility.
+    for ip in ips:
+        if ":" not in ip:
+            return ip
+    return ips[0]
 
 
 def load_config(path: Path | str) -> AppConfig:
@@ -426,6 +512,31 @@ def load_config(path: Path | str) -> AppConfig:
 
     if "offline" not in data:
         data["offline"] = True
+
+    # Remote mode: derive api.bind_host from the configured overlay interface.
+    mode = data.get("mode")
+    if isinstance(mode, dict) and mode.get("mode") == "remote":
+        overlay_if = mode.get("overlay_interface")
+        if isinstance(overlay_if, str) and overlay_if:
+            api = data.setdefault("api", {})
+            if isinstance(api, dict):
+                current = str(api.get("bind_host") or "127.0.0.1")
+                if is_loopback_host(current):
+                    resolved = resolve_overlay_bind_host(overlay_if)
+                    if resolved:
+                        logger.info(
+                            "Remote mode: binding API to %s (from overlay_interface=%s)",
+                            resolved,
+                            overlay_if,
+                        )
+                        api["bind_host"] = resolved
+                    else:
+                        logger.warning(
+                            "Remote mode enabled but overlay_interface=%s has no usable IP; "
+                            "api.bind_host remains %s",
+                            overlay_if,
+                            current,
+                        )
 
     if "embeddings" in data and "embed" not in data:
         data["embed"] = data.pop("embeddings")

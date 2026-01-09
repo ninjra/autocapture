@@ -1,5 +1,7 @@
 mode:
   mode: "local"
+  # Remote mode: set this to your overlay adapter (e.g. tailscale0, wg0). When
+  # remote mode is enabled, api.bind_host is derived from this interface.
   overlay_interface: null
   https_enabled: false
   tls_cert_path: null
@@ -8,6 +10,8 @@ mode:
   google_oauth_client_secret: null
   google_allowed_emails: []
 api:
+  # Remote mode: bind_host is derived from mode.overlay_interface unless you
+  # override it.
   bind_host: "127.0.0.1"
   port: 8008
   require_api_key: false

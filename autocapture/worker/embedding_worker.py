@@ -40,6 +40,7 @@ class EmbeddingWorker:
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         poll_interval = self._config.worker.poll_interval_s
         self._recover_stale_embeddings()
+        self._recover_stale_event_embeddings()
         while True:
             if stop_event and stop_event.is_set():
                 return
@@ -55,37 +56,72 @@ class EmbeddingWorker:
 
     def _process_event_embeddings(self) -> int:
         batch_size = self._config.embed.text_batch_size
-        with self._db.session() as session:
-            event_ids = (
+        self._recover_stale_event_embeddings()
+
+        def _claim(
+            session,
+        ) -> tuple[dt.datetime | None, list[tuple[str, str]]]:
+            events = (
                 session.execute(
-                    select(EventRecord.event_id)
-                    .where(EventRecord.embedding_status == "pending")
+                    select(EventRecord)
+                    .where(
+                        EventRecord.embedding_status == "pending",
+                        EventRecord.embedding_attempts < self._max_attempts,
+                    )
+                    .order_by(EventRecord.ts_start.desc())
                     .limit(batch_size)
                 )
                 .scalars()
                 .all()
             )
-            if not event_ids:
-                return 0
+            if not events:
+                return None, []
 
-        self._db.transaction(
-            lambda session: session.execute(
-                update(EventRecord)
-                .where(EventRecord.event_id.in_(event_ids))
-                .where(EventRecord.embedding_status == "pending")
-                .values(embedding_status="processing")
-            )
-        )
+            claimed_at = dt.datetime.now(dt.timezone.utc)
+            tasks: list[tuple[str, str]] = []
+            for event in events:
+                event.embedding_status = "processing"
+                event.embedding_started_at = claimed_at
+                event.embedding_heartbeat_at = claimed_at
+                event.embedding_attempts += 1
+                event.embedding_last_error = None
+                tasks.append((event.event_id, event.ocr_text or ""))
 
-        with self._db.session() as session:
-            events = (
-                session.execute(
-                    select(EventRecord).where(EventRecord.event_id.in_(event_ids))
+            return claimed_at, tasks
+
+        claimed_at, tasks = self._db.transaction(_claim)
+        if not tasks:
+            return 0
+
+        assert claimed_at is not None
+
+        event_ids = [event_id for event_id, _ in tasks]
+        texts = [text for _, text in tasks]
+
+        stop_tick = threading.Event()
+        tick_interval = max(1.0, min(10.0, self._lease_timeout_s / 3.0))
+
+        def _tick_heartbeat() -> None:
+            while not stop_tick.wait(tick_interval):
+                now = dt.datetime.now(dt.timezone.utc)
+                self._db.transaction(
+                    lambda session: session.execute(
+                        update(EventRecord)
+                        .where(EventRecord.event_id.in_(event_ids))
+                        .where(
+                            EventRecord.embedding_status == "processing",
+                            EventRecord.embedding_started_at == claimed_at,
+                        )
+                        .values(embedding_heartbeat_at=now)
+                    )
                 )
-                .scalars()
-                .all()
-            )
-            texts = [event.ocr_text or "" for event in events]
+
+        ticker = threading.Thread(
+            target=_tick_heartbeat,
+            name="embedding-event-heartbeat",
+            daemon=True,
+        )
+        ticker.start()
         try:
             start = time.monotonic()
             vectors = self._embedder.embed_texts(texts)
@@ -93,26 +129,48 @@ class EmbeddingWorker:
         except Exception as exc:
             self._log.warning("Event embedding failed: {}", exc)
             worker_errors_total.labels("embedding").inc()
+            error = str(exc)
+
             self._db.transaction(
                 lambda session: session.execute(
                     update(EventRecord)
                     .where(EventRecord.event_id.in_(event_ids))
-                    .values(embedding_status="failed")
+                    .where(
+                        EventRecord.embedding_status == "processing",
+                        EventRecord.embedding_started_at == claimed_at,
+                    )
+                    .values(
+                        embedding_status="failed",
+                        embedding_last_error=error,
+                        embedding_heartbeat_at=dt.datetime.now(dt.timezone.utc),
+                    )
                 )
             )
             return 0
+        finally:
+            stop_tick.set()
+            ticker.join(timeout=1.0)
 
-        def _persist(session) -> None:
-            for event, vector in zip(events, vectors):
-                record = session.get(EventRecord, event.event_id)
+        def _persist(session) -> int:
+            now = dt.datetime.now(dt.timezone.utc)
+            written = 0
+            for (event_id, _text), vector in zip(tasks, vectors):
+                record = session.get(EventRecord, event_id)
                 if not record:
+                    continue
+                if record.embedding_status != "processing":
+                    continue
+                if record.embedding_started_at != claimed_at:
                     continue
                 record.embedding_vector = vector
                 record.embedding_status = "done"
                 record.embedding_model = self._embedder.model_name
+                record.embedding_last_error = None
+                record.embedding_heartbeat_at = now
+                written += 1
+            return written
 
-        self._db.transaction(_persist)
-        return len(events)
+        return self._db.transaction(_persist)
 
     def _process_span_embeddings(self) -> int:
         batch_size = self._config.embed.text_batch_size
@@ -291,6 +349,49 @@ class EmbeddingWorker:
         self._db.transaction(_finalize)
         return len(span_rows)
 
+    def _recover_stale_event_embeddings(self) -> None:
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
+            seconds=self._lease_timeout_s
+        )
+
+        def _recover(session) -> None:
+            rows = (
+                session.execute(
+                    select(EventRecord).where(
+                        EventRecord.embedding_status == "processing"
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for record in rows:
+                heartbeat = (
+                    record.embedding_heartbeat_at
+                    or record.embedding_started_at
+                    or record.created_at
+                )
+                heartbeat = _ensure_aware(heartbeat)
+                if heartbeat and heartbeat >= cutoff:
+                    continue
+
+                # If the vector is already present, treat this row as completed.
+                if record.embedding_vector is not None:
+                    record.embedding_status = "done"
+                    record.embedding_last_error = None
+                    record.embedding_started_at = None
+                    record.embedding_heartbeat_at = None
+                    continue
+
+                if record.embedding_attempts >= self._max_attempts:
+                    record.embedding_status = "failed"
+                    record.embedding_last_error = "max_attempts_exceeded"
+                else:
+                    record.embedding_status = "pending"
+                    record.embedding_started_at = None
+                    record.embedding_heartbeat_at = None
+
+        self._db.transaction(_recover)
+
     def _recover_stale_embeddings(self) -> None:
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
             seconds=self._lease_timeout_s
@@ -299,9 +400,7 @@ class EmbeddingWorker:
         def _recover(session) -> None:
             rows = (
                 session.execute(
-                    select(EmbeddingRecord).where(
-                        EmbeddingRecord.status == "processing"
-                    )
+                    select(EmbeddingRecord).where(EmbeddingRecord.status == "processing")
                 )
                 .scalars()
                 .all()

@@ -23,6 +23,22 @@ DOMAIN_RE = re.compile(r"\b[a-z0-9.-]+\.[a-z]{2,}\b", re.IGNORECASE)
 WINDOWS_PATH_RE = re.compile(r"[A-Za-z]:\\[^\s\"']+")
 
 
+def _ensure_private_permissions(path: Path) -> None:
+    """Best-effort tighten permissions for secrets on POSIX.
+
+    Windows file ACLs differ; additionally, when DPAPI is available we store
+    encrypted bytes anyway.
+    """
+
+    if os.name == "nt":
+        return
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        # Not fatal (e.g., running on a filesystem that doesn't support chmod).
+        return
+
+
 @dataclass(frozen=True)
 class EntityToken:
     token: str
@@ -39,7 +55,9 @@ class SecretStore:
 
     def get_or_create(self) -> bytes:
         if self._path.exists():
-            return self._read_key()
+            key = self._read_key()
+            _ensure_private_permissions(self._path)
+            return key
         self._path.parent.mkdir(parents=True, exist_ok=True)
         key = os.urandom(32)
         self._write_key(key)
@@ -62,10 +80,12 @@ class SecretStore:
 
             protected = win32crypt.CryptProtectData(key, None, None, None, None, 0)
             self._path.write_bytes(protected)
+            _ensure_private_permissions(self._path)
             return
         except Exception:
             self._log.warning("DPAPI unavailable; storing pseudonym key on disk.")
         self._path.write_bytes(key)
+        _ensure_private_permissions(self._path)
 
 
 def stable_token(prefix: str, value: str, secret: bytes, length: int = 20) -> str:

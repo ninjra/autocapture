@@ -20,6 +20,18 @@ from .config import EncryptionConfig
 from .logging_utils import get_logger
 
 
+def _ensure_private_permissions(path: Path) -> None:
+    """Best-effort tighten permissions for secrets on POSIX."""
+
+    if os.name == "nt":
+        return
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        # Not fatal (e.g., filesystem doesn't support chmod).
+        return
+
+
 class EncryptionManager:
     """Encrypt/decrypt files before transferring to NAS."""
 
@@ -111,12 +123,14 @@ class EncryptionManager:
                 _write_windows_credential(self._config.key_name, key)
             return _validate_key_length(key)
         if provider.startswith("file:"):
-            path = Path(provider.split(":", 1)[1])
+            path = Path(provider.split(":", 1)[1]).expanduser().resolve()
             if not path.exists():
                 path.parent.mkdir(parents=True, exist_ok=True)
                 key = os.urandom(32)
                 path.write_bytes(key)
+                _ensure_private_permissions(path)
             key = path.read_bytes()
+            _ensure_private_permissions(path)
             return _validate_key_length(key)
         if provider.startswith("env:"):
             key = os.getenv(provider.split(":", 1)[1])

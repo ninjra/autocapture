@@ -27,6 +27,14 @@ class Base(DeclarativeBase):
 class EventRecord(Base):
     __tablename__ = "events"
 
+    __table_args__ = (
+        Index(
+            "idx_events_embedding_status_heartbeat",
+            "embedding_status",
+            "embedding_heartbeat_at",
+        ),
+    )
+
     event_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
@@ -44,6 +52,14 @@ class EventRecord(Base):
     embedding_vector: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     embedding_status: Mapped[str] = mapped_column(String(16), default="pending")
     embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    embedding_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    embedding_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_started_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    embedding_heartbeat_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     tags: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
