@@ -21,15 +21,18 @@ and observable.
    ```powershell
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1
-   python -m pip install --upgrade pip
+   python -m pip install --upgrade pip poetry
    ```
 2. **Install Autocapture with Windows extras and tooling.**
    ```powershell
-   python -m pip install -e .[windows]
-   python -m pip install ruff black
+   poetry install --with dev --extras "ui windows ocr embed-fast"
+   # Optional extras: ocr-gpu, embed-st
    ```
-   This pulls in `mss` and `psutil` for the Windows capture backend and sets up
-   the linting stack used by the repository.
+   This pulls in the tray UI, capture stack, OCR, embeddings, and dev tooling.
+   For minimal dev/test installs without the Windows app stack, use:
+   ```powershell
+   poetry install --with dev
+   ```
 3. **Duplicate and customize the configuration.**
    ```powershell
    Copy-Item config/example.yml autocapture.yml

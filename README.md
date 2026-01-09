@@ -31,15 +31,20 @@ pyproject.toml        # Project dependencies and tooling configuration
    ```powershell
    python -m venv .venv
    .\.venv\Scripts\Activate.ps1  # PowerShell (use activate.bat for cmd.exe)
-   python -m pip install --upgrade pip
+   python -m pip install --upgrade pip poetry
    ```
 2. Install dependencies:
    ```powershell
-   python -m pip install -e .
+   poetry install --with dev
+   ```
+   For the full Windows app (tray UI + capture + OCR + embeddings):
+   ```powershell
+   poetry install --with dev --extras "ui windows ocr embed-fast"
+   # Optional extras: ocr-gpu, embed-st
    ```
 3. Run Autocapture:
    ```powershell
-   python -m autocapture
+   poetry run autocapture
    ```
    On first run, Autocapture creates `%LOCALAPPDATA%/Autocapture/config.yml` and opens a folder picker to choose your data directory.
 
