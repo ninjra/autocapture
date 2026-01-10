@@ -40,6 +40,7 @@ openai = "^1.14.3"
 python-dateutil = "^2.9.0"
 PyJWT = "^2.8.0"
 alembic = "^1.13.1"
+apscheduler = "^3.10.4"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.3.0"

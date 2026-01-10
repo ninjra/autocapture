@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hmac
+import json
 import sys
 import tempfile
 import threading
@@ -45,6 +46,7 @@ from ..storage.models import (
     CaptureRecord,
     EventRecord,
     OCRSpanRecord,
+    PromptOpsRunRecord,
     QueryHistoryRecord,
 )
 from ..storage.retention import RetentionManager
@@ -131,9 +133,24 @@ class SettingsResponse(BaseModel):
     status: str
 
 
+class SettingsSnapshot(BaseModel):
+    settings: dict[str, Any]
+
+
 class SuggestRequest(BaseModel):
     q: str
 
+
+class PromptOpsRunSummary(BaseModel):
+    run_id: str
+    ts: dt.datetime
+    status: str
+    pr_url: Optional[str] = None
+    eval_results: dict[str, Any]
+
+
+class PromptOpsRunsResponse(BaseModel):
+    runs: list[PromptOpsRunSummary]
 
 class _TokenBucket:
     def __init__(self, tokens: float, updated_at: float) -> None:
@@ -356,6 +373,29 @@ def create_app(
             },
             "gpu": gpu,
         }
+
+    @app.get("/api/promptops/latest")
+    def promptops_latest() -> PromptOpsRunsResponse:
+        with db.session() as session:
+            run = (
+                session.query(PromptOpsRunRecord)
+                .order_by(PromptOpsRunRecord.ts.desc())
+                .first()
+            )
+        if not run:
+            return PromptOpsRunsResponse(runs=[])
+        return PromptOpsRunsResponse(runs=[_promptops_summary(run)])
+
+    @app.get("/api/promptops/runs")
+    def promptops_runs(limit: int = 20) -> PromptOpsRunsResponse:
+        with db.session() as session:
+            runs = (
+                session.query(PromptOpsRunRecord)
+                .order_by(PromptOpsRunRecord.ts.desc())
+                .limit(min(limit, 100))
+                .all()
+            )
+        return PromptOpsRunsResponse(runs=[_promptops_summary(run) for run in runs])
 
     @app.get("/api/screenshot/{event_id}")
     def screenshot(event_id: str) -> Response:
@@ -614,7 +654,25 @@ def create_app(
         tmp_path = settings_path.with_suffix(".tmp")
         tmp_path.write_text(_safe_json(request.settings), encoding="utf-8")
         tmp_path.replace(settings_path)
+        routing = request.settings.get("routing")
+        if isinstance(routing, dict):
+            merged = _model_dump(config.routing)
+            merged.update({k: v for k, v in routing.items() if v})
+            config.routing = ProviderRoutingConfig(**merged)
         return SettingsResponse(status="ok")
+
+    @app.get("/api/settings")
+    def settings_snapshot() -> SettingsSnapshot:
+        settings_path = Path(config.capture.data_dir) / "settings.json"
+        settings: dict[str, Any] = {}
+        if settings_path.exists():
+            try:
+                settings = json.loads(settings_path.read_text(encoding="utf-8"))
+            except Exception:
+                settings = {}
+        if "routing" not in settings:
+            settings["routing"] = _model_dump(config.routing)
+        return SettingsSnapshot(settings=settings)
 
     return app
 
@@ -668,6 +726,16 @@ def _safe_json(value: dict[str, Any]) -> str:
     import json
 
     return json.dumps(value, ensure_ascii=False, indent=2)
+
+
+def _promptops_summary(run: PromptOpsRunRecord) -> PromptOpsRunSummary:
+    return PromptOpsRunSummary(
+        run_id=run.run_id,
+        ts=run.ts,
+        status=run.status,
+        pr_url=run.pr_url,
+        eval_results=run.eval_results or {},
+    )
 
 
 def _build_evidence(

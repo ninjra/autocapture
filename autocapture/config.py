@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import json
 import os
 import sys
 from pathlib import Path
@@ -254,6 +255,16 @@ class QdrantConfig(BaseModel):
 class FFmpegConfig(BaseModel):
     enabled: bool = Field(True)
     require_bundled: bool = Field(True)
+    explicit_path: Optional[Path] = Field(
+        None, description="Explicit ffmpeg binary path."
+    )
+    allow_system: bool = Field(
+        True, description="Allow falling back to system PATH ffmpeg."
+    )
+    allow_disable: bool = Field(
+        True,
+        description="Allow disabling video capture when ffmpeg is missing.",
+    )
     relative_path_candidates: list[str] = Field(
         default_factory=lambda: ["ffmpeg/bin/ffmpeg.exe", "ffmpeg/ffmpeg.exe"]
     )
@@ -349,6 +360,7 @@ class PromptOpsConfig(BaseModel):
     sources: list[str] = Field(default_factory=list)
     github_token: Optional[str] = Field(None)
     github_repo: Optional[str] = Field(None)
+    acceptance_tolerance: float = Field(0.02, ge=0.0, le=1.0)
 
 
 class LLMConfig(BaseModel):
@@ -563,5 +575,30 @@ def load_config(path: Path | str) -> AppConfig:
             qdrant["text_vector_size"] = qdrant.get("vector_size")
     # Pydantic v2 compatibility (model_validate) with v1 fallback (parse_obj).
     if hasattr(AppConfig, "model_validate"):
-        return AppConfig.model_validate(data)
-    return AppConfig.parse_obj(data)
+        config = AppConfig.model_validate(data)
+    else:
+        config = AppConfig.parse_obj(data)
+    return apply_settings_overrides(config)
+
+
+def apply_settings_overrides(config: AppConfig) -> AppConfig:
+    settings_path = Path(config.capture.data_dir) / "settings.json"
+    if not settings_path.exists():
+        return config
+    try:
+        raw = json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return config
+    if not isinstance(raw, dict):
+        return config
+    routing = raw.get("routing")
+    if isinstance(routing, dict):
+        if hasattr(config.routing, "model_dump"):
+            merged = config.routing.model_dump()
+        else:
+            merged = config.routing.dict()
+        for key, value in routing.items():
+            if value and key in merged:
+                merged[key] = value
+        config.routing = ProviderRoutingConfig(**merged)
+    return config

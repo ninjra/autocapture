@@ -72,10 +72,28 @@ poetry run pytest -q
 Legacy/experimental modules exist (for example `autocapture/capture/service.py` and
 `autocapture/worker/worker_main.py`) and are not the canonical path used by `main.py` run/api.
 
+## PromptOps
+
+PromptOps automates prompt refreshes and evals.
+
+```powershell
+poetry run autocapture promptops run
+poetry run autocapture promptops status
+poetry run autocapture promptops list
+```
+
 ## Troubleshooting
 
 - If PyCharm does not show newly added modules, follow the Git integration checklist in
   [`docs/troubleshooting.md`](docs/troubleshooting.md).
+
+## Observability
+
+- Prometheus metrics are exposed on the configured `observability.prometheus_port`.
+- Import the Grafana dashboard from `docs/dashboard.json`:
+  1. Grafana → Dashboards → Import.
+  2. Upload `docs/dashboard.json`.
+  3. Select your Prometheus data source.
 
 ## License
 

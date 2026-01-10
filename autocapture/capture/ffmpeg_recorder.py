@@ -16,8 +16,8 @@ from PIL import Image
 
 from ..config import CaptureConfig, FFmpegConfig
 from ..logging_utils import get_logger
-from ..observability.metrics import video_frames_dropped_total
-from ..paths import find_bundled_ffmpeg
+from ..observability.metrics import video_disabled, video_frames_dropped_total
+from ..paths import resolve_ffmpeg_path
 from .screen_capture import CaptureFrame
 
 
@@ -68,10 +68,15 @@ class SegmentRecorder:
         self._config = capture_config
         self._log = get_logger("recorder")
         try:
-            self._ffmpeg_path = find_bundled_ffmpeg(ffmpeg_config)
+            self._ffmpeg_path = resolve_ffmpeg_path(ffmpeg_config)
         except FileNotFoundError as exc:
             self._ffmpeg_path = None
-            self._log.warning("%s", exc)
+            if ffmpeg_config.allow_disable:
+                self._log.warning("FFmpeg unavailable; video disabled: {}", exc)
+            else:
+                raise RuntimeError(str(exc)) from exc
+        if self._config.record_video:
+            video_disabled.set(0 if self._ffmpeg_path else 1)
         self._queue_maxsize = 512
         self._queue: queue.Queue[list[CaptureFrame] | None] = queue.Queue(
             maxsize=self._queue_maxsize

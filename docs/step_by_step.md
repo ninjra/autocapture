@@ -44,8 +44,7 @@ and observable.
    * `capture.hid.block_fullscreen` → leave `true` so fullscreen apps are
      ignored automatically.
    * `ocr`, `embed`, `database`, `qdrant`, `encryption`, and
-     `observability` URLs → point at placeholders for now; you will update them
-     again after the NAS stack is online.
+     `observability` URLs → point at the services you intend to run (local or NAS).
 4. **Create directories referenced in the config.** For example:
    ```powershell
    New-Item -ItemType Directory -Force -Path D:\autocapture\staging
@@ -64,7 +63,7 @@ and observable.
    ```powershell
    Invoke-WebRequest http://localhost:9005/metrics | Select-Object -ExpandProperty Content
    ```
-   Confirm counters like `autocapture_captures_total` increment while you
+   Confirm counters like `captures_taken_total` increment while you
    interact with the workstation.
 7. **Optional – Install as a Windows Service.** Once satisfied, register the
    orchestrator with [NSSM](https://nssm.cc/) using the interpreter inside your

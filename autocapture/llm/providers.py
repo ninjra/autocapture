@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
@@ -38,13 +39,14 @@ class ContextChunk:
     snippet: str
 
 
-class LLMProvider:
+class LLMProvider(ABC):
     """Base interface for answer generation."""
 
+    @abstractmethod
     async def generate_answer(
         self, system_prompt: str, query: str, context_pack_text: str
     ) -> str:
-        raise NotImplementedError
+        """Generate an answer string for the provided prompt and context."""
 
 
 def _format_evidence_message(context_pack_text: str) -> str:

@@ -12,11 +12,10 @@ import sys
 import time
 from pathlib import Path
 
-from loguru import logger
-
 from . import claim_single_instance, ensure_expected_interpreter
 from .config import AppConfig, is_loopback_host, load_config, overlay_interface_ips
-from .logging_utils import configure_logging
+from .logging_utils import configure_logging, get_logger
+from .doctor import run_doctor
 from .runtime import AppRuntime
 from .security.offline_guard import apply_offline_guard
 from .storage.database import DatabaseManager
@@ -30,6 +29,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=os.environ.get("AUTOCAPTURE_CONFIG", "autocapture.yml"),
         help="Path to config YAML (default: autocapture.yml or AUTOCAPTURE_CONFIG).",
     )
+    p.add_argument(
+        "--log-dir",
+        default=None,
+        help="Optional log directory override (defaults to platform log dir).",
+    )
     sub = p.add_subparsers(dest="cmd", required=False)
 
     sub.add_parser("run", help="Run the capture + OCR orchestrator (default).")
@@ -40,62 +44,19 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
     sub.add_parser("print-config", help="Load config and print resolved values.")
 
+    promptops = sub.add_parser("promptops", help="PromptOps automation utilities.")
+    promptops_sub = promptops.add_subparsers(dest="promptops_cmd", required=True)
+    promptops_sub.add_parser("run", help="Run PromptOps once.")
+    promptops_sub.add_parser("status", help="Show latest PromptOps run.")
+    promptops_sub.add_parser("list", help="List recent PromptOps runs.")
+
     return p.parse_args(argv)
 
 
 def _doctor(config: AppConfig) -> int:
-    """Lightweight sanity checks that are cheap and help during deployment."""
-    ok = True
-
-    # Paths
-    cap = config.capture
-    for name, p in [("staging_dir", cap.staging_dir), ("data_dir", cap.data_dir)]:
-        try:
-            Path(p).mkdir(parents=True, exist_ok=True)
-        except Exception as exc:
-            logger.error("Cannot create %s=%r: %s", name, p, exc)
-            ok = False
-
-    # DB
-    try:
-        _ = DatabaseManager(config.database)
-    except Exception as exc:
-        logger.error("Database init failed: %s", exc)
-        ok = False
-
-    if config.tracking.enabled:
-        tracking_dir = _resolve_tracking_dir(config)
-        try:
-            tracking_dir.mkdir(parents=True, exist_ok=True)
-            logger.info("Tracking DB directory: %s", tracking_dir)
-        except Exception as exc:
-            logger.error(
-                "Cannot create tracking DB directory %s: %s", tracking_dir, exc
-            )
-            ok = False
-
-    # Encryption key (if enabled)
-    if getattr(config, "encryption", None) and config.encryption.enabled:
-        try:
-            from .encryption import EncryptionManager
-
-            _ = EncryptionManager(config.encryption)
-        except Exception as exc:
-            logger.exception("Encryption init failed; aborting startup")
-            raise RuntimeError("Encryption subsystem failed to initialize") from exc
-
-    try:
-        import rapidocr_onnxruntime  # noqa: F401
-    except ImportError:
-        print(
-            "rapidocr-onnxruntime is not installed. Install with: poetry install --extras 'ocr' "
-            "(optionally add 'ocr-gpu' for GPU support).",
-            file=sys.stderr,
-        )
-        ok = False
-
-    logger.info("Doctor result: %s", "OK" if ok else "FAILED")
-    return 0 if ok else 2
+    """Run full diagnostic suite and exit."""
+    exit_code, _report = run_doctor(config)
+    return exit_code
 
 
 def _run_runtime(config: AppConfig) -> int:
@@ -116,7 +77,8 @@ def main(argv: list[str] | None = None) -> None:
 
     config_path = Path(args.config)
     config = load_config(config_path)
-    configure_logging(getattr(config, "logging", None))
+    configure_logging(args.log_dir or getattr(config, "logging", None))
+    logger = get_logger("cli")
     if (
         config.offline
         and not config.privacy.cloud_enabled
@@ -136,15 +98,51 @@ def main(argv: list[str] | None = None) -> None:
 
     if cmd == "print-config":
         # Avoid importing rich; keep it simple and predictable.
-        logger.info("Resolved config loaded from %s", config_path)
+        logger.info("Resolved config loaded from {}", config_path)
         logger.info(
-            "%s",
+            "{}",
             config.model_dump() if hasattr(config, "model_dump") else config.dict(),
         )
         return
 
     if cmd == "doctor":
         raise SystemExit(_doctor(config))
+
+    if cmd == "promptops":
+        from .promptops import PromptOpsRunner
+        from .storage.models import PromptOpsRunRecord
+
+        db = DatabaseManager(config.database)
+        runner = PromptOpsRunner(config, db)
+        if args.promptops_cmd == "run":
+            run = runner.run_once()
+            logger.info("PromptOps run {} status={}", run.run_id, run.status)
+            raise SystemExit(0 if run.status in {"pr_opened", "completed_no_pr"} else 2)
+        if args.promptops_cmd == "status":
+            with db.session() as session:
+                run = (
+                    session.query(PromptOpsRunRecord)
+                    .order_by(PromptOpsRunRecord.ts.desc())
+                    .first()
+                )
+            if not run:
+                logger.info("No PromptOps runs recorded.")
+                raise SystemExit(1)
+            logger.info("Latest PromptOps run {} status={}", run.run_id, run.status)
+            if run.pr_url:
+                logger.info("PR: {}", run.pr_url)
+            raise SystemExit(0)
+        if args.promptops_cmd == "list":
+            with db.session() as session:
+                runs = (
+                    session.query(PromptOpsRunRecord)
+                    .order_by(PromptOpsRunRecord.ts.desc())
+                    .limit(10)
+                    .all()
+                )
+            for run in runs:
+                logger.info("{} {} {}", run.run_id, run.status, run.pr_url or "")
+            raise SystemExit(0)
 
     if cmd == "api":
         from .api.server import create_app
@@ -257,13 +255,6 @@ def _validate_remote_mode(config: AppConfig) -> None:
             )
     if missing:
         raise RuntimeError("Remote mode misconfigured. Missing: " + ", ".join(missing))
-
-
-def _resolve_tracking_dir(config: AppConfig) -> Path:
-    db_path = config.tracking.db_path
-    if db_path.is_absolute():
-        return db_path.parent
-    return Path(config.capture.data_dir) / db_path.parent
 
 
 if __name__ == "__main__":

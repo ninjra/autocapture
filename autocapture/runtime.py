@@ -7,6 +7,9 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+
 from .capture.orchestrator import CaptureOrchestrator
 from .capture.raw_input import RawInputListener
 from .capture.backends.monitor_utils import set_process_dpi_awareness
@@ -16,6 +19,7 @@ from .indexing.vector_index import VectorIndex
 from .logging_utils import get_logger
 from .media.store import MediaStore
 from .observability.metrics import MetricsServer
+from .promptops import PromptOpsRunner
 from .storage.database import DatabaseManager
 from .storage.retention import RetentionManager
 from .tracking import HostVectorTracker
@@ -50,6 +54,43 @@ class RetentionScheduler:
             except Exception as exc:  # pragma: no cover - defensive
                 self._log.warning("Retention enforcement failed: {}", exc)
             self._stop.wait(self._interval_s)
+
+
+class PromptOpsScheduler:
+    def __init__(self, runner: PromptOpsRunner, cron: str) -> None:
+        self._runner = runner
+        self._cron = cron
+        self._scheduler = BackgroundScheduler(timezone="UTC")
+        self._lock = threading.Lock()
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        trigger = CronTrigger.from_crontab(self._cron)
+        self._scheduler.add_job(
+            self._run_job,
+            trigger=trigger,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+        self._scheduler.start()
+        self._started = True
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._scheduler.shutdown(wait=False)
+        self._started = False
+
+    def _run_job(self) -> None:
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
+            self._runner.run_once()
+        finally:
+            self._lock.release()
 
 
 class AppRuntime:
@@ -109,6 +150,13 @@ class AppRuntime:
         self._metrics = MetricsServer(
             config.observability, Path(config.capture.data_dir)
         )
+        self._promptops_runner: PromptOpsRunner | None = None
+        self._promptops_scheduler: PromptOpsScheduler | None = None
+        if config.promptops.enabled:
+            self._promptops_runner = PromptOpsRunner(config, self._db)
+            self._promptops_scheduler = PromptOpsScheduler(
+                self._promptops_runner, config.promptops.schedule_cron
+            )
 
     def start(self) -> None:
         with self._lock:
@@ -123,6 +171,8 @@ class AppRuntime:
         self._workers.start()
         self._retention_scheduler.start()
         self._metrics.start()
+        if self._promptops_scheduler:
+            self._promptops_scheduler.start()
         self._log.info("Runtime started")
 
     def stop(self) -> None:
@@ -146,6 +196,8 @@ class AppRuntime:
         if self._tracker:
             self._tracker.stop()
         self._retention_scheduler.stop()
+        if self._promptops_scheduler:
+            self._promptops_scheduler.stop()
         self._log.info("Runtime stopped")
 
     def pause_capture(self) -> None:
