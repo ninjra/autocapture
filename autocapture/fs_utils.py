@@ -13,9 +13,25 @@ from typing import Callable, Iterator
 
 
 def fsync_file(path: Path) -> None:
-    with path.open("rb") as handle:
-        handle.flush()
-        os.fsync(handle.fileno())
+    # On Windows, os.fsync on a read-only handle can raise EBADF.
+    # Use a writable handle when possible; fall back gracefully for edge cases.
+    mode = "r+b" if os.name == "nt" else "rb"
+    try:
+        with path.open(mode) as handle:
+            try:
+                handle.flush()
+            except Exception:
+                # flush() may not be meaningful for read handles; ignore.
+                pass
+            os.fsync(handle.fileno())
+    except FileNotFoundError:
+        # File disappeared between operations; caller will handle missing files later.
+        return
+    except OSError as exc:
+        # Windows can still raise for some filesystem/handle types. Best-effort fsync.
+        if os.name == "nt" and getattr(exc, "errno", None) in (9, 22, 13):
+            return
+        raise
 
 
 def fsync_dir(path: Path) -> None:
