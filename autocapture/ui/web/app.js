@@ -13,9 +13,9 @@ tabs.forEach((btn) => {
 const thread = document.getElementById('thread');
 const chatForm = document.getElementById('chatForm');
 const chatInput = document.getElementById('chatInput');
+const modelSelect = document.getElementById('modelSelect');
 const sanitizeToggle = document.getElementById('sanitizeToggle');
 const extractiveToggle = document.getElementById('extractiveToggle');
-const cloudToggle = document.getElementById('cloudToggle');
 const timeRange = document.getElementById('timeRange');
 
 function appendMessage(author, text) {
@@ -74,7 +74,7 @@ chatForm.addEventListener('submit', async (event) => {
     query,
     sanitize: sanitizeToggle.checked,
     extractive_only: extractiveToggle.checked,
-    routing: { llm: cloudToggle.checked ? 'openai' : 'ollama' },
+    routing: { llm: modelSelect.value === 'cloud' ? 'openai' : 'ollama' },
     time_range: rangeToTuple(timeRange.value)
   };
 
@@ -176,6 +176,38 @@ saveSettings.addEventListener('click', async () => {
   });
   alert('Settings saved locally.');
 });
+
+async function loadSettings() {
+  try {
+    const response = await fetch('/api/settings');
+    const data = await response.json();
+    const routing = (data.settings && data.settings.routing) || {};
+    if (routing.ocr) document.getElementById('routingOcr').value = routing.ocr;
+    if (routing.embedding) document.getElementById('routingEmbedding').value = routing.embedding;
+    if (routing.retrieval) document.getElementById('routingRetrieval').value = routing.retrieval;
+    if (routing.compressor) document.getElementById('routingCompressor').value = routing.compressor;
+    if (routing.verifier) document.getElementById('routingVerifier').value = routing.verifier;
+    if (routing.llm) {
+      modelSelect.value = routing.llm.startsWith('openai') ? 'cloud' : 'local';
+    }
+  } catch (err) {
+    return;
+  }
+}
+
+async function loadStatus() {
+  try {
+    const response = await fetch('/health');
+    const data = await response.json();
+    const status = document.getElementById('remoteStatus');
+    status.textContent = data.mode || 'local-only';
+  } catch (err) {
+    return;
+  }
+}
+
+loadSettings();
+loadStatus();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/static/sw.js');

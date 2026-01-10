@@ -31,6 +31,7 @@ ocr_stale_processing_gauge = Gauge(
 ocr_latency_ms = Histogram("ocr_latency_ms", "OCR latency (ms)")
 embedding_latency_ms = Histogram("embedding_latency_ms", "Embedding latency (ms)")
 retrieval_latency_ms = Histogram("retrieval_latency_ms", "Retrieval latency (ms)")
+embedding_backlog = Gauge("embedding_backlog", "Embedding backlog count")
 retention_files_deleted_total = Counter(
     "retention_files_deleted_total", "Retention deletions"
 )

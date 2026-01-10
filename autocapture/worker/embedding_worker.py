@@ -14,7 +14,11 @@ from ..embeddings.service import EmbeddingService
 from ..indexing.lexical_index import LexicalIndex
 from ..indexing.vector_index import IndexUnavailable, SpanEmbeddingUpsert, VectorIndex
 from ..logging_utils import get_logger
-from ..observability.metrics import embedding_latency_ms, worker_errors_total
+from ..observability.metrics import (
+    embedding_backlog,
+    embedding_latency_ms,
+    worker_errors_total,
+)
 from ..storage.database import DatabaseManager
 from ..storage.models import EmbeddingRecord, EventRecord, OCRSpanRecord
 
@@ -49,10 +53,39 @@ class EmbeddingWorker:
                 time.sleep(poll_interval)
 
     def process_batch(self) -> int:
+        self._update_backlog_metrics()
         processed = 0
         processed += self._process_event_embeddings()
         processed += self._process_span_embeddings()
         return processed
+
+    def _update_backlog_metrics(self) -> None:
+        try:
+            with self._db.session() as session:
+                pending_events = (
+                    session.execute(
+                        select(EventRecord)
+                        .where(EventRecord.embedding_status == "pending")
+                        .where(EventRecord.embedding_attempts < self._max_attempts)
+                    )
+                    .scalars()
+                    .all()
+                )
+                pending_spans = (
+                    session.execute(
+                        select(EmbeddingRecord.id)
+                        .where(
+                            EmbeddingRecord.status.in_(["pending", "index_pending"]),
+                            EmbeddingRecord.model == self._embedder.model_name,
+                            EmbeddingRecord.attempts < self._max_attempts,
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+            embedding_backlog.set(len(pending_events) + len(pending_spans))
+        except Exception as exc:
+            self._log.debug("Embedding backlog metric failed: {}", exc)
 
     def _process_event_embeddings(self) -> int:
         batch_size = self._config.embed.text_batch_size

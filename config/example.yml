@@ -150,9 +150,19 @@ qdrant:
 ffmpeg:
   enabled: true
   require_bundled: true
+  explicit_path: null
+  allow_system: true
+  allow_disable: true
   relative_path_candidates:
     - "ffmpeg/bin/ffmpeg.exe"
     - "ffmpeg/ffmpeg.exe"
+promptops:
+  enabled: false
+  schedule_cron: "0 6 * * 1"
+  sources: []
+  github_token: null
+  github_repo: null
+  acceptance_tolerance: 0.02
 encryption:
   enabled: true
   key_provider: "windows-credential-manager"
