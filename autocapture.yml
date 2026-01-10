@@ -38,7 +38,7 @@ routing:
   ocr: "local"
   embedding: "local"
   retrieval: "local"
-  reranker: "disabled"
+  reranker: "enabled"
   compressor: "extractive"
   verifier: "rules"
   llm: "ollama"
@@ -55,7 +55,7 @@ promptops:
   schedule_cron: "0 6 * * 1"
   sources: []
   github_token: null
-  github_repo: null
+  github_repo: "https://github.com/ninjra/promptops"
 capture:
   hid:
     min_interval_ms: 500
@@ -81,6 +81,17 @@ capture:
   video_bitrate: "8M"
   video_preset: "p4"
   max_pending: 8000
+tracking:
+  enabled: true
+  db_path: "db/host_events.sqlite"
+  queue_maxsize: 20000
+  flush_interval_ms: 1000
+  foreground_poll_ms: 250
+  clipboard_poll_ms: 250
+  track_mouse_movement: true
+  mouse_move_sample_ms: 50
+  enable_clipboard: false
+  retention_days: null
 ocr:
   queue_maxsize: 4000
   batch_size: 32
@@ -111,15 +122,15 @@ worker:
   ocr_workers: 4
   embed_workers: 1
   embedding_max_attempts: 5
-storage:
-  image_quota_gb: 2500
-  prune_grace_days: 90
-  prune_batch: 3000
 retention:
   video_days: 3
   roi_days: 14
   max_media_gb: 200
   screenshot_ttl_days: 90
+storage:
+  image_quota_gb: 250
+  prune_grace_days: 90
+  prune_batch: 3000
 database:
   url: "sqlite:///D:/autocapture/data/autocapture.db"
   echo: false
@@ -152,5 +163,5 @@ observability:
   prometheus_port: 9005
   prometheus_port_fallbacks: 10
   prometheus_fail_fast: false
-  grafana_url: "http://tnas:3000"
+  grafana_url: "http://nas.local:3000"
   enable_gpu_stats: true
