@@ -7,6 +7,8 @@ a = Analysis(
     pathex=["."],
     binaries=[],
     datas=[
+        ("alembic.ini", "."),
+        ("alembic", "alembic"),
         ("autocapture/prompts/derived/*.yaml", "autocapture/prompts/derived"),
         ("autocapture/ui/web", "autocapture/ui/web"),
     ],

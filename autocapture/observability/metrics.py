@@ -48,6 +48,9 @@ video_disabled = Gauge("autocapture_video_disabled", "Video capture disabled (0/
 metrics_port_gauge = Gauge("autocapture_metrics_port", "Metrics server port")
 _metrics_port_value: Optional[int] = None
 worker_errors_total = Counter("worker_errors_total", "Worker errors", ["worker"])
+worker_restarts_total = Counter(
+    "worker_restarts_total", "Worker thread restarts", ["worker_type"]
+)
 media_folder_size_gb = Gauge("media_folder_size_gb", "Media folder size (GB)")
 process_cpu_percent = Gauge("process_cpu_percent", "Process CPU percent")
 process_rss_mb = Gauge("process_rss_mb", "Process RSS (MB)")

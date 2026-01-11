@@ -72,6 +72,7 @@ class EventIngestWorker:
         self._media_store = MediaStore(config.capture, config.encryption)
         self._lease_timeout_s = config.worker.ocr_lease_ms / 1000
         self._max_attempts = config.worker.ocr_max_attempts
+        self._max_task_runtime_s = config.worker.max_task_runtime_s
         if ocr_processor is None:
             self._ocr = OCRProcessor()
         else:
@@ -116,10 +117,21 @@ class EventIngestWorker:
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         poll_interval = self._config.worker.poll_interval_s
         self._recover_stale_captures()
+        backoff_s = 1.0
         while True:
             if stop_event and stop_event.is_set():
                 return
-            processed = self.process_batch()
+            try:
+                processed = self.process_batch()
+                backoff_s = 1.0
+            except Exception as exc:
+                self._log.exception("OCR worker loop failed: {}", exc)
+                worker_errors_total.labels("ocr").inc()
+                if stop_event and stop_event.is_set():
+                    return
+                time.sleep(backoff_s)
+                backoff_s = min(backoff_s * 2, 30.0)
+                continue
             if processed == 0:
                 time.sleep(poll_interval)
 
@@ -183,7 +195,7 @@ class EventIngestWorker:
         stop_event = threading.Event()
         heartbeat_thread = threading.Thread(
             target=self._heartbeat_loop,
-            args=(capture_id, stop_event),
+            args=(capture_id, stop_event, time.monotonic()),
             daemon=True,
         )
         heartbeat_thread.start()
@@ -255,9 +267,22 @@ class EventIngestWorker:
             for row in rows
         ]
 
-    def _heartbeat_loop(self, capture_id: str, stop_event: threading.Event) -> None:
+    def _heartbeat_loop(
+        self,
+        capture_id: str,
+        stop_event: threading.Event,
+        start_ts: float,
+    ) -> None:
         interval = max(self._lease_timeout_s / 3, 1.0)
+        warned = False
         while not stop_event.wait(interval):
+            if time.monotonic() - start_ts >= self._max_task_runtime_s:
+                if not warned:
+                    self._log.warning(
+                        "OCR heartbeat exceeded max runtime; stopping so lease can be reclaimed."
+                    )
+                    warned = True
+                return
             now = dt.datetime.now(dt.timezone.utc)
 
             def _tick(session) -> None:

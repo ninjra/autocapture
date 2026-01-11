@@ -7,14 +7,14 @@ import random
 import time
 from typing import Callable, Iterator, TypeVar
 
-from pathlib import Path
-
 from sqlalchemy import create_engine, event
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from ..config import DatabaseConfig
 from ..logging_utils import get_logger
+from ..paths import resource_root
 
 T = TypeVar("T")
 
@@ -50,6 +50,8 @@ class DatabaseManager:
                 "check_same_thread": False,
                 "timeout": config.sqlite_busy_timeout_ms / 1000,
             }
+            if is_memory:
+                engine_kwargs["poolclass"] = StaticPool
         else:
             engine_kwargs["pool_size"] = config.pool_size
             engine_kwargs["max_overflow"] = config.max_overflow
@@ -84,13 +86,20 @@ class DatabaseManager:
         from alembic import command  # type: ignore
         from alembic.config import Config  # type: ignore
 
-        config_path = Path(__file__).resolve().parents[2] / "alembic.ini"
+        base_dir = resource_root()
+        config_path = base_dir / "alembic.ini"
+        script_location = base_dir / "alembic"
+        if not config_path.exists() or not script_location.exists():
+            from .models import Base
+
+            self._log.warning(
+                "Alembic config not found; falling back to metadata create_all"
+            )
+            Base.metadata.create_all(self._engine)
+            return
         alembic_cfg = Config(str(config_path))
         alembic_cfg.set_main_option("sqlalchemy.url", self._config.url)
-        alembic_cfg.set_main_option(
-            "script_location",
-            str(Path(__file__).resolve().parents[2] / "alembic"),
-        )
+        alembic_cfg.set_main_option("script_location", str(script_location))
         command.upgrade(alembic_cfg, "head")
 
     @contextmanager

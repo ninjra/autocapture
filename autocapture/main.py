@@ -43,6 +43,26 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub.add_parser("worker", help="Run the OCR ingest worker loop only.")
     sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
     sub.add_parser("print-config", help="Load config and print resolved values.")
+    export = sub.add_parser("export", help="Export events + media for backup.")
+    export.add_argument("--out", required=True, help="Output path for export bundle.")
+    export.add_argument("--days", type=int, default=90, help="Export last N days.")
+    export.add_argument(
+        "--include-media",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include screenshots in export bundle.",
+    )
+    export.add_argument(
+        "--decrypt-media",
+        action="store_true",
+        help="Decrypt media (requires encryption enabled).",
+    )
+    export.add_argument(
+        "--zip",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write a zip archive (default) or a folder.",
+    )
 
     promptops = sub.add_parser("promptops", help="PromptOps automation utilities.")
     promptops_sub = promptops.add_subparsers(dest="promptops_cmd", required=True)
@@ -62,7 +82,8 @@ def _doctor(config: AppConfig) -> int:
 def _run_runtime(config: AppConfig) -> int:
     runtime = AppRuntime(config)
     runtime.start()
-    logger.info("Autocapture running. Press Ctrl+C to stop.")
+    log = get_logger("cli")
+    log.info("Autocapture running. Press Ctrl+C to stop.")
     runtime.wait_forever()
     runtime.stop()
     return 0
@@ -143,6 +164,21 @@ def main(argv: list[str] | None = None) -> None:
             for run in runs:
                 logger.info("{} {} {}", run.run_id, run.status, run.pr_url or "")
             raise SystemExit(0)
+
+    if cmd == "export":
+        from .export import export_capture
+
+        out_path = Path(args.out)
+        export_capture(
+            config,
+            out_path=out_path,
+            days=args.days,
+            include_media=args.include_media,
+            decrypt_media=args.decrypt_media,
+            zip_output=args.zip,
+        )
+        logger.info("Export complete: {}", out_path)
+        return
 
     if cmd == "api":
         from .api.server import create_app

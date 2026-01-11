@@ -19,9 +19,9 @@ from .capture.raw_input import LASTINPUTINFO, Win32Api, probe_raw_input
 from .embeddings.service import EmbeddingService
 from .encryption import EncryptionManager
 from .logging_utils import get_logger
-from .memory.entities import EntityResolver, SecretStore
+from .memory.entities import SecretStore
 from .observability.metrics import get_metrics_port
-from .paths import resolve_ffmpeg_path
+from .paths import resolve_ffmpeg_path, resource_root
 from .storage.database import DatabaseManager
 
 
@@ -146,9 +146,10 @@ def _check_migrations(db: DatabaseManager) -> None:
     from alembic.runtime.migration import MigrationContext  # type: ignore
     from alembic.script import ScriptDirectory  # type: ignore
 
-    config_path = Path(__file__).resolve().parents[1] / "alembic.ini"
+    base_dir = resource_root()
+    config_path = base_dir / "alembic.ini"
     alembic_cfg = Config(str(config_path))
-    script_location = Path(__file__).resolve().parents[1] / "alembic"
+    script_location = base_dir / "alembic"
     alembic_cfg.set_main_option("script_location", str(script_location))
     script = ScriptDirectory.from_config(alembic_cfg)
     head = script.get_current_head()
@@ -213,7 +214,6 @@ def _check_ffmpeg(config: AppConfig) -> DoctorCheckResult:
 def _check_ocr(config: AppConfig) -> DoctorCheckResult:
     try:
         from .worker.event_worker import OCRProcessor
-        from PIL import Image
     except Exception as exc:
         return DoctorCheckResult("ocr", False, str(exc))
     try:

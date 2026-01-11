@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
-import json
 import os
 import sys
 from pathlib import Path
@@ -13,6 +12,7 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
+from .settings_store import read_settings
 
 class HIDConfig(BaseModel):
     min_interval_ms: int = Field(
@@ -188,6 +188,12 @@ class WorkerConfig(BaseModel):
         description="Number of embedding/indexing workers.",
     )
     embedding_max_attempts: int = Field(5, ge=1)
+    watchdog_interval_s: float = Field(
+        5.0, gt=0.0, description="Worker watchdog polling interval (seconds)."
+    )
+    max_task_runtime_s: float = Field(
+        900.0, gt=0.0, description="Max heartbeat duration before lease reclaim."
+    )
 
 
 class RetentionPolicyConfig(BaseModel):
@@ -583,13 +589,8 @@ def load_config(path: Path | str) -> AppConfig:
 
 def apply_settings_overrides(config: AppConfig) -> AppConfig:
     settings_path = Path(config.capture.data_dir) / "settings.json"
-    if not settings_path.exists():
-        return config
-    try:
-        raw = json.loads(settings_path.read_text(encoding="utf-8"))
-    except Exception:
-        return config
-    if not isinstance(raw, dict):
+    raw = read_settings(settings_path)
+    if not raw:
         return config
     routing = raw.get("routing")
     if isinstance(routing, dict):
@@ -601,4 +602,32 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
             if value and key in merged:
                 merged[key] = value
         config.routing = ProviderRoutingConfig(**merged)
+    privacy = raw.get("privacy")
+    if isinstance(privacy, dict):
+        paused = privacy.get("paused")
+        if isinstance(paused, bool):
+            config.privacy.paused = paused
+        snooze_until = privacy.get("snooze_until_utc")
+        parsed = _parse_datetime(snooze_until)
+        if snooze_until is None:
+            config.privacy.snooze_until_utc = None
+        elif parsed is not None:
+            config.privacy.snooze_until_utc = parsed
     return config
+
+
+def _parse_datetime(value: object) -> dt.datetime | None:
+    if isinstance(value, dt.datetime):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            parsed = dt.datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed
+    return None

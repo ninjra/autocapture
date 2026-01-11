@@ -122,6 +122,8 @@ worker:
   ocr_workers: 4
   embed_workers: 1
   embedding_max_attempts: 5
+  watchdog_interval_s: 5.0
+  max_task_runtime_s: 900.0
 retention:
   video_days: 3
   roi_days: 14

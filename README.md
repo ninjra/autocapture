@@ -95,6 +95,22 @@ poetry run autocapture promptops list
   2. Upload `docs/dashboard.json`.
   3. Select your Prometheus data source.
 
+## Health checks
+
+- `GET /healthz/deep` performs a deep dependency check (DB + optional Qdrant/embedding).
+  It returns HTTP 503 when any non-skipped check fails.
+
+## Export / backup
+
+Create a portable backup for the last 90 days of events (default):
+
+```powershell
+poetry run autocapture export --out "D:/autocapture/export.zip"
+```
+
+Use `--no-zip` to write a folder instead of a zip archive, and `--days N` to change the
+date window.
+
 ## License
 
 MIT

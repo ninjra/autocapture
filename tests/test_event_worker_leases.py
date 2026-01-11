@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import threading
+import time
 
 import numpy as np
 from PIL import Image
@@ -14,6 +16,17 @@ from autocapture.worker.event_worker import EventIngestWorker
 class FakeOCR:
     def run(self, image: np.ndarray) -> list[tuple[str, float, list[int]]]:
         return [("hello", 0.9, [0, 0, 1, 0, 1, 1, 0, 1])]
+
+
+class FastEvent:
+    def __init__(self) -> None:
+        self._event = threading.Event()
+
+    def set(self) -> None:
+        self._event.set()
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self._event.wait(0.01)
 
 
 def test_stale_processing_capture_is_reclaimed(tmp_path) -> None:
@@ -51,3 +64,26 @@ def test_stale_processing_capture_is_reclaimed(tmp_path) -> None:
         capture = session.get(CaptureRecord, capture_id)
     assert capture is not None
     assert capture.ocr_status == "done"
+
+
+def test_heartbeat_stops_after_max_runtime(monkeypatch) -> None:
+    config = AppConfig(database=DatabaseConfig(url="sqlite:///:memory:"))
+    db = DatabaseManager(config.database)
+    worker = EventIngestWorker(config, db_manager=db, ocr_processor=FakeOCR())
+    worker._max_task_runtime_s = 0.05
+    calls = {"count": 0}
+
+    def fake_transaction(_fn):
+        calls["count"] += 1
+
+    monkeypatch.setattr(worker._db, "transaction", fake_transaction)
+    stop_event = FastEvent()
+    thread = threading.Thread(
+        target=worker._heartbeat_loop,
+        args=("capture-id", stop_event, time.monotonic()),
+        daemon=True,
+    )
+    thread.start()
+    time.sleep(0.2)
+    assert calls["count"] > 0
+    assert not thread.is_alive()
