@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hmac
-import json
-import sys
 import tempfile
 import threading
 import time
@@ -27,10 +25,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 from sqlalchemy import func, select
 
-from ..config import AppConfig, ProviderRoutingConfig
+from ..config import AppConfig, ProviderRoutingConfig, apply_settings_overrides
 from ..encryption import EncryptionManager
 from ..logging_utils import get_logger
 from ..observability.metrics import get_gpu_snapshot, get_metrics_port
+from ..paths import resource_root
+from ..settings_store import read_settings, update_settings
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
 from ..memory.entities import EntityResolver, SecretStore
@@ -193,6 +193,7 @@ def create_app(
     *,
     embedder: EmbeddingService | None = None,
     vector_index: VectorIndex | None = None,
+    worker_supervisor: object | None = None,
 ) -> FastAPI:
     db_owned = db_manager is None
     db = db_manager or DatabaseManager(config.database)
@@ -234,6 +235,10 @@ def create_app(
         app_kwargs["redoc_url"] = None
         app_kwargs["openapi_url"] = None
     app = FastAPI(**app_kwargs)
+    app.state.db = db
+    app.state.vector_index = vector_index
+    app.state.embedder = embedder
+    app.state.worker_supervisor = worker_supervisor
 
     oidc_verifier: GoogleOIDCVerifier | None = None
     if config.mode.mode == "remote":
@@ -248,12 +253,137 @@ def create_app(
         "/api/context-pack",
     }
 
-    base_dir = Path(__file__).resolve().parents[1]
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        base_dir = Path(getattr(sys, "_MEIPASS")) / "autocapture"
-    ui_dir = base_dir / "ui" / "web"
+    ui_dir = resource_root() / "autocapture" / "ui" / "web"
     if ui_dir.exists():
         app.mount("/static", StaticFiles(directory=ui_dir), name="static")
+
+    @app.get("/healthz/deep")
+    def deep_health() -> JSONResponse:
+        checks: dict[str, dict[str, Any]] = {}
+        overall_ok = True
+
+        try:
+            with db.session() as session:
+                session.execute(select(1))
+                _ = (
+                    session.execute(
+                        select(EventRecord.event_id)
+                        .order_by(EventRecord.ts_start.desc())
+                        .limit(1)
+                    )
+                    .scalars()
+                    .first()
+                )
+            checks["db"] = {"ok": True, "detail": "ok"}
+        except Exception as exc:
+            checks["db"] = {"ok": False, "detail": f"{exc}"}
+            overall_ok = False
+
+        if config.qdrant.enabled:
+            try:
+                from qdrant_client import QdrantClient
+
+                client = QdrantClient(url=config.qdrant.url, timeout=2.0)
+                collections = [config.qdrant.text_collection]
+                if config.qdrant.image_collection not in collections:
+                    collections.append(config.qdrant.image_collection)
+                missing = [
+                    name for name in collections if not client.collection_exists(name)
+                ]
+                if missing:
+                    checks["qdrant"] = {
+                        "ok": False,
+                        "detail": f"missing collections: {', '.join(missing)}",
+                        "skipped": False,
+                    }
+                    overall_ok = False
+                else:
+                    checks["qdrant"] = {
+                        "ok": True,
+                        "detail": "ok",
+                        "skipped": False,
+                    }
+            except Exception as exc:
+                checks["qdrant"] = {
+                    "ok": False,
+                    "detail": f"{exc}",
+                    "skipped": False,
+                }
+                overall_ok = False
+        else:
+            checks["qdrant"] = {
+                "ok": True,
+                "detail": "disabled",
+                "skipped": True,
+            }
+
+        embedder_for_health = embedder
+        if embedder_for_health is None and config.embed.text_model == "local-test":
+            try:
+                embedder_for_health = EmbeddingService(config.embed)
+            except Exception as exc:
+                checks["embedding"] = {
+                    "ok": False,
+                    "detail": f"{exc}",
+                    "skipped": False,
+                }
+                overall_ok = False
+        if embedder_for_health is None:
+            checks["embedding"] = {
+                "ok": True,
+                "detail": "skipped (no local embedder)",
+                "skipped": True,
+            }
+        elif "embedding" not in checks:
+            try:
+                vector = embedder_for_health.embed_texts(["health-check"])[0]
+                if not vector:
+                    raise RuntimeError("empty embedding vector")
+                checks["embedding"] = {
+                    "ok": True,
+                    "detail": "ok",
+                    "skipped": False,
+                }
+            except Exception as exc:
+                checks["embedding"] = {
+                    "ok": False,
+                    "detail": f"{exc}",
+                    "skipped": False,
+                }
+                overall_ok = False
+
+        supervisor = app.state.worker_supervisor
+        if supervisor is None:
+            checks["workers"] = {
+                "ok": True,
+                "detail": "skipped (no supervisor)",
+                "skipped": True,
+            }
+        else:
+            snapshot = getattr(supervisor, "health_snapshot", lambda: {})()
+            watchdog_ok = snapshot.get("watchdog_alive", False)
+            workers_ok = snapshot.get("workers_alive", False)
+            ok = bool(watchdog_ok and workers_ok)
+            checks["workers"] = {
+                "ok": ok,
+                "detail": (
+                    "watchdog ok"
+                    if ok
+                    else f"watchdog_alive={watchdog_ok}, workers_alive={workers_ok}"
+                ),
+                "skipped": False,
+            }
+            if not ok:
+                overall_ok = False
+
+        payload = {
+            "ok": overall_ok,
+            "time_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "checks": checks,
+        }
+        return JSONResponse(
+            status_code=200 if overall_ok else 503, content=payload
+        )
 
     @app.middleware("http")
     async def security_headers_middleware(request: Request, call_next):  # type: ignore[no-redef]
@@ -650,28 +780,27 @@ def create_app(
     @app.post("/api/settings")
     def settings(request: SettingsRequest) -> SettingsResponse:
         settings_path = Path(config.capture.data_dir) / "settings.json"
-        settings_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp_path = settings_path.with_suffix(".tmp")
-        tmp_path.write_text(_safe_json(request.settings), encoding="utf-8")
-        tmp_path.replace(settings_path)
-        routing = request.settings.get("routing")
-        if isinstance(routing, dict):
-            merged = _model_dump(config.routing)
-            merged.update({k: v for k, v in routing.items() if v})
-            config.routing = ProviderRoutingConfig(**merged)
+        incoming = request.settings if isinstance(request.settings, dict) else {}
+        update_settings(
+            settings_path,
+            lambda current: {**current, **incoming},
+        )
+        apply_settings_overrides(config)
         return SettingsResponse(status="ok")
 
     @app.get("/api/settings")
     def settings_snapshot() -> SettingsSnapshot:
         settings_path = Path(config.capture.data_dir) / "settings.json"
-        settings: dict[str, Any] = {}
-        if settings_path.exists():
-            try:
-                settings = json.loads(settings_path.read_text(encoding="utf-8"))
-            except Exception:
-                settings = {}
+        settings: dict[str, Any] = read_settings(settings_path)
         if "routing" not in settings:
             settings["routing"] = _model_dump(config.routing)
+        if "privacy" not in settings:
+            settings["privacy"] = {
+                "paused": config.privacy.paused,
+                "snooze_until_utc": _to_iso(config.privacy.snooze_until_utc),
+            }
+        if "backup" not in settings:
+            settings["backup"] = {"last_export_at_utc": None}
         return SettingsSnapshot(settings=settings)
 
     return app
@@ -722,10 +851,12 @@ def _merge_routing(
     return ProviderRoutingConfig(**data)
 
 
-def _safe_json(value: dict[str, Any]) -> str:
-    import json
-
-    return json.dumps(value, ensure_ascii=False, indent=2)
+def _to_iso(value: dt.datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    return value.isoformat()
 
 
 def _promptops_summary(run: PromptOpsRunRecord) -> PromptOpsRunSummary:

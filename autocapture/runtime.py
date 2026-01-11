@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+import datetime as dt
+
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
@@ -20,6 +22,7 @@ from .logging_utils import get_logger
 from .media.store import MediaStore
 from .observability.metrics import MetricsServer
 from .promptops import PromptOpsRunner
+from .settings_store import update_settings
 from .storage.database import DatabaseManager
 from .storage.retention import RetentionManager
 from .tracking import HostVectorTracker
@@ -150,6 +153,8 @@ class AppRuntime:
         self._metrics = MetricsServer(
             config.observability, Path(config.capture.data_dir)
         )
+        self._settings_path = Path(config.capture.data_dir) / "settings.json"
+        self._snooze_timer: threading.Timer | None = None
         self._promptops_runner: PromptOpsRunner | None = None
         self._promptops_scheduler: PromptOpsScheduler | None = None
         if config.promptops.enabled:
@@ -173,6 +178,7 @@ class AppRuntime:
         self._metrics.start()
         if self._promptops_scheduler:
             self._promptops_scheduler.start()
+        self._apply_startup_pause()
         self._log.info("Runtime started")
 
     def stop(self) -> None:
@@ -198,12 +204,21 @@ class AppRuntime:
         self._retention_scheduler.stop()
         if self._promptops_scheduler:
             self._promptops_scheduler.stop()
+        self._cancel_snooze_timer()
         self._log.info("Runtime stopped")
 
     def pause_capture(self) -> None:
+        self._cancel_snooze_timer()
+        self._config.privacy.paused = True
+        self._config.privacy.snooze_until_utc = None
+        self._persist_privacy()
         self._orchestrator.pause()
 
     def resume_capture(self) -> None:
+        self._cancel_snooze_timer()
+        self._config.privacy.paused = False
+        self._config.privacy.snooze_until_utc = None
+        self._persist_privacy()
         self._orchestrator.resume()
 
     def set_hotkey_callback(self, callback) -> None:
@@ -218,3 +233,65 @@ class AppRuntime:
                 time.sleep(0.5)
         except KeyboardInterrupt:
             self._log.info("Runtime interrupted")
+
+    def _apply_startup_pause(self) -> None:
+        now = dt.datetime.now(dt.timezone.utc)
+        snooze_until = self._ensure_aware(self._config.privacy.snooze_until_utc)
+        if snooze_until and snooze_until > now:
+            self._config.privacy.snooze_until_utc = snooze_until
+        should_pause = bool(self._config.privacy.paused)
+        if snooze_until and snooze_until > now:
+            should_pause = True
+            self._schedule_snooze_resume(snooze_until)
+        if should_pause:
+            self._orchestrator.pause()
+
+    def _schedule_snooze_resume(self, until: dt.datetime) -> None:
+        delay = max((until - dt.datetime.now(dt.timezone.utc)).total_seconds(), 0.0)
+        self._cancel_snooze_timer()
+        timer = threading.Timer(delay, self._auto_resume)
+        timer.daemon = True
+        self._snooze_timer = timer
+        timer.start()
+
+    def _auto_resume(self) -> None:
+        if not self._running:
+            return
+        self._log.info("Snooze expired; resuming capture")
+        self._config.privacy.paused = False
+        self._config.privacy.snooze_until_utc = None
+        self._persist_privacy()
+        self._orchestrator.resume()
+
+    def _cancel_snooze_timer(self) -> None:
+        if self._snooze_timer:
+            self._snooze_timer.cancel()
+            self._snooze_timer = None
+
+    def _persist_privacy(self) -> None:
+        def _update(settings: dict) -> dict:
+            privacy = settings.get("privacy")
+            if not isinstance(privacy, dict):
+                privacy = {}
+            privacy["paused"] = self._config.privacy.paused
+            privacy["snooze_until_utc"] = _to_iso(self._config.privacy.snooze_until_utc)
+            settings["privacy"] = privacy
+            return settings
+
+        update_settings(self._settings_path, _update)
+
+    @staticmethod
+    def _ensure_aware(value: dt.datetime | None) -> dt.datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=dt.timezone.utc)
+        return value
+
+
+def _to_iso(value: dt.datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    return value.isoformat()

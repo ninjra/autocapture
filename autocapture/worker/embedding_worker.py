@@ -39,16 +39,28 @@ class EmbeddingWorker:
         self._lexical_index = LexicalIndex(self._db)
         self._lease_timeout_s = config.worker.embedding_lease_ms / 1000
         self._max_attempts = config.worker.embedding_max_attempts
+        self._max_task_runtime_s = config.worker.max_task_runtime_s
         self._index_backoff_s = 0.0
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         poll_interval = self._config.worker.poll_interval_s
         self._recover_stale_embeddings()
         self._recover_stale_event_embeddings()
+        backoff_s = 1.0
         while True:
             if stop_event and stop_event.is_set():
                 return
-            processed = self.process_batch()
+            try:
+                processed = self.process_batch()
+                backoff_s = 1.0
+            except Exception as exc:
+                self._log.exception("Embedding worker loop failed: {}", exc)
+                worker_errors_total.labels("embedding").inc()
+                if stop_event and stop_event.is_set():
+                    return
+                time.sleep(backoff_s)
+                backoff_s = min(backoff_s * 2, 30.0)
+                continue
             if processed == 0:
                 time.sleep(poll_interval)
 
@@ -135,25 +147,37 @@ class EmbeddingWorker:
         tick_interval = max(1.0, min(10.0, self._lease_timeout_s / 3.0))
 
         def _tick_heartbeat() -> None:
+            warned = False
             while not stop_tick.wait(tick_interval):
-                now = dt.datetime.now(dt.timezone.utc)
-                self._db.transaction(
-                    lambda session: session.execute(
-                        update(EventRecord)
-                        .where(EventRecord.event_id.in_(event_ids))
-                        .where(
-                            EventRecord.embedding_status == "processing",
-                            EventRecord.embedding_started_at == claimed_at,
+                if time.monotonic() - start_ts >= self._max_task_runtime_s:
+                    if not warned:
+                        self._log.warning(
+                            "Event embedding heartbeat exceeded max runtime; stopping so lease can be reclaimed."
                         )
-                        .values(embedding_heartbeat_at=now)
+                        warned = True
+                    return
+                now = dt.datetime.now(dt.timezone.utc)
+                try:
+                    self._db.transaction(
+                        lambda session: session.execute(
+                            update(EventRecord)
+                            .where(EventRecord.event_id.in_(event_ids))
+                            .where(
+                                EventRecord.embedding_status == "processing",
+                                EventRecord.embedding_started_at == claimed_at,
+                            )
+                            .values(embedding_heartbeat_at=now)
+                        )
                     )
-                )
+                except Exception:
+                    return
 
         ticker = threading.Thread(
             target=_tick_heartbeat,
             name="embedding-event-heartbeat",
             daemon=True,
         )
+        start_ts = time.monotonic()
         ticker.start()
         try:
             start = time.monotonic()
@@ -242,6 +266,40 @@ class EmbeddingWorker:
             )
         )
 
+        stop_tick = threading.Event()
+        tick_interval = max(1.0, min(10.0, self._lease_timeout_s / 3.0))
+        start_ts = time.monotonic()
+
+        def _tick_span_heartbeat() -> None:
+            warned = False
+            while not stop_tick.wait(tick_interval):
+                if time.monotonic() - start_ts >= self._max_task_runtime_s:
+                    if not warned:
+                        self._log.warning(
+                            "Span embedding heartbeat exceeded max runtime; stopping so lease can be reclaimed."
+                        )
+                        warned = True
+                    return
+                now = dt.datetime.now(dt.timezone.utc)
+                try:
+                    self._db.transaction(
+                        lambda session: session.execute(
+                            update(EmbeddingRecord)
+                            .where(EmbeddingRecord.id.in_(embedding_ids))
+                            .where(EmbeddingRecord.status == "processing")
+                            .values(heartbeat_at=now)
+                        )
+                    )
+                except Exception:
+                    return
+
+        ticker = threading.Thread(
+            target=_tick_span_heartbeat,
+            name="embedding-span-heartbeat",
+            daemon=True,
+        )
+        ticker.start()
+
         with self._db.session() as session:
             embeddings = (
                 session.execute(
@@ -267,6 +325,8 @@ class EmbeddingWorker:
                 span_rows.append((embedding, span, event))
 
         if not span_rows:
+            stop_tick.set()
+            ticker.join(timeout=1.0)
             return 0
 
         vectors: list[list[float]] = []
@@ -291,6 +351,8 @@ class EmbeddingWorker:
                     )
 
                 self._db.transaction(_mark_failed)
+                stop_tick.set()
+                ticker.join(timeout=1.0)
                 return 0
 
         vectors_iter = iter(vectors)
@@ -353,6 +415,8 @@ class EmbeddingWorker:
                     )
 
                 self._db.transaction(_mark_pending)
+                stop_tick.set()
+                ticker.join(timeout=1.0)
                 return 0
             except Exception as exc:
                 self._log.warning("Span indexing failed: {}", exc)
@@ -367,6 +431,8 @@ class EmbeddingWorker:
                     )
 
                 self._db.transaction(_mark_pending)
+                stop_tick.set()
+                ticker.join(timeout=1.0)
                 return 0
 
         def _finalize(session) -> None:
@@ -380,6 +446,8 @@ class EmbeddingWorker:
                 record.updated_at = dt.datetime.now(dt.timezone.utc)
 
         self._db.transaction(_finalize)
+        stop_tick.set()
+        ticker.join(timeout=1.0)
         return len(span_rows)
 
     def _recover_stale_event_embeddings(self) -> None:

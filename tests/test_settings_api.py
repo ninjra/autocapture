@@ -5,6 +5,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from autocapture.api.server import create_app
+import datetime as dt
+
 from autocapture.config import AppConfig, DatabaseConfig, apply_settings_overrides
 
 
@@ -17,6 +19,7 @@ def test_settings_persist_and_apply(tmp_path: Path) -> None:
     )
     app = create_app(config)
     client = TestClient(app)
+    snooze_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
     payload = {
         "settings": {
             "routing": {
@@ -26,12 +29,17 @@ def test_settings_persist_and_apply(tmp_path: Path) -> None:
                 "compressor": "extractive",
                 "verifier": "rules",
                 "llm": "openai",
-            }
+            },
+            "privacy": {
+                "paused": True,
+                "snooze_until_utc": snooze_until.isoformat(),
+            },
         }
     }
     response = client.post("/api/settings", json=payload)
     assert response.status_code == 200
     assert config.routing.llm == "openai"
+    assert config.privacy.paused is True
 
     settings_path = tmp_path / "settings.json"
     assert settings_path.exists()
@@ -44,3 +52,5 @@ def test_settings_persist_and_apply(tmp_path: Path) -> None:
     )
     updated = apply_settings_overrides(fresh_config)
     assert updated.routing.llm == "openai"
+    assert updated.privacy.paused is True
+    assert updated.privacy.snooze_until_utc == snooze_until
