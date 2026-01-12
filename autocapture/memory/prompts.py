@@ -27,9 +27,7 @@ class PromptTemplate:
 
 
 class PromptRegistry:
-    def __init__(
-        self, prompts_dir: Optional[Path] = None, package: Optional[str] = None
-    ) -> None:
+    def __init__(self, prompts_dir: Optional[Path] = None, package: Optional[str] = None) -> None:
         self._prompts_dir = prompts_dir
         self._package = package
         self._cache: dict[str, PromptTemplate] = {}

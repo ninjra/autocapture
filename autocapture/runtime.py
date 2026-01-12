@@ -154,9 +154,7 @@ class AppRuntime:
             Path(config.capture.data_dir),
         )
         self._retention_scheduler = RetentionScheduler(self._retention)
-        self._metrics = MetricsServer(
-            config.observability, Path(config.capture.data_dir)
-        )
+        self._metrics = MetricsServer(config.observability, Path(config.capture.data_dir))
         self._settings_path = Path(config.capture.data_dir) / "settings.json"
         self._snooze_timer: threading.Timer | None = None
         self._promptops_runner: PromptOpsRunner | None = None

@@ -61,9 +61,7 @@ class ContextPack:
                 else:
                     lines.append(line)
             if redacted:
-                warnings.append(
-                    f"{item.evidence_id}: potential prompt-injection content redacted"
-                )
+                warnings.append(f"{item.evidence_id}: potential prompt-injection content redacted")
             sanitized.append(
                 EvidenceItem(
                     evidence_id=item.evidence_id,

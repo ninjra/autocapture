@@ -36,9 +36,7 @@ class GoogleOIDCVerifier:
         key = next((jwk for jwk in jwks.get("keys", []) if jwk.get("kid") == kid), None)
         if not key:
             jwks = self._get_jwks(force_refresh=True)
-            key = next(
-                (jwk for jwk in jwks.get("keys", []) if jwk.get("kid") == kid), None
-            )
+            key = next((jwk for jwk in jwks.get("keys", []) if jwk.get("kid") == kid), None)
         if not key:
             raise ValueError("Unknown signing key")
         claims = jwt.decode(
@@ -61,14 +59,10 @@ class GoogleOIDCVerifier:
 
     def _get_jwks(self, *, force_refresh: bool = False) -> dict[str, Any]:
         if not force_refresh and self._jwks and self._jwks_fetched_at:
-            if (
-                dt.datetime.now(dt.timezone.utc) - self._jwks_fetched_at
-            ).total_seconds() < 3600:
+            if (dt.datetime.now(dt.timezone.utc) - self._jwks_fetched_at).total_seconds() < 3600:
                 return self._jwks
         try:
-            response = httpx.get(
-                "https://www.googleapis.com/oauth2/v3/certs", timeout=10.0
-            )
+            response = httpx.get("https://www.googleapis.com/oauth2/v3/certs", timeout=10.0)
             response.raise_for_status()
             self._jwks = response.json()
             self._jwks_fetched_at = dt.datetime.now(dt.timezone.utc)

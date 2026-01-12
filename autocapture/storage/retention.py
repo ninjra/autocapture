@@ -29,9 +29,7 @@ class RetentionManager:
         self._retention_config = retention_config
         self._db = db
         # Callers pass the data dir; quota checks should apply to the media subtree.
-        self._media_root = (
-            media_root if media_root.name == "media" else media_root / "media"
-        )
+        self._media_root = media_root if media_root.name == "media" else media_root / "media"
         self._log = get_logger("retention")
 
     def enforce(self) -> None:
@@ -143,9 +141,7 @@ class RetentionManager:
         return removed
 
     def _prune_quota(self) -> int:
-        cap_gb = min(
-            self._storage_config.image_quota_gb, self._retention_config.max_media_gb
-        )
+        cap_gb = min(self._storage_config.image_quota_gb, self._retention_config.max_media_gb)
         cap_bytes = int(cap_gb * (1024**3))
         remaining_bytes = self._folder_size_bytes(self._media_root)
         if remaining_bytes <= cap_bytes:

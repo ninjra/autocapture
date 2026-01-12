@@ -28,9 +28,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument(
         "--config",
         default=os.environ.get("AUTOCAPTURE_CONFIG", str(default_config_path())),
-        help=(
-            "Path to config YAML (default: AUTOCAPTURE_CONFIG or platform default)."
-        ),
+        help=("Path to config YAML (default: AUTOCAPTURE_CONFIG or platform default)."),
     )
     p.add_argument(
         "--log-dir",
@@ -103,19 +101,11 @@ def main(argv: list[str] | None = None) -> None:
     config = load_config(config_path)
     configure_logging(args.log_dir or getattr(config, "logging", None))
     logger = get_logger("cli")
-    if (
-        config.offline
-        and not config.privacy.cloud_enabled
-        and config.mode.mode == "remote"
-    ):
-        logger.warning(
-            "Offline guard disabled in remote mode (OIDC/JWKS requires outbound HTTPS)."
-        )
+    if config.offline and not config.privacy.cloud_enabled and config.mode.mode == "remote":
+        logger.warning("Offline guard disabled in remote mode (OIDC/JWKS requires outbound HTTPS).")
     apply_offline_guard(
         enabled=(
-            config.offline
-            and not config.privacy.cloud_enabled
-            and config.mode.mode != "remote"
+            config.offline and not config.privacy.cloud_enabled and config.mode.mode != "remote"
         ),
         allowed_hosts={"127.0.0.1", "::1", "localhost"},
     )
@@ -145,9 +135,7 @@ def main(argv: list[str] | None = None) -> None:
         if args.promptops_cmd == "status":
             with db.session() as session:
                 run = (
-                    session.query(PromptOpsRunRecord)
-                    .order_by(PromptOpsRunRecord.ts.desc())
-                    .first()
+                    session.query(PromptOpsRunRecord).order_by(PromptOpsRunRecord.ts.desc()).first()
                 )
             if not run:
                 logger.info("No PromptOps runs recorded.")
@@ -196,13 +184,9 @@ def main(argv: list[str] | None = None) -> None:
                 port=config.api.port,
                 log_level="info",
                 ssl_certfile=(
-                    str(config.mode.tls_cert_path)
-                    if config.mode.https_enabled
-                    else None
+                    str(config.mode.tls_cert_path) if config.mode.https_enabled else None
                 ),
-                ssl_keyfile=(
-                    str(config.mode.tls_key_path) if config.mode.https_enabled else None
-                ),
+                ssl_keyfile=(str(config.mode.tls_key_path) if config.mode.https_enabled else None),
             )
         )
         server.run()
@@ -210,9 +194,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if cmd == "worker":
         if not claim_single_instance():
-            logger.warning(
-                "Autocapture worker already active in another interpreter. Exiting."
-            )
+            logger.warning("Autocapture worker already active in another interpreter. Exiting.")
             raise SystemExit(0)
         worker = WorkerSupervisor(config=config)
         logger.info("Worker supervisor running. Press Ctrl+C to stop.")
@@ -228,9 +210,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if cmd in {"app", "tray"}:
         if not claim_single_instance():
-            logger.warning(
-                "Autocapture already active in another interpreter. Exiting."
-            )
+            logger.warning("Autocapture already active in another interpreter. Exiting.")
             raise SystemExit(0)
         try:
             from .ui.tray import run_tray
@@ -247,9 +227,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if not claim_single_instance():
-        logger.warning(
-            "Autocapture orchestrator already active in another interpreter. Exiting."
-        )
+        logger.warning("Autocapture orchestrator already active in another interpreter. Exiting.")
         raise SystemExit(0)
 
     try:
@@ -270,10 +248,7 @@ def _validate_remote_mode(config: AppConfig) -> None:
         missing.append("mode.https_enabled")
     if not config.mode.tls_cert_path or not config.mode.tls_key_path:
         missing.append("TLS cert/key")
-    if (
-        not config.mode.google_oauth_client_id
-        or not config.mode.google_oauth_client_secret
-    ):
+    if not config.mode.google_oauth_client_id or not config.mode.google_oauth_client_secret:
         missing.append("Google OIDC client")
     if not config.mode.google_allowed_emails:
         missing.append("mode.google_allowed_emails")
@@ -285,13 +260,9 @@ def _validate_remote_mode(config: AppConfig) -> None:
     elif config.mode.overlay_interface:
         ips = overlay_interface_ips(config.mode.overlay_interface)
         if not ips:
-            missing.append(
-                f"overlay_interface has no usable IPs: {config.mode.overlay_interface}"
-            )
+            missing.append(f"overlay_interface has no usable IPs: {config.mode.overlay_interface}")
         elif config.api.bind_host not in ips:
-            missing.append(
-                "api.bind_host must be an IP assigned to mode.overlay_interface"
-            )
+            missing.append("api.bind_host must be an IP assigned to mode.overlay_interface")
     if missing:
         raise RuntimeError("Remote mode misconfigured. Missing: " + ", ".join(missing))
 

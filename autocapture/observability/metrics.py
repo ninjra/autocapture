@@ -25,16 +25,12 @@ disk_low_total = Counter("disk_low_total", "Disk low backpressure events")
 roi_queue_depth = Gauge("roi_queue_depth", "ROI queue depth")
 ocr_backlog = Gauge("ocr_backlog", "OCR backlog count")
 ocr_backlog_gauge = Gauge("ocr_backlog_gauge", "OCR backlog gauge")
-ocr_stale_processing_gauge = Gauge(
-    "ocr_stale_processing_gauge", "Stale OCR processing count"
-)
+ocr_stale_processing_gauge = Gauge("ocr_stale_processing_gauge", "Stale OCR processing count")
 ocr_latency_ms = Histogram("ocr_latency_ms", "OCR latency (ms)")
 embedding_latency_ms = Histogram("embedding_latency_ms", "Embedding latency (ms)")
 retrieval_latency_ms = Histogram("retrieval_latency_ms", "Retrieval latency (ms)")
 embedding_backlog = Gauge("embedding_backlog", "Embedding backlog count")
-retention_files_deleted_total = Counter(
-    "retention_files_deleted_total", "Retention deletions"
-)
+retention_files_deleted_total = Counter("retention_files_deleted_total", "Retention deletions")
 vector_search_failures_total = Counter(
     "autocapture_vector_search_failures_total", "Vector search failures"
 )
@@ -48,9 +44,7 @@ video_disabled = Gauge("autocapture_video_disabled", "Video capture disabled (0/
 metrics_port_gauge = Gauge("autocapture_metrics_port", "Metrics server port")
 _metrics_port_value: Optional[int] = None
 worker_errors_total = Counter("worker_errors_total", "Worker errors", ["worker"])
-worker_restarts_total = Counter(
-    "worker_restarts_total", "Worker thread restarts", ["worker_type"]
-)
+worker_restarts_total = Counter("worker_restarts_total", "Worker thread restarts", ["worker_type"])
 media_folder_size_gb = Gauge("media_folder_size_gb", "Media folder size (GB)")
 process_cpu_percent = Gauge("process_cpu_percent", "Process CPU percent")
 process_rss_mb = Gauge("process_rss_mb", "Process RSS (MB)")
@@ -117,9 +111,7 @@ class MetricsServer:
                         raise
                     return
                 if self._config.prometheus_fail_fast:
-                    self._log.error(
-                        "Prometheus port {} in use; fail_fast enabled", base_port
-                    )
+                    self._log.error("Prometheus port {} in use; fail_fast enabled", base_port)
                     raise
         self._log.warning(
             "Failed to bind Prometheus metrics server after {} fallbacks",
@@ -133,9 +125,7 @@ class MetricsServer:
                 now = time.monotonic()
                 if now - self._folder_size_last_ts >= _FOLDER_SIZE_UPDATE_INTERVAL_S:
                     self._folder_size_last_ts = now
-                    self._folder_size_cache_gb = _folder_size_gb(
-                        self._data_dir / "media"
-                    )
+                    self._folder_size_cache_gb = _folder_size_gb(self._data_dir / "media")
                 media_folder_size_gb.set(self._folder_size_cache_gb)
                 process_cpu_percent.set(process.cpu_percent(interval=None))
                 process_rss_mb.set(process.memory_info().rss / (1024**2))

@@ -112,9 +112,7 @@ def unfreeze_files(repo_root: Path, rel_paths: list[str], reason: str) -> None:
         frozen.pop(rel_path, None)
         logger.info("Unfroze {}", rel_path)
     if missing:
-        raise ValueError(
-            "Cannot unfreeze paths not present in manifest: " + ", ".join(missing)
-        )
+        raise ValueError("Cannot unfreeze paths not present in manifest: " + ", ".join(missing))
     save_manifest(repo_root, manifest)
 
 

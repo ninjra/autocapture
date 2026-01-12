@@ -79,9 +79,7 @@ def upgrade() -> None:
                             "start": int(span.get("start", 0)),
                             "end": int(span.get("end", 0)),
                             "text": str(span.get("text", "")),
-                            "confidence": float(
-                                span.get("conf", span.get("confidence", 0.0))
-                            ),
+                            "confidence": float(span.get("conf", span.get("confidence", 0.0))),
                             "bbox": span.get("bbox", []),
                         }
                     )
@@ -90,17 +88,13 @@ def upgrade() -> None:
                     from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
                     stmt = sqlite_insert(spans_table).values(insert_rows)
-                    stmt = stmt.on_conflict_do_nothing(
-                        index_elements=["capture_id", "span_key"]
-                    )
+                    stmt = stmt.on_conflict_do_nothing(index_elements=["capture_id", "span_key"])
                     bind.execute(stmt)
                 elif dialect == "postgresql":
                     from sqlalchemy.dialects.postgresql import insert as pg_insert
 
                     stmt = pg_insert(spans_table).values(insert_rows)
-                    stmt = stmt.on_conflict_do_nothing(
-                        index_elements=["capture_id", "span_key"]
-                    )
+                    stmt = stmt.on_conflict_do_nothing(index_elements=["capture_id", "span_key"])
                     bind.execute(stmt)
                 else:
                     bind.execute(spans_table.insert(), insert_rows)
@@ -156,9 +150,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.batch_alter_table("embeddings") as batch:
         batch.drop_constraint("fk_embeddings_capture_span", type_="foreignkey")
-        batch.alter_column(
-            "span_key", existing_type=sa.String(length=64), nullable=True
-        )
+        batch.alter_column("span_key", existing_type=sa.String(length=64), nullable=True)
         batch.add_column(sa.Column("span_id", sa.Integer(), nullable=True))
 
     with op.batch_alter_table("events") as batch:

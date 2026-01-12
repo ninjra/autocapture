@@ -60,8 +60,7 @@ class DatabaseManager:
             self._register_sqlite_pragmas(is_memory)
         self._run_migrations()
         if self._engine.dialect.name == "sqlite" and (
-            ":memory:" in str(self._engine.url)
-            or "mode=memory" in str(self._engine.url)
+            ":memory:" in str(self._engine.url) or "mode=memory" in str(self._engine.url)
         ):
             init_schema(self._engine)
         self._session_factory = sessionmaker(bind=self._engine, expire_on_commit=False)
@@ -77,9 +76,7 @@ class DatabaseManager:
         if importlib.util.find_spec("alembic.command") is None:  # pragma: no cover
             from .models import Base
 
-            self._log.warning(
-                "Alembic not available; falling back to metadata create_all"
-            )
+            self._log.warning("Alembic not available; falling back to metadata create_all")
             Base.metadata.create_all(self._engine)
             return
 
@@ -92,9 +89,7 @@ class DatabaseManager:
         if not config_path.exists() or not script_location.exists():
             from .models import Base
 
-            self._log.warning(
-                "Alembic config not found; falling back to metadata create_all"
-            )
+            self._log.warning("Alembic config not found; falling back to metadata create_all")
             Base.metadata.create_all(self._engine)
             return
         alembic_cfg = Config(str(config_path))

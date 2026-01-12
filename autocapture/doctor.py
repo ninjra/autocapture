@@ -70,9 +70,7 @@ def run_doctor(
 
 
 def _redact_config(config: AppConfig) -> str:
-    data = (
-        config.model_dump() if hasattr(config, "model_dump") else config.dict()
-    )
+    data = config.model_dump() if hasattr(config, "model_dump") else config.dict()
     secrets = {
         "api_key",
         "openai_api_key",
@@ -231,6 +229,8 @@ def _check_qdrant(config: AppConfig) -> DoctorCheckResult:
 
 
 def _check_capture_backends(config: AppConfig) -> DoctorCheckResult:
+    if sys.platform != "win32":
+        return DoctorCheckResult("screen_capture", True, "Non-Windows platform")
     results: list[str] = []
     errors: list[str] = []
     for label, backend_cls in (
@@ -291,9 +291,12 @@ def _check_ffmpeg(config: AppConfig) -> DoctorCheckResult:
 def _check_ocr(config: AppConfig) -> DoctorCheckResult:
     import importlib.util
 
+    if config.routing.ocr == "disabled" or config.ocr.engine == "disabled":
+        return DoctorCheckResult("ocr", True, "Disabled")
     if importlib.util.find_spec("rapidocr_onnxruntime") is None:
         return DoctorCheckResult("ocr", False, "rapidocr_onnxruntime not installed")
     from .worker.event_worker import OCRProcessor
+
     try:
         image = _build_ocr_fixture()
         providers = _available_onnx_providers()
@@ -303,12 +306,8 @@ def _check_ocr(config: AppConfig) -> DoctorCheckResult:
         if not text.strip():
             return DoctorCheckResult("ocr", False, "Empty OCR output")
         detail = f"device={config.ocr.device}; providers={providers or 'none'}"
-        if config.ocr.device.lower() == "cuda" and "CUDAExecutionProvider" not in (
-            providers or []
-        ):
-            detail += (
-                " (CUDAExecutionProvider missing; install onnxruntime-gpu + CUDA/cuDNN)"
-            )
+        if config.ocr.device.lower() == "cuda" and "CUDAExecutionProvider" not in (providers or []):
+            detail += " (CUDAExecutionProvider missing; install onnxruntime-gpu + CUDA/cuDNN)"
         return DoctorCheckResult("ocr", True, detail)
     except Exception as exc:
         return DoctorCheckResult("ocr", False, str(exc))
@@ -370,9 +369,7 @@ def _check_metrics(config: AppConfig) -> DoctorCheckResult:
             response = httpx.get(f"http://{host}:{port}/metrics", timeout=2.0)
             if response.status_code == 200:
                 return DoctorCheckResult("metrics", True, "metrics endpoint responding")
-            return DoctorCheckResult(
-                "metrics", False, f"unexpected status {response.status_code}"
-            )
+            return DoctorCheckResult("metrics", False, f"unexpected status {response.status_code}")
         except Exception as exc:
             return DoctorCheckResult("metrics", False, str(exc))
     return _check_port("metrics", host, port)

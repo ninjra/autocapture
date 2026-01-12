@@ -66,11 +66,7 @@ class LexicalIndex:
         if engine.dialect.name == "postgresql":
             with engine.begin() as conn:
                 conn.execute(
-                    text(
-                        "UPDATE events SET "
-                        "ts_end = ts_end "
-                        "WHERE event_id = :event_id"
-                    ),
+                    text("UPDATE events SET " "ts_end = ts_end " "WHERE event_id = :event_id"),
                     {"event_id": event.event_id},
                 )
 
@@ -106,9 +102,7 @@ class LexicalIndex:
                         ),
                         {"query": sanitized, "limit": limit},
                     ).fetchall()
-            return [
-                LexicalHit(event_id=row[0], score=1 / (1 + abs(row[1]))) for row in rows
-            ]
+            return [LexicalHit(event_id=row[0], score=1 / (1 + abs(row[1]))) for row in rows]
 
         if engine.dialect.name == "postgresql":
             with engine.begin() as conn:
@@ -128,13 +122,9 @@ class LexicalIndex:
                     ),
                     {"query": query, "limit": limit},
                 ).fetchall()
-            return [
-                LexicalHit(event_id=row[0], score=float(row[1] or 0.0)) for row in rows
-            ]
+            return [LexicalHit(event_id=row[0], score=float(row[1] or 0.0)) for row in rows]
 
-        self._log.warning(
-            "Unsupported dialect for lexical search: {}", engine.dialect.name
-        )
+        self._log.warning("Unsupported dialect for lexical search: {}", engine.dialect.name)
         return []
 
 

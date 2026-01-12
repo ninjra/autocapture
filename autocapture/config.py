@@ -109,9 +109,7 @@ class CaptureConfig(BaseModel):
     staging_min_free_mb: int = Field(
         512,
         ge=0,
-        description=(
-            "Minimum free space (MB) required in staging_dir. Set to 0 to disable."
-        ),
+        description=("Minimum free space (MB) required in staging_dir. Set to 0 to disable."),
     )
     data_min_free_mb: int = Field(
         1024,
@@ -154,12 +152,8 @@ class EmbedConfig(BaseModel):
     use_half_precision: bool = Field(
         True, description="Use float16 embeddings to shrink storage bandwidth."
     )
-    schedule_cron: str = Field(
-        "0 2 * * *", description="Cron string for nightly batches."
-    )
-    model: Optional[str] = Field(
-        None, description="Legacy alias for text_model (deprecated)."
-    )
+    schedule_cron: str = Field("0 2 * * *", description="Cron string for nightly batches.")
+    model: Optional[str] = Field(None, description="Legacy alias for text_model (deprecated).")
     batch_size: Optional[int] = Field(
         None, description="Legacy alias for text_batch_size (deprecated)."
     )
@@ -239,9 +233,7 @@ class DatabaseConfig(BaseModel):
         allowed = {"NORMAL", "FULL", "OFF"}
         upper = value.upper()
         if upper not in allowed:
-            raise ValueError(
-                f"sqlite_synchronous must be one of {sorted(allowed)}; got {value!r}"
-            )
+            raise ValueError(f"sqlite_synchronous must be one of {sorted(allowed)}; got {value!r}")
         return upper
 
 
@@ -271,12 +263,8 @@ class QdrantConfig(BaseModel):
 class FFmpegConfig(BaseModel):
     enabled: bool = Field(True)
     require_bundled: bool = Field(True)
-    explicit_path: Optional[Path] = Field(
-        None, description="Explicit ffmpeg binary path."
-    )
-    allow_system: bool = Field(
-        True, description="Allow falling back to system PATH ffmpeg."
-    )
+    explicit_path: Optional[Path] = Field(None, description="Explicit ffmpeg binary path.")
+    allow_system: bool = Field(True, description="Allow falling back to system PATH ffmpeg.")
     allow_disable: bool = Field(
         True,
         description="Allow disabling video capture when ffmpeg is missing.",
@@ -314,9 +302,7 @@ class ObservabilityConfig(BaseModel):
 
 
 class APIConfig(BaseModel):
-    bind_host: str = Field(
-        "127.0.0.1", description="Bind host for the local API server."
-    )
+    bind_host: str = Field("127.0.0.1", description="Bind host for the local API server.")
     port: int = Field(8008, ge=1024, le=65535)
     require_api_key: bool = Field(False)
     api_key: Optional[str] = None
@@ -429,9 +415,7 @@ class AppConfig(BaseModel):
 
     @field_validator("tracking")
     @classmethod
-    def validate_tracking_dir(
-        cls, value: TrackingConfig, info: ValidationInfo
-    ) -> TrackingConfig:
+    def validate_tracking_dir(cls, value: TrackingConfig, info: ValidationInfo) -> TrackingConfig:
         capture = info.data.get("capture")
         if capture:
             capture.data_dir.mkdir(parents=True, exist_ok=True)
@@ -460,9 +444,7 @@ class AppConfig(BaseModel):
                     "api.require_api_key must be true when binding to non-loopback host"
                 )
             if not self.api.api_key:
-                raise ValueError(
-                    "api.api_key is required when binding to non-loopback host"
-                )
+                raise ValueError("api.api_key is required when binding to non-loopback host")
         return self
 
 

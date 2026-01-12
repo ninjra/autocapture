@@ -13,9 +13,7 @@ class DummyBackend:
     def __init__(self, frame: np.ndarray) -> None:
         self._frame = frame
         self._monitors = [
-            MonitorInfo(
-                id="1", left=0, top=0, width=frame.shape[1], height=frame.shape[0]
-            )
+            MonitorInfo(id="1", left=0, top=0, width=frame.shape[1], height=frame.shape[0])
         ]
 
     @property
@@ -46,9 +44,7 @@ def test_duplicate_detector_skips_duplicates(monkeypatch) -> None:
     )
 
     monkeypatch.setattr(orchestrator, "_get_cursor_pos", lambda: (1, 1))
-    monkeypatch.setattr(
-        "autocapture.capture.orchestrator.get_foreground_context", lambda: None
-    )
+    monkeypatch.setattr("autocapture.capture.orchestrator.get_foreground_context", lambda: None)
 
     captured = []
 

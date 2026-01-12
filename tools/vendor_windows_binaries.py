@@ -80,9 +80,7 @@ def _verify_sha256(archive: Path, sha_file: Path) -> None:
     expected = raw.split()[0]
     actual = _sha256(archive)
     if actual.lower() != expected.lower():
-        raise RuntimeError(
-            f"SHA256 mismatch for {archive.name}: expected {expected}, got {actual}"
-        )
+        raise RuntimeError(f"SHA256 mismatch for {archive.name}: expected {expected}, got {actual}")
     _log(f"SHA256 OK for {archive.name}")
 
 

@@ -459,9 +459,7 @@ class EventIngestWorker:
             stmt = (
                 sqlite_insert(EmbeddingRecord)
                 .values(rows)
-                .on_conflict_do_nothing(
-                    index_elements=["capture_id", "span_key", "model"]
-                )
+                .on_conflict_do_nothing(index_elements=["capture_id", "span_key", "model"])
             )
             session.execute(stmt)
         elif dialect == "postgresql":
@@ -470,9 +468,7 @@ class EventIngestWorker:
             stmt = (
                 pg_insert(EmbeddingRecord)
                 .values(rows)
-                .on_conflict_do_nothing(
-                    index_elements=["capture_id", "span_key", "model"]
-                )
+                .on_conflict_do_nothing(index_elements=["capture_id", "span_key", "model"])
             )
             session.execute(stmt)
         else:
@@ -488,25 +484,19 @@ class EventIngestWorker:
         return ensure_rgb(self._media_store.read_image(path))
 
     def _recover_stale_captures(self) -> None:
-        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
-            seconds=self._lease_timeout_s
-        )
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=self._lease_timeout_s)
 
         def _recover(session) -> None:
             rows = (
                 session.execute(
-                    select(CaptureRecord).where(
-                        CaptureRecord.ocr_status == "processing"
-                    )
+                    select(CaptureRecord).where(CaptureRecord.ocr_status == "processing")
                 )
                 .scalars()
                 .all()
             )
             for capture in rows:
                 heartbeat = (
-                    capture.ocr_heartbeat_at
-                    or capture.ocr_started_at
-                    or capture.captured_at
+                    capture.ocr_heartbeat_at or capture.ocr_started_at or capture.captured_at
                 )
                 heartbeat = _ensure_aware(heartbeat)
                 if heartbeat and heartbeat >= cutoff:

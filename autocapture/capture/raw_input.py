@@ -250,12 +250,11 @@ class Win32Api:
     def format_error(self, code: int) -> str:
         buffer = ctypes.create_unicode_buffer(512)
         flags = 0x00001000 | 0x00000200
-        length = self.kernel32.FormatMessageW(
-            flags, None, code, 0, buffer, len(buffer), None
-        )
+        length = self.kernel32.FormatMessageW(flags, None, code, 0, buffer, len(buffer), None)
         if length:
             return buffer.value.strip()
         return "Unknown error"
+
 
 @dataclass(slots=True)
 class HotkeyConfig:
@@ -485,9 +484,7 @@ class RawInputListener:
         if self._on_hotkey is None:
             return True
         if self._hotkey_registrar:
-            return bool(
-                self._hotkey_registrar(hwnd, self._hotkey.modifiers, self._hotkey.vk)
-            )
+            return bool(self._hotkey_registrar(hwnd, self._hotkey.modifiers, self._hotkey.vk))
         if not self._win32:
             return False
         return bool(
@@ -542,12 +539,8 @@ class RawInputListener:
             elif raw.header.dwType == RIM_TYPEMOUSE:
                 mouse = raw.data.mouse
                 payload: dict[str, int] = {
-                    "left_clicks": (
-                        1 if mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN else 0
-                    ),
-                    "right_clicks": (
-                        1 if mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN else 0
-                    ),
+                    "left_clicks": (1 if mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN else 0),
+                    "right_clicks": (1 if mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN else 0),
                     "middle_clicks": (
                         1 if mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN else 0
                     ),
@@ -576,9 +569,7 @@ class RawInputListener:
                     or payload["wheel_events"]
                     or emitted_move
                 ):
-                    event = InputVectorEvent(
-                        ts_ms=now_ms, device="mouse", mouse=payload
-                    )
+                    event = InputVectorEvent(ts_ms=now_ms, device="mouse", mouse=payload)
                     self._on_input_event(event)
         except Exception as exc:  # pragma: no cover - Windows-only parsing
             self._log.debug("Raw input parse failed: {}", exc)
@@ -601,9 +592,7 @@ class RawInputListener:
         last_tick = None
         last_window = None
         while self._running.is_set():
-            while win32.user32.PeekMessageW(
-                ctypes.byref(msg), None, 0, 0, PM_REMOVE
-            ):
+            while win32.user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_REMOVE):
                 if msg.message == WM_HOTKEY and self._on_hotkey:
                     try:
                         self._on_hotkey()

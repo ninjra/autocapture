@@ -57,9 +57,7 @@ def test_ocr_backlog_counts_all_pending(tmp_path: Path) -> None:
 
     orchestrator = CaptureOrchestrator(
         database=db,
-        capture_config=CaptureConfig(
-            staging_dir=tmp_path / "staging", data_dir=tmp_path
-        ),
+        capture_config=CaptureConfig(staging_dir=tmp_path / "staging", data_dir=tmp_path),
         worker_config=WorkerConfig(),
         raw_input=DummyRawInput(),
         backend=DummyBackend(),

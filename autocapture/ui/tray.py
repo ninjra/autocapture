@@ -90,22 +90,16 @@ class TrayApp(QtCore.QObject):
 
     def toggle_pause(self) -> None:
         self._paused = not self._paused
-        self._pause_action.setText(
-            "Resume Capture" if self._paused else "Pause Capture"
-        )
+        self._pause_action.setText("Resume Capture" if self._paused else "Pause Capture")
         if self._paused:
             self._runtime.pause_capture()
         else:
             self._runtime.resume_capture()
 
     def open_logs(self) -> None:
-        QtGui.QDesktopServices.openUrl(
-            QtCore.QUrl.fromLocalFile(str(self._log_dir.resolve()))
-        )
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(self._log_dir.resolve())))
 
-    def _on_tray_activated(
-        self, reason: QtWidgets.QSystemTrayIcon.ActivationReason
-    ) -> None:
+    def _on_tray_activated(self, reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
             self.toggle_popup()
 
@@ -155,9 +149,7 @@ class TrayApp(QtCore.QObject):
         return QtGui.QIcon.fromTheme("system-search")
 
 
-def _start_api_process(
-    config_path: Path, log_dir: Path
-) -> tuple[subprocess.Popen, IO[str]]:
+def _start_api_process(config_path: Path, log_dir: Path) -> tuple[subprocess.Popen, IO[str]]:
     log_dir.mkdir(parents=True, exist_ok=True)
     api_log_path = log_dir / "api.log"
     api_log = api_log_path.open("a", encoding="utf-8")

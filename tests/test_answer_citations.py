@@ -13,16 +13,12 @@ from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 
 
 class BadCitationLLM:
-    async def generate_answer(
-        self, system_prompt: str, query: str, context_pack_text: str
-    ) -> str:
+    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
         return "Answer with invalid citation [E999]"
 
 
 def test_answer_citations_subset(tmp_path: Path, monkeypatch) -> None:
-    config = AppConfig(
-        database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
-    )
+    config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
     config.capture.data_dir = tmp_path
     config.embed.text_model = "local-test"
     db = DatabaseManager(config.database)
@@ -72,16 +68,12 @@ def test_answer_citations_subset(tmp_path: Path, monkeypatch) -> None:
     def _mock_select(self):
         return BadCitationLLM(), RoutingDecision(llm_provider="mock")
 
-    monkeypatch.setattr(
-        "autocapture.memory.router.ProviderRouter.select_llm", _mock_select
-    )
+    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _mock_select)
 
     app = create_app(config, db_manager=db)
     client = TestClient(app)
 
-    response = client.post(
-        "/api/answer", json={"query": "roadmap", "extractive_only": False}
-    )
+    response = client.post("/api/answer", json={"query": "roadmap", "extractive_only": False})
     assert response.status_code == 200
     payload = response.json()
     assert payload["citations"]

@@ -107,12 +107,8 @@ else:
         monitor_height = monitor.bottom - monitor.top
         if monitor_width <= 0 or monitor_height <= 0:
             return False
-        intersect_w = max(
-            0, min(rect.right, monitor.right) - max(rect.left, monitor.left)
-        )
-        intersect_h = max(
-            0, min(rect.bottom, monitor.bottom) - max(rect.top, monitor.top)
-        )
+        intersect_w = max(0, min(rect.right, monitor.right) - max(rect.left, monitor.left))
+        intersect_h = max(0, min(rect.bottom, monitor.bottom) - max(rect.top, monitor.top))
         coverage = (intersect_w * intersect_h) / float(monitor_width * monitor_height)
         tolerance = 8
         within_bounds = (

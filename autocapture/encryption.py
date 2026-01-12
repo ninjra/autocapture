@@ -98,9 +98,7 @@ class EncryptionManager:
             tag = src.read(tag_len)
             src.seek(12)
 
-            decryptor = Cipher(
-                algorithms.AES(self._key), modes.GCM(nonce, tag)
-            ).decryptor()
+            decryptor = Cipher(algorithms.AES(self._key), modes.GCM(nonce, tag)).decryptor()
             remaining = (size - tag_len) - 12
             while remaining > 0:
                 chunk = src.read(min(chunk_size, remaining))
@@ -114,9 +112,7 @@ class EncryptionManager:
         provider = self._config.key_provider
         if provider == "windows-credential-manager":
             if sys.platform != "win32":  # pragma: no cover - platform guard
-                raise RuntimeError(
-                    "Windows Credential Manager is only available on Windows"
-                )
+                raise RuntimeError("Windows Credential Manager is only available on Windows")
             key = _read_windows_credential(self._config.key_name)
             if key is None:
                 key = os.urandom(32)

@@ -34,16 +34,12 @@ class FakeVector:
     def __init__(self, hits):
         self._hits = hits
 
-    def search(
-        self, vector, limit=20, *, filters=None, embedding_model: str | None = None
-    ):
+    def search(self, vector, limit=20, *, filters=None, embedding_model: str | None = None):
         return self._hits
 
 
 def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
-    config = AppConfig(
-        database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
-    )
+    config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
     config.embed.text_model = "local-test"
     db = DatabaseManager(config.database)
 

@@ -186,13 +186,9 @@ class QdrantBackend:
                     continue
                 if isinstance(value, list):
                     if value:
-                        must_conditions.append(
-                            FieldCondition(key=key, match=MatchAny(any=value))
-                        )
+                        must_conditions.append(FieldCondition(key=key, match=MatchAny(any=value)))
                 else:
-                    must_conditions.append(
-                        FieldCondition(key=key, match=MatchValue(value=value))
-                    )
+                    must_conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
         filter_obj = Filter(must=must_conditions)
 
         def _search():

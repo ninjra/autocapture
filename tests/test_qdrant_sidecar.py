@@ -31,9 +31,7 @@ def test_should_manage_sidecar_remote(tmp_path: Path) -> None:
     assert should_manage_sidecar(config) is False
 
 
-def test_sidecar_missing_binary_no_crash(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_sidecar_missing_binary_no_crash(tmp_path: Path, monkeypatch) -> None:
     config = _base_config(tmp_path)
     config.qdrant.url = "http://127.0.0.1:6333"
     monkeypatch.setattr(

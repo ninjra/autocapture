@@ -59,10 +59,7 @@ class WorkerSupervisor:
             self._embed_workers = list(embed_workers)
 
     def start(self) -> None:
-        if any(
-            slot.thread.is_alive()
-            for slot in self._ocr_threads + self._embed_threads
-        ):
+        if any(slot.thread.is_alive() for slot in self._ocr_threads + self._embed_threads):
             return
         if self._watchdog_thread and self._watchdog_thread.is_alive():
             return
@@ -111,9 +108,7 @@ class WorkerSupervisor:
         _ = observation_id
 
     def health_snapshot(self) -> dict[str, bool]:
-        watchdog_alive = bool(
-            self._watchdog_thread and self._watchdog_thread.is_alive()
-        )
+        watchdog_alive = bool(self._watchdog_thread and self._watchdog_thread.is_alive())
         worker_threads = self._ocr_threads + self._embed_threads
         workers_alive = all(slot.thread.is_alive() for slot in worker_threads)
         return {
@@ -135,9 +130,7 @@ class WorkerSupervisor:
             for slot in self._ocr_threads + self._embed_threads:
                 if slot.thread.is_alive():
                     continue
-                self._log.error(
-                    "Worker thread {} died; restarting", slot.name
-                )
+                self._log.error("Worker thread {} died; restarting", slot.name)
                 worker_restarts_total.labels(slot.worker_type).inc()
                 slot.thread = self._build_thread(slot.worker, slot.name)
                 slot.thread.start()

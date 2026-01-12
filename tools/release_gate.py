@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -31,6 +32,34 @@ def _read_version(pyproject_path: Path) -> str:
     return str(version)
 
 
+def _write_doctor_config() -> Path:
+    content = """offline: true
+capture:
+  record_video: false
+  data_dir: "./data"
+tracking:
+  enabled: false
+ocr:
+  engine: "disabled"
+  device: "cpu"
+embed:
+  text_model: "disabled"
+routing:
+  ocr: "disabled"
+  embedding: "disabled"
+qdrant:
+  enabled: false
+encryption:
+  enabled: false
+database:
+  url: "sqlite:///./data/autocapture.db"
+"""
+    tmp = tempfile.NamedTemporaryFile("w", delete=False, suffix="-doctor.yml")
+    tmp.write(content)
+    tmp.flush()
+    return Path(tmp.name)
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     os.chdir(repo_root)
@@ -38,14 +67,19 @@ def main() -> int:
     _poetry_run(["ruff", "check", "."])
     _poetry_run(["black", "--check", "."])
     _poetry_run(["pytest", "-q"])
-    _poetry_run([
-        "python",
-        "-m",
-        "autocapture.main",
-        "--config",
-        "autocapture.yml",
-        "doctor",
-    ])
+    doctor_config = Path("autocapture.yml")
+    if sys.platform != "win32":
+        doctor_config = _write_doctor_config()
+    _poetry_run(
+        [
+            "python",
+            "-m",
+            "autocapture.main",
+            "--config",
+            str(doctor_config),
+            "doctor",
+        ]
+    )
 
     if sys.platform == "win32":
         _poetry_run(["python", "tools/vendor_windows_binaries.py"])
@@ -53,11 +87,13 @@ def main() -> int:
         if shutil.which("iscc") is None:
             raise RuntimeError("Inno Setup (iscc) not found on PATH")
         version = _read_version(repo_root / "pyproject.toml")
-        _run([
-            "iscc",
-            "installer/autocapture.iss",
-            f"/DMyAppVersion={version}",
-        ])
+        _run(
+            [
+                "iscc",
+                "installer/autocapture.iss",
+                f"/DMyAppVersion={version}",
+            ]
+        )
 
     return 0
 

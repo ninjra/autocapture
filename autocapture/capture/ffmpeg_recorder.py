@@ -42,9 +42,7 @@ def _virtual_bounds(frames: Iterable[CaptureFrame]) -> tuple[int, int, int, int]
     return min_left, min_top, max_right - min_left, max_bottom - min_top
 
 
-def composite_frames(
-    frames: list[CaptureFrame], layout_mode: str
-) -> Optional[Image.Image]:
+def composite_frames(frames: list[CaptureFrame], layout_mode: str) -> Optional[Image.Image]:
     if not frames:
         return None
 
@@ -63,9 +61,7 @@ def composite_frames(
 class SegmentRecorder:
     """Manage a single FFmpeg process per active activity segment."""
 
-    def __init__(
-        self, capture_config: CaptureConfig, ffmpeg_config: FFmpegConfig
-    ) -> None:
+    def __init__(self, capture_config: CaptureConfig, ffmpeg_config: FFmpegConfig) -> None:
         self._config = capture_config
         self._log = get_logger("recorder")
         try:
@@ -155,10 +151,7 @@ class SegmentRecorder:
                 video_frames_dropped_total.inc()
                 now = time.monotonic()
                 self._drop_window.append(now)
-                while (
-                    self._drop_window
-                    and now - self._drop_window[0] > self._drop_window_s
-                ):
+                while self._drop_window and now - self._drop_window[0] > self._drop_window_s:
                     self._drop_window.popleft()
                 if now - self._last_drop_log > 5.0:
                     self._last_drop_log = now
@@ -214,9 +207,7 @@ class SegmentRecorder:
             if self._process is None:
                 if self._segment is None:
                     break
-                process, encoder = self._start_process(
-                    composite.size, self._segment.video_path
-                )
+                process, encoder = self._start_process(composite.size, self._segment.video_path)
                 if process is None:
                     if self._segment:
                         self._segment.state = "failed"
@@ -432,9 +423,7 @@ class SegmentRecorder:
                 self._process.kill()
                 return -1
 
-    def _signal_stop(
-        self, q: queue.Queue[list[CaptureFrame] | None] | None = None
-    ) -> None:
+    def _signal_stop(self, q: queue.Queue[list[CaptureFrame] | None] | None = None) -> None:
         queue_ref = q or self._queue
         if queue_ref.empty():
             try:
@@ -452,9 +441,7 @@ class SegmentRecorder:
         try:
             queue_ref.put_nowait(None)
         except queue.Full:
-            self._log.warning(
-                "Failed to enqueue recorder stop sentinel; forcing shutdown."
-            )
+            self._log.warning("Failed to enqueue recorder stop sentinel; forcing shutdown.")
 
     def _start_stderr_reader(self, process: subprocess.Popen[bytes]) -> None:
         if process.stderr is None:

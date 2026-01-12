@@ -131,9 +131,7 @@ def upgrade() -> None:
             sa.String(length=36),
             sa.ForeignKey("captures.id", ondelete="CASCADE"),
         ),
-        sa.Column(
-            "span_id", sa.Integer(), sa.ForeignKey("ocr_spans.id", ondelete="SET NULL")
-        ),
+        sa.Column("span_id", sa.Integer(), sa.ForeignKey("ocr_spans.id", ondelete="SET NULL")),
         sa.Column("vector", sa.JSON(), nullable=True),
         sa.Column("model", sa.String(length=128), nullable=False),
         sa.Column("status", sa.String(length=16), nullable=False),
@@ -177,9 +175,7 @@ def upgrade() -> None:
         sa.Column("count", sa.Integer(), nullable=False),
         sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=False),
     )
-    op.create_index(
-        "ix_query_history_normalized_text", "query_history", ["normalized_text"]
-    )
+    op.create_index("ix_query_history_normalized_text", "query_history", ["normalized_text"])
 
 
 def downgrade() -> None:

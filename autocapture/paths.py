@@ -99,9 +99,7 @@ def resolve_ffmpeg_path(config: FFmpegConfig) -> Path | None:
         if explicit.exists():
             return explicit
         if not config.allow_disable:
-            raise FileNotFoundError(
-                f"ffmpeg explicit_path not found: {explicit}"
-            )
+            raise FileNotFoundError(f"ffmpeg explicit_path not found: {explicit}")
     if config.allow_system:
         from shutil import which
 

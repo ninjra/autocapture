@@ -11,9 +11,7 @@ from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 
 
 class MockLLM:
-    async def generate_answer(
-        self, system_prompt: str, query: str, context_pack_text: str
-    ) -> str:
+    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
         return "Answer based on evidence [E1]"
 
 
@@ -69,16 +67,12 @@ def test_retrieve_context_pack_answer(monkeypatch, tmp_path: Path) -> None:
     def _mock_select(self):
         return MockLLM(), RoutingDecision(llm_provider="mock")
 
-    monkeypatch.setattr(
-        "autocapture.memory.router.ProviderRouter.select_llm", _mock_select
-    )
+    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _mock_select)
 
     app = create_app(config, db_manager=db)
     client = TestClient(app)
 
-    response = client.post(
-        "/api/answer", json={"query": "roadmap", "extractive_only": False}
-    )
+    response = client.post("/api/answer", json={"query": "roadmap", "extractive_only": False})
     assert response.status_code == 200
     payload = response.json()
     assert "Answer based on evidence" in payload["answer"]
