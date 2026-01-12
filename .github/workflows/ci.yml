@@ -27,14 +27,10 @@ jobs:
         timeout-minutes: 15
         run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
 
-      - name: Lint (ruff)
-        run: poetry run ruff check .
-      - name: Format check (black)
-        run: poetry run black --check .
-      - name: Run tests
+      - name: Release gate
         env:
           STRICT_FROZEN_SURFACES: "1"
-        run: poetry run pytest -q
+        run: poetry run python tools/release_gate.py
 
   windows-build:
     runs-on: windows-latest
@@ -56,6 +52,18 @@ jobs:
           poetry --version
       - name: Install dependencies
         timeout-minutes: 20
-        run: poetry install --with dev --extras "ui windows ocr embed-fast" --no-interaction --no-ansi --sync -vvv
-      - name: Build PyInstaller bundle
-        run: poetry run pyinstaller pyinstaller.spec
+        run: poetry install --with dev --extras "ui windows ocr ocr-gpu embed-fast" --no-interaction --no-ansi --sync -vvv
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+      - name: Release gate
+        run: poetry run python tools/release_gate.py
+      - name: Upload PyInstaller bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: autocapture-windows-bundle
+          path: dist/autocapture
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: autocapture-windows-installer
+          path: dist-installer/*.exe

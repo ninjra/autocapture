@@ -27,6 +27,7 @@ from .storage.database import DatabaseManager
 from .storage.retention import RetentionManager
 from .tracking import HostVectorTracker
 from .worker.supervisor import WorkerSupervisor
+from .qdrant.sidecar import QdrantSidecar
 
 
 class RetentionScheduler:
@@ -138,6 +139,9 @@ class AppRuntime:
             media_store=MediaStore(config.capture, config.encryption),
             ffmpeg_config=config.ffmpeg,
         )
+        self._qdrant_sidecar = QdrantSidecar(
+            config, Path(config.capture.data_dir), Path(config.capture.data_dir) / "logs"
+        )
         self._workers = WorkerSupervisor(
             config=config,
             db_manager=self._db,
@@ -150,9 +154,7 @@ class AppRuntime:
             Path(config.capture.data_dir),
         )
         self._retention_scheduler = RetentionScheduler(self._retention)
-        self._metrics = MetricsServer(
-            config.observability, Path(config.capture.data_dir)
-        )
+        self._metrics = MetricsServer(config.observability, Path(config.capture.data_dir))
         self._settings_path = Path(config.capture.data_dir) / "settings.json"
         self._snooze_timer: threading.Timer | None = None
         self._promptops_runner: PromptOpsRunner | None = None
@@ -170,6 +172,7 @@ class AppRuntime:
             self._running = True
 
         self._log.info("Runtime starting")
+        self._qdrant_sidecar.start()
         if self._tracker:
             self._tracker.start()
         self._orchestrator.start()
@@ -189,22 +192,25 @@ class AppRuntime:
 
         self._log.info("Runtime stopping")
         try:
-            self._orchestrator.stop()
-        except Exception as exc:  # pragma: no cover - defensive
-            self._log.warning("Failed to stop orchestrator: {}", exc)
+            try:
+                self._orchestrator.stop()
+            except Exception as exc:  # pragma: no cover - defensive
+                self._log.warning("Failed to stop orchestrator: {}", exc)
 
-        try:
-            self._workers.stop()
+            try:
+                self._workers.stop()
+            finally:
+                self._workers.flush()
+
+            self._metrics.stop()
+            if self._tracker:
+                self._tracker.stop()
+            self._retention_scheduler.stop()
+            if self._promptops_scheduler:
+                self._promptops_scheduler.stop()
+            self._cancel_snooze_timer()
         finally:
-            self._workers.flush()
-
-        self._metrics.stop()
-        if self._tracker:
-            self._tracker.stop()
-        self._retention_scheduler.stop()
-        if self._promptops_scheduler:
-            self._promptops_scheduler.stop()
-        self._cancel_snooze_timer()
+            self._qdrant_sidecar.stop()
         self._log.info("Runtime stopped")
 
     def pause_capture(self) -> None:

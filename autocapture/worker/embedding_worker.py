@@ -85,8 +85,7 @@ class EmbeddingWorker:
                 )
                 pending_spans = (
                     session.execute(
-                        select(EmbeddingRecord.id)
-                        .where(
+                        select(EmbeddingRecord.id).where(
                             EmbeddingRecord.status.in_(["pending", "index_pending"]),
                             EmbeddingRecord.model == self._embedder.model_name,
                             EmbeddingRecord.attempts < self._max_attempts,
@@ -330,9 +329,7 @@ class EmbeddingWorker:
             return 0
 
         vectors: list[list[float]] = []
-        span_texts = [
-            span.text for embedding, span, _ in span_rows if embedding.vector is None
-        ]
+        span_texts = [span.text for embedding, span, _ in span_rows if embedding.vector is None]
         if span_texts:
             try:
                 start = time.monotonic()
@@ -451,16 +448,12 @@ class EmbeddingWorker:
         return len(span_rows)
 
     def _recover_stale_event_embeddings(self) -> None:
-        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
-            seconds=self._lease_timeout_s
-        )
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=self._lease_timeout_s)
 
         def _recover(session) -> None:
             rows = (
                 session.execute(
-                    select(EventRecord).where(
-                        EventRecord.embedding_status == "processing"
-                    )
+                    select(EventRecord).where(EventRecord.embedding_status == "processing")
                 )
                 .scalars()
                 .all()
@@ -494,9 +487,7 @@ class EmbeddingWorker:
         self._db.transaction(_recover)
 
     def _recover_stale_embeddings(self) -> None:
-        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
-            seconds=self._lease_timeout_s
-        )
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=self._lease_timeout_s)
 
         def _recover(session) -> None:
             rows = (
@@ -507,11 +498,7 @@ class EmbeddingWorker:
                 .all()
             )
             for record in rows:
-                heartbeat = (
-                    record.heartbeat_at
-                    or record.processing_started_at
-                    or record.updated_at
-                )
+                heartbeat = record.heartbeat_at or record.processing_started_at or record.updated_at
                 heartbeat = _ensure_aware(heartbeat)
                 if heartbeat and heartbeat >= cutoff:
                     continue

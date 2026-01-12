@@ -36,9 +36,7 @@ class EmbeddingService:
 
             self._backend = SentenceTransformer(self._model_name)
             self._dim = self._backend.get_sentence_embedding_dimension()
-            self._log.info(
-                "Embedding backend: sentence-transformers ({})", self._model_name
-            )
+            self._log.info("Embedding backend: sentence-transformers ({})", self._model_name)
             return
 
         raise RuntimeError("No embedding backend available")
@@ -66,8 +64,7 @@ class EmbeddingService:
         if hasattr(self._backend, "embed"):
             vectors = list(self._backend.embed(text_list))
             return [
-                vector.tolist() if hasattr(vector, "tolist") else list(vector)
-                for vector in vectors
+                vector.tolist() if hasattr(vector, "tolist") else list(vector) for vector in vectors
             ]
 
         vectors = self._backend.encode(

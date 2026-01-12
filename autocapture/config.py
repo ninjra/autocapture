@@ -12,7 +12,14 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
+from .paths import default_data_dir, default_staging_dir
 from .settings_store import read_settings
+
+
+def _default_database_url() -> str:
+    path = (default_data_dir() / "autocapture.db").resolve()
+    return f"sqlite:///{path.as_posix()}"
+
 
 class HIDConfig(BaseModel):
     min_interval_ms: int = Field(
@@ -67,11 +74,11 @@ class CaptureConfig(BaseModel):
     always_store_fullres: bool = Field(True)
     thumbnail_width: int = Field(640, ge=64)
     staging_dir: Path = Field(
-        Path("./staging"),
+        default_factory=default_staging_dir,
         description="Local NVMe-backed directory for temporary assets.",
     )
     data_dir: Path = Field(
-        Path("./data"),
+        default_factory=default_data_dir,
         description="Base directory for media and recorder assets.",
     )
     encoder: str = Field(
@@ -102,9 +109,7 @@ class CaptureConfig(BaseModel):
     staging_min_free_mb: int = Field(
         512,
         ge=0,
-        description=(
-            "Minimum free space (MB) required in staging_dir. Set to 0 to disable."
-        ),
+        description=("Minimum free space (MB) required in staging_dir. Set to 0 to disable."),
     )
     data_min_free_mb: int = Field(
         1024,
@@ -147,12 +152,8 @@ class EmbedConfig(BaseModel):
     use_half_precision: bool = Field(
         True, description="Use float16 embeddings to shrink storage bandwidth."
     )
-    schedule_cron: str = Field(
-        "0 2 * * *", description="Cron string for nightly batches."
-    )
-    model: Optional[str] = Field(
-        None, description="Legacy alias for text_model (deprecated)."
-    )
+    schedule_cron: str = Field("0 2 * * *", description="Cron string for nightly batches.")
+    model: Optional[str] = Field(None, description="Legacy alias for text_model (deprecated).")
     batch_size: Optional[int] = Field(
         None, description="Legacy alias for text_batch_size (deprecated)."
     )
@@ -166,7 +167,7 @@ class RerankerConfig(BaseModel):
 
 class WorkerConfig(BaseModel):
     data_dir: Path = Field(
-        Path("./data"),
+        default_factory=default_data_dir,
         description="Local directory for worker databases, indexes, and media.",
     )
     lease_ms: int = Field(60_000, ge=1000)
@@ -216,7 +217,7 @@ class StorageQuotaConfig(BaseModel):
 
 class DatabaseConfig(BaseModel):
     url: str = Field(
-        "sqlite:///./data/autocapture.db",
+        default_factory=lambda: _default_database_url(),
         description="SQLAlchemy URL for local metadata storage (SQLite by default).",
     )
     echo: bool = False
@@ -232,15 +233,16 @@ class DatabaseConfig(BaseModel):
         allowed = {"NORMAL", "FULL", "OFF"}
         upper = value.upper()
         if upper not in allowed:
-            raise ValueError(
-                f"sqlite_synchronous must be one of {sorted(allowed)}; got {value!r}"
-            )
+            raise ValueError(f"sqlite_synchronous must be one of {sorted(allowed)}; got {value!r}")
         return upper
 
 
 class QdrantConfig(BaseModel):
     enabled: bool = True
     url: str = Field("http://127.0.0.1:6333")
+    binary_path: Optional[Path] = Field(
+        None, description="Optional path to qdrant.exe for sidecar management."
+    )
     text_collection: str = Field("text_spans")
     image_collection: str = Field("image_tiles")
     text_vector_size: int = Field(768, ge=64)
@@ -261,12 +263,8 @@ class QdrantConfig(BaseModel):
 class FFmpegConfig(BaseModel):
     enabled: bool = Field(True)
     require_bundled: bool = Field(True)
-    explicit_path: Optional[Path] = Field(
-        None, description="Explicit ffmpeg binary path."
-    )
-    allow_system: bool = Field(
-        True, description="Allow falling back to system PATH ffmpeg."
-    )
+    explicit_path: Optional[Path] = Field(None, description="Explicit ffmpeg binary path.")
+    allow_system: bool = Field(True, description="Allow falling back to system PATH ffmpeg.")
     allow_disable: bool = Field(
         True,
         description="Allow disabling video capture when ffmpeg is missing.",
@@ -304,9 +302,7 @@ class ObservabilityConfig(BaseModel):
 
 
 class APIConfig(BaseModel):
-    bind_host: str = Field(
-        "127.0.0.1", description="Bind host for the local API server."
-    )
+    bind_host: str = Field("127.0.0.1", description="Bind host for the local API server.")
     port: int = Field(8008, ge=1024, le=65535)
     require_api_key: bool = Field(False)
     api_key: Optional[str] = None
@@ -419,9 +415,7 @@ class AppConfig(BaseModel):
 
     @field_validator("tracking")
     @classmethod
-    def validate_tracking_dir(
-        cls, value: TrackingConfig, info: ValidationInfo
-    ) -> TrackingConfig:
+    def validate_tracking_dir(cls, value: TrackingConfig, info: ValidationInfo) -> TrackingConfig:
         capture = info.data.get("capture")
         if capture:
             capture.data_dir.mkdir(parents=True, exist_ok=True)
@@ -439,15 +433,18 @@ class AppConfig(BaseModel):
         if self.api.require_api_key and not self.api.api_key:
             raise ValueError("api.api_key is required when api.require_api_key=true")
 
+        default_db = _default_database_url()
+        if self.database.url == default_db:
+            data_dir = Path(self.capture.data_dir).resolve()
+            self.database.url = f"sqlite:///{(data_dir / 'autocapture.db').as_posix()}"
+
         if self.mode.mode != "remote" and not is_loopback_host(self.api.bind_host):
             if not self.api.require_api_key:
                 raise ValueError(
                     "api.require_api_key must be true when binding to non-loopback host"
                 )
             if not self.api.api_key:
-                raise ValueError(
-                    "api.api_key is required when binding to non-loopback host"
-                )
+                raise ValueError("api.api_key is required when binding to non-loopback host")
         return self
 
 

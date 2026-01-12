@@ -107,9 +107,7 @@ class PromptOpsRunner:
                     "derived_path": str(item.derived_path),
                     "rationale": item.rationale,
                     "diff_raw": _diff_strings(item.raw_path, item.raw_content),
-                    "diff_derived": _diff_strings(
-                        item.derived_path, item.derived_content
-                    ),
+                    "diff_derived": _diff_strings(item.derived_path, item.derived_content),
                 }
                 for item in proposals
             }
@@ -311,9 +309,7 @@ class PromptOpsRunner:
         diff_chunks = []
         for proposal in proposals:
             diff_chunks.append(_diff_strings(proposal.raw_path, proposal.raw_content))
-            diff_chunks.append(
-                _diff_strings(proposal.derived_path, proposal.derived_content)
-            )
+            diff_chunks.append(_diff_strings(proposal.derived_path, proposal.derived_content))
         patch_path = patch_dir / f"promptops_{run_id}.diff"
         patch_path.write_text("\n".join(diff_chunks), encoding="utf-8")
 
@@ -462,9 +458,7 @@ def _open_github_pr(
     owner, repo_name = repo.split("/", 1)
     headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
     client = http_client or httpx.Client(timeout=10.0)
-    repo_info = client.get(
-        f"https://api.github.com/repos/{owner}/{repo_name}", headers=headers
-    )
+    repo_info = client.get(f"https://api.github.com/repos/{owner}/{repo_name}", headers=headers)
     repo_info.raise_for_status()
     default_branch = repo_info.json()["default_branch"]
     ref_resp = client.get(

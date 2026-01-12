@@ -18,9 +18,7 @@ from ..logging_utils import get_logger
 
 
 class MediaStore:
-    def __init__(
-        self, capture_config: CaptureConfig, encryption_config: EncryptionConfig
-    ) -> None:
+    def __init__(self, capture_config: CaptureConfig, encryption_config: EncryptionConfig) -> None:
         self._capture_config = capture_config
         self._encryption_config = encryption_config
         self._encryption = EncryptionManager(encryption_config)
@@ -30,9 +28,7 @@ class MediaStore:
         self._staging_dir.mkdir(parents=True, exist_ok=True)
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
-    def write_roi(
-        self, image: np.ndarray, timestamp, observation_id: str
-    ) -> Optional[Path]:
+    def write_roi(self, image: np.ndarray, timestamp, observation_id: str) -> Optional[Path]:
         if not self._has_required_space():
             self._log.warning("Disk quota exceeded; dropping ROI {}", observation_id)
             return None
@@ -121,9 +117,7 @@ class MediaStore:
                 image = image.convert("RGB")
                 return np.array(image)
         except Exception as exc:
-            raise RuntimeError(
-                "Failed to decrypt image; check encryption settings."
-            ) from exc
+            raise RuntimeError("Failed to decrypt image; check encryption settings.") from exc
         finally:
             safe_unlink(tmp_path)
 

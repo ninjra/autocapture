@@ -101,8 +101,7 @@ def export_capture(
                         "source": str(rel_path or source_path),
                         "export_path": str(export_rel),
                         "encrypted": bool(
-                            source_path.suffix.endswith(".acenc")
-                            and not decrypt_media
+                            source_path.suffix.endswith(".acenc") and not decrypt_media
                         ),
                     }
                 )

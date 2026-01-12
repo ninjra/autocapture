@@ -104,9 +104,7 @@ def atomic_publish(
 
 
 @contextmanager
-def file_lock(
-    path: Path, timeout_s: float = 10.0, poll_interval_s: float = 0.05
-) -> Iterator[None]:
+def file_lock(path: Path, timeout_s: float = 10.0, poll_interval_s: float = 0.05) -> Iterator[None]:
     start = time.monotonic()
     fd = None
     while True:

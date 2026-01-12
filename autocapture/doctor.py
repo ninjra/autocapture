@@ -5,7 +5,9 @@ from __future__ import annotations
 import ctypes
 import json
 import socket
+import subprocess
 import sys
+from urllib.parse import urlparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -13,7 +15,7 @@ from typing import Callable, Iterable
 import httpx
 from sqlalchemy import text
 
-from .config import AppConfig
+from .config import AppConfig, is_loopback_host
 from .capture.backends import DxCamBackend, MssBackend
 from .capture.raw_input import LASTINPUTINFO, Win32Api, probe_raw_input
 from .embeddings.service import EmbeddingService
@@ -21,7 +23,7 @@ from .encryption import EncryptionManager
 from .logging_utils import get_logger
 from .memory.entities import SecretStore
 from .observability.metrics import get_metrics_port
-from .paths import resolve_ffmpeg_path, resource_root
+from .paths import resolve_ffmpeg_path, resolve_qdrant_path, resource_root
 from .storage.database import DatabaseManager
 
 
@@ -49,6 +51,7 @@ def run_doctor(
             _check_paths,
             _check_database,
             _check_encryption,
+            _check_qdrant,
             _check_ffmpeg,
             _check_capture_backends,
             _check_ocr,
@@ -67,9 +70,7 @@ def run_doctor(
 
 
 def _redact_config(config: AppConfig) -> str:
-    data = (
-        config.model_dump() if hasattr(config, "model_dump") else config.dict()
-    )
+    data = config.model_dump() if hasattr(config, "model_dump") else config.dict()
     secrets = {
         "api_key",
         "openai_api_key",
@@ -171,7 +172,65 @@ def _check_encryption(config: AppConfig) -> DoctorCheckResult:
     return DoctorCheckResult("encryption", True, "Initialized")
 
 
+def _available_onnx_providers() -> list[str]:
+    import importlib.util
+
+    if importlib.util.find_spec("onnxruntime") is None:
+        return []
+    import onnxruntime as ort  # type: ignore
+
+    return list(ort.get_available_providers())
+
+
+def _parse_qdrant_host(url: str) -> tuple[str | None, int]:
+    parsed = urlparse(url if "://" in url else f"http://{url}")
+    host = parsed.hostname
+    port = parsed.port or 6333
+    return host, port
+
+
+def _check_qdrant(config: AppConfig) -> DoctorCheckResult:
+    if not config.qdrant.enabled:
+        return DoctorCheckResult("qdrant", True, "Disabled")
+    host, port = _parse_qdrant_host(config.qdrant.url)
+    if not host:
+        return DoctorCheckResult("qdrant", False, "Invalid qdrant.url")
+    binary_path = resolve_qdrant_path(config.qdrant)
+    try:
+        response = httpx.get(f"http://{host}:{port}/health", timeout=1.0)
+        if response.status_code == 200:
+            detail = f"Running at {config.qdrant.url}"
+            if binary_path:
+                detail += f"; binary={binary_path}"
+            return DoctorCheckResult("qdrant", True, detail)
+    except Exception:
+        pass
+
+    if not is_loopback_host(host):
+        return DoctorCheckResult(
+            "qdrant",
+            True,
+            f"Remote Qdrant configured at {config.qdrant.url}; not managed locally",
+        )
+
+    if binary_path:
+        return DoctorCheckResult(
+            "qdrant",
+            True,
+            f"Not running; binary found at {binary_path} (sidecar will manage).",
+        )
+
+    detail = (
+        "Qdrant not running and binary missing; "
+        "run tools/vendor_windows_binaries.py or set qdrant.binary_path."
+    )
+    ok = sys.platform != "win32"
+    return DoctorCheckResult("qdrant", ok, detail)
+
+
 def _check_capture_backends(config: AppConfig) -> DoctorCheckResult:
+    if sys.platform != "win32":
+        return DoctorCheckResult("screen_capture", True, "Non-Windows platform")
     results: list[str] = []
     errors: list[str] = []
     for label, backend_cls in (
@@ -206,30 +265,57 @@ def _check_ffmpeg(config: AppConfig) -> DoctorCheckResult:
                 True,
                 "FFmpeg missing; video disabled (allow_disable=true)",
             )
-        return DoctorCheckResult("ffmpeg", True, f"Using {path}")
+        try:
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            result = subprocess.run(
+                [str(path), "-version"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                creationflags=creationflags,
+            )
+            if result.returncode != 0:
+                return DoctorCheckResult(
+                    "ffmpeg", False, f"ffmpeg -version failed: {result.stderr.strip()}"
+                )
+            first_line = result.stdout.splitlines()[0] if result.stdout else ""
+            return DoctorCheckResult("ffmpeg", True, f"Using {path} ({first_line})")
+        except Exception as exc:
+            return DoctorCheckResult("ffmpeg", False, f"ffmpeg probe failed: {exc}")
     except Exception as exc:
         return DoctorCheckResult("ffmpeg", False, str(exc))
 
 
 def _check_ocr(config: AppConfig) -> DoctorCheckResult:
-    try:
-        from .worker.event_worker import OCRProcessor
-    except Exception as exc:
-        return DoctorCheckResult("ocr", False, str(exc))
+    import importlib.util
+
+    if config.routing.ocr == "disabled" or config.ocr.engine == "disabled":
+        return DoctorCheckResult("ocr", True, "Disabled")
+    if importlib.util.find_spec("rapidocr_onnxruntime") is None:
+        return DoctorCheckResult("ocr", False, "rapidocr_onnxruntime not installed")
+    from .worker.event_worker import OCRProcessor
+
     try:
         image = _build_ocr_fixture()
-        processor = OCRProcessor()
+        providers = _available_onnx_providers()
+        processor = OCRProcessor(config.ocr)
         spans = processor.run(image)
-        text = " ".join(span[1] for span in spans if len(span) > 1)
+        text = " ".join(span[0] for span in spans if span)
         if not text.strip():
             return DoctorCheckResult("ocr", False, "Empty OCR output")
-        return DoctorCheckResult("ocr", True, "OK")
+        detail = f"device={config.ocr.device}; providers={providers or 'none'}"
+        if config.ocr.device.lower() == "cuda" and "CUDAExecutionProvider" not in (providers or []):
+            detail += " (CUDAExecutionProvider missing; install onnxruntime-gpu + CUDA/cuDNN)"
+        return DoctorCheckResult("ocr", True, detail)
     except Exception as exc:
         return DoctorCheckResult("ocr", False, str(exc))
 
 
 def _build_ocr_fixture():
     from PIL import Image, ImageDraw, ImageFont
+    import numpy as np
 
     image = Image.new("RGB", (200, 80), color="white")
     draw = ImageDraw.Draw(image)
@@ -243,7 +329,7 @@ def _build_ocr_fixture():
     text_h = bbox[3] - bbox[1]
     position = ((200 - text_w) // 2, (80 - text_h) // 2)
     draw.text(position, text, fill="black", font=font)
-    return image
+    return np.array(image)
 
 
 def _check_embeddings(config: AppConfig) -> DoctorCheckResult:
@@ -262,6 +348,13 @@ def _check_embeddings(config: AppConfig) -> DoctorCheckResult:
 def _check_vector_index(config: AppConfig) -> DoctorCheckResult:
     if not config.qdrant.enabled:
         return DoctorCheckResult("vector_index", True, "Disabled")
+    host, _port = _parse_qdrant_host(config.qdrant.url)
+    if host and is_loopback_host(host) and resolve_qdrant_path(config.qdrant):
+        return DoctorCheckResult(
+            "vector_index",
+            True,
+            "Qdrant configured for sidecar; will initialize when running.",
+        )
     try:
         from qdrant_client import QdrantClient  # type: ignore
 
@@ -284,9 +377,7 @@ def _check_metrics(config: AppConfig) -> DoctorCheckResult:
             response = httpx.get(f"http://{host}:{port}/metrics", timeout=2.0)
             if response.status_code == 200:
                 return DoctorCheckResult("metrics", True, "metrics endpoint responding")
-            return DoctorCheckResult(
-                "metrics", False, f"unexpected status {response.status_code}"
-            )
+            return DoctorCheckResult("metrics", False, f"unexpected status {response.status_code}")
         except Exception as exc:
             return DoctorCheckResult("metrics", False, str(exc))
     return _check_port("metrics", host, port)

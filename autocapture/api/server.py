@@ -152,6 +152,7 @@ class PromptOpsRunSummary(BaseModel):
 class PromptOpsRunsResponse(BaseModel):
     runs: list[PromptOpsRunSummary]
 
+
 class _TokenBucket:
     def __init__(self, tokens: float, updated_at: float) -> None:
         self.tokens = tokens
@@ -267,9 +268,7 @@ def create_app(
                 session.execute(select(1))
                 _ = (
                     session.execute(
-                        select(EventRecord.event_id)
-                        .order_by(EventRecord.ts_start.desc())
-                        .limit(1)
+                        select(EventRecord.event_id).order_by(EventRecord.ts_start.desc()).limit(1)
                     )
                     .scalars()
                     .first()
@@ -287,9 +286,7 @@ def create_app(
                 collections = [config.qdrant.text_collection]
                 if config.qdrant.image_collection not in collections:
                     collections.append(config.qdrant.image_collection)
-                missing = [
-                    name for name in collections if not client.collection_exists(name)
-                ]
+                missing = [name for name in collections if not client.collection_exists(name)]
                 if missing:
                     checks["qdrant"] = {
                         "ok": False,
@@ -381,9 +378,7 @@ def create_app(
             "time_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "checks": checks,
         }
-        return JSONResponse(
-            status_code=200 if overall_ok else 503, content=payload
-        )
+        return JSONResponse(status_code=200 if overall_ok else 503, content=payload)
 
     @app.middleware("http")
     async def security_headers_middleware(request: Request, call_next):  # type: ignore[no-redef]
@@ -392,9 +387,7 @@ def create_app(
         headers.setdefault("X-Content-Type-Options", "nosniff")
         headers.setdefault("X-Frame-Options", "DENY")
         headers.setdefault("Referrer-Policy", "no-referrer")
-        headers.setdefault(
-            "Permissions-Policy", "camera=(), microphone=(), geolocation=()"
-        )
+        headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         headers.setdefault("X-Robots-Tag", "noindex, nofollow")
         content_type = headers.get("content-type", "").lower()
         if content_type.startswith("text/html"):
@@ -507,11 +500,7 @@ def create_app(
     @app.get("/api/promptops/latest")
     def promptops_latest() -> PromptOpsRunsResponse:
         with db.session() as session:
-            run = (
-                session.query(PromptOpsRunRecord)
-                .order_by(PromptOpsRunRecord.ts.desc())
-                .first()
-            )
+            run = session.query(PromptOpsRunRecord).order_by(PromptOpsRunRecord.ts.desc()).first()
         if not run:
             return PromptOpsRunsResponse(runs=[])
         return PromptOpsRunsResponse(runs=[_promptops_summary(run)])
@@ -585,9 +574,7 @@ def create_app(
         event_map = {event.event_id: event for event in events}
         return RetrieveResponse(
             evidence=[
-                _evidence_to_json(
-                    item, event_map.get(item.event_id), request.include_screenshots
-                )
+                _evidence_to_json(item, event_map.get(item.event_id), request.include_screenshots)
                 for item in evidence
             ]
         )
@@ -672,9 +659,7 @@ def create_app(
             provider, decision = ProviderRouter(
                 routing_data, config.llm, offline=config.offline, privacy=config.privacy
             ).select_llm()
-            system_prompt = prompt_registry.get(
-                "ANSWER_WITH_CONTEXT_PACK"
-            ).system_prompt
+            system_prompt = prompt_registry.get("ANSWER_WITH_CONTEXT_PACK").system_prompt
             try:
                 answer_text = await provider.generate_answer(
                     system_prompt,
@@ -713,9 +698,7 @@ def create_app(
                     )
                 log.info("LLM routed to {}", decision.llm_provider)
             except Exception as exc:
-                log.warning(
-                    "LLM unavailable; falling back to extractive answer: {}", exc
-                )
+                log.warning("LLM unavailable; falling back to extractive answer: {}", exc)
                 compressed = extractive_answer(evidence)
                 answer_text = compressed.answer
                 citations = compressed.citations
@@ -881,9 +864,7 @@ def _build_evidence(
 ) -> tuple[list[EvidenceItem], list[EventRecord]]:
     retrieve_filters = None
     if filters:
-        retrieve_filters = RetrieveFilters(
-            apps=filters.get("app"), domains=filters.get("domain")
-        )
+        retrieve_filters = RetrieveFilters(apps=filters.get("app"), domains=filters.get("domain"))
     results = retrieval.retrieve(query, time_range, retrieve_filters, limit=k)
     evidence: list[EvidenceItem] = []
     events: list[EventRecord] = []
@@ -975,9 +956,7 @@ def _spans_for_event(
     candidate_spans = spans
     if matched_span_keys:
         candidate_spans = [
-            span
-            for span in spans
-            if str(span.get("span_key")) in set(matched_span_keys)
+            span for span in spans if str(span.get("span_key")) in set(matched_span_keys)
         ]
     elif query_lower:
         candidate_spans = [
@@ -997,9 +976,7 @@ def _spans_for_event(
             )
         )
     if not evidence_spans:
-        evidence_spans.append(
-            EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5)
-        )
+        evidence_spans.append(EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5))
     return evidence_spans
 
 
@@ -1022,9 +999,7 @@ def _remap_spans(
 
     remapped: list[EvidenceSpan] = []
     for span in spans:
-        overlaps = [
-            rep for rep in replacements if span.start < rep[1] and span.end > rep[0]
-        ]
+        overlaps = [rep for rep in replacements if span.start < rep[1] and span.end > rep[0]]
         if overlaps:
             new_start = min(rep[2] for rep in overlaps)
             new_end = max(rep[3] for rep in overlaps)
@@ -1080,9 +1055,7 @@ def _record_query_history(db: DatabaseManager, query: str) -> None:
     with db.session() as session:
         record = (
             session.execute(
-                select(QueryHistoryRecord).where(
-                    QueryHistoryRecord.normalized_text == normalized
-                )
+                select(QueryHistoryRecord).where(QueryHistoryRecord.normalized_text == normalized)
             )
             .scalars()
             .first()

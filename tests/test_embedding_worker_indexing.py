@@ -174,8 +174,7 @@ def test_embedding_worker_reclaims_stale_processing(tmp_path) -> None:
                 model="fake-model",
                 status="processing",
                 span_key="S1",
-                heartbeat_at=dt.datetime.now(dt.timezone.utc)
-                - dt.timedelta(minutes=10),
+                heartbeat_at=dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=10),
             )
         )
 

@@ -1,6 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
 block_cipher = None
+
+def vendor_datas(root, prefix):
+    datas = []
+    for dirpath, _, filenames in os.walk(root):
+        rel_dir = os.path.relpath(dirpath, root)
+        dest_dir = prefix if rel_dir == "." else os.path.join(prefix, rel_dir)
+        for filename in filenames:
+            datas.append((os.path.join(dirpath, filename), dest_dir))
+    return datas
 
 a = Analysis(
     ["autocapture/main.py"],
@@ -9,9 +20,12 @@ a = Analysis(
     datas=[
         ("alembic.ini", "."),
         ("alembic", "alembic"),
+        ("autocapture.yml", "."),
         ("autocapture/prompts/derived/*.yaml", "autocapture/prompts/derived"),
         ("autocapture/ui/web", "autocapture/ui/web"),
-    ],
+    ]
+    + vendor_datas("vendor/ffmpeg", "ffmpeg")
+    + vendor_datas("vendor/qdrant", "qdrant"),
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],

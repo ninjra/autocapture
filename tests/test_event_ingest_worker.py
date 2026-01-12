@@ -53,9 +53,7 @@ def test_event_ingest_worker_creates_event(tmp_path) -> None:
     assert event is not None
     assert event.ocr_text
     spans = (
-        session.execute(
-            select(OCRSpanRecord).where(OCRSpanRecord.capture_id == capture_id)
-        )
+        session.execute(select(OCRSpanRecord).where(OCRSpanRecord.capture_id == capture_id))
         .scalars()
         .all()
     )

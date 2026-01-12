@@ -52,12 +52,8 @@ class SqliteHostEventStore:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_host_events_ts_start ON host_events(ts_start_ms);"
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_host_events_kind ON host_events(kind);"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_host_events_app ON host_events(app_name);"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_host_events_kind ON host_events(kind);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_host_events_app ON host_events(app_name);")
         self._conn.commit()
         cursor.close()
         self._log.info("Host events schema initialized")

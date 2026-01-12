@@ -39,9 +39,7 @@ class EventRecord(Base):
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
     ts_start: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
-    ts_end: Mapped[dt.datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    ts_end: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     app_name: Mapped[str] = mapped_column(String(256))
     window_title: Mapped[str] = mapped_column(String(512))
     url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
@@ -88,9 +86,7 @@ class EntityAliasRecord(Base):
     alias_id: Mapped[str] = mapped_column(
         String(36), primary_key=True, default=lambda: str(uuid4())
     )
-    entity_id: Mapped[str] = mapped_column(
-        ForeignKey("entities.entity_id", ondelete="CASCADE")
-    )
+    entity_id: Mapped[str] = mapped_column(ForeignKey("entities.entity_id", ondelete="CASCADE"))
     alias_text: Mapped[str] = mapped_column(String(512))
     alias_norm: Mapped[str] = mapped_column(String(512))
     alias_type: Mapped[str] = mapped_column(String(64))
@@ -134,9 +130,7 @@ class PromptLibraryRecord(Base):
 class PromptOpsRunRecord(Base):
     __tablename__ = "prompt_ops_runs"
 
-    run_id: Mapped[str] = mapped_column(
-        String(64), primary_key=True, default=lambda: str(uuid4())
-    )
+    run_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: str(uuid4()))
     ts: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
@@ -154,12 +148,8 @@ class CaptureRecord(Base):
         Index("ix_captures_ocr_status_heartbeat", "ocr_status", "ocr_heartbeat_at"),
     )
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
-    captured_at: Mapped[dt.datetime] = mapped_column(
-        DateTime(timezone=True), index=True
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    captured_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
     image_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     foreground_process: Mapped[str] = mapped_column(String(256))
     foreground_window: Mapped[str] = mapped_column(String(512))
@@ -175,9 +165,7 @@ class CaptureRecord(Base):
     ocr_attempts: Mapped[int] = mapped_column(Integer, default=0)
     ocr_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    spans: Mapped[list["OCRSpanRecord"]] = relationship(
-        "OCRSpanRecord", back_populates="capture"
-    )
+    spans: Mapped[list["OCRSpanRecord"]] = relationship("OCRSpanRecord", back_populates="capture")
     embeddings: Mapped[list["EmbeddingRecord"]] = relationship(
         "EmbeddingRecord", back_populates="capture"
     )
@@ -195,9 +183,7 @@ class OCRSpanRecord(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    capture_id: Mapped[str] = mapped_column(
-        ForeignKey("captures.id", ondelete="CASCADE")
-    )
+    capture_id: Mapped[str] = mapped_column(ForeignKey("captures.id", ondelete="CASCADE"))
     span_key: Mapped[str] = mapped_column(String(64))
     start: Mapped[int] = mapped_column(Integer)
     end: Mapped[int] = mapped_column(Integer)
@@ -205,9 +191,7 @@ class OCRSpanRecord(Base):
     confidence: Mapped[float] = mapped_column(Float)
     bbox: Mapped[dict] = mapped_column(JSON)
 
-    capture: Mapped[CaptureRecord] = relationship(
-        "CaptureRecord", back_populates="spans"
-    )
+    capture: Mapped[CaptureRecord] = relationship("CaptureRecord", back_populates="spans")
 
 
 class EmbeddingRecord(Base):
@@ -229,9 +213,7 @@ class EmbeddingRecord(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    capture_id: Mapped[str] = mapped_column(
-        ForeignKey("captures.id", ondelete="CASCADE")
-    )
+    capture_id: Mapped[str] = mapped_column(ForeignKey("captures.id", ondelete="CASCADE"))
     vector: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     model: Mapped[str] = mapped_column(String(128))
     status: Mapped[str] = mapped_column(String(16), default="pending")
@@ -240,9 +222,7 @@ class EmbeddingRecord(Base):
     processing_started_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    heartbeat_at: Mapped[dt.datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    heartbeat_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
@@ -251,23 +231,17 @@ class EmbeddingRecord(Base):
     )
     span_key: Mapped[str] = mapped_column(String(64))
 
-    capture: Mapped[CaptureRecord] = relationship(
-        "CaptureRecord", back_populates="embeddings"
-    )
+    capture: Mapped[CaptureRecord] = relationship("CaptureRecord", back_populates="embeddings")
 
 
 class SegmentRecord(Base):
     __tablename__ = "segments"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     started_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
-    ended_at: Mapped[dt.datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    ended_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     state: Mapped[str] = mapped_column(String(32), default="recording")
     video_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     encoder: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -293,14 +267,10 @@ class QueryHistoryRecord(Base):
 class ObservationRecord(Base):
     __tablename__ = "observations"
 
-    id: Mapped[str] = mapped_column(
-        String(36), primary_key=True, default=lambda: str(uuid4())
-    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     captured_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
     image_path: Mapped[str] = mapped_column(Text)
-    segment_id: Mapped[str | None] = mapped_column(
-        ForeignKey("segments.id", ondelete="SET NULL")
-    )
+    segment_id: Mapped[str | None] = mapped_column(ForeignKey("segments.id", ondelete="SET NULL"))
     cursor_x: Mapped[int] = mapped_column(Integer)
     cursor_y: Mapped[int] = mapped_column(Integer)
     monitor_id: Mapped[str] = mapped_column(String(64))

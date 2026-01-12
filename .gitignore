@@ -16,6 +16,8 @@ venv/
 # Build artifacts
 build/
 dist/
+dist-installer/
+vendor/
 
 # PyInstaller
 *.spec

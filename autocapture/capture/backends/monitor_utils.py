@@ -35,10 +35,7 @@ class MonitorInfo:
     height: int
 
     def contains(self, x: int, y: int) -> bool:
-        return (
-            self.left <= x < self.left + self.width
-            and self.top <= y < self.top + self.height
-        )
+        return self.left <= x < self.left + self.width and self.top <= y < self.top + self.height
 
 
 def enumerate_monitors() -> list[MonitorInfo]:

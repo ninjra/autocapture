@@ -43,9 +43,7 @@ class LLMProvider(ABC):
     """Base interface for answer generation."""
 
     @abstractmethod
-    async def generate_answer(
-        self, system_prompt: str, query: str, context_pack_text: str
-    ) -> str:
+    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
         """Generate an answer string for the provided prompt and context."""
 
 
@@ -62,9 +60,7 @@ def _is_retryable_http_error(exc: Exception) -> bool:
 class OllamaProvider(LLMProvider):
     """Use a local Ollama instance for answers."""
 
-    def __init__(
-        self, base_url: str, model: str, *, timeout_s: float, retries: int
-    ) -> None:
+    def __init__(self, base_url: str, model: str, *, timeout_s: float, retries: int) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._log = get_logger("llm.ollama")
@@ -72,9 +68,7 @@ class OllamaProvider(LLMProvider):
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
 
-    async def generate_answer(
-        self, system_prompt: str, query: str, context_pack_text: str
-    ) -> str:
+    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         try:
@@ -83,9 +77,7 @@ class OllamaProvider(LLMProvider):
             self._log.warning("Ollama OpenAI endpoint failed: {}", exc)
         return await self._generate_native(system_prompt, query, context_pack_text)
 
-    async def _generate_openai(
-        self, system: str, query: str, context_pack_text: str
-    ) -> str:
+    async def _generate_openai(self, system: str, query: str, context_pack_text: str) -> str:
         payload = {
             "model": self._model,
             "messages": [
@@ -101,9 +93,7 @@ class OllamaProvider(LLMProvider):
 
         async def _request() -> str:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    f"{self._base_url}/v1/chat/completions", json=payload
-                )
+                response = await client.post(f"{self._base_url}/v1/chat/completions", json=payload)
                 response.raise_for_status()
                 data = response.json()
             return data["choices"][0]["message"]["content"].strip()
@@ -120,9 +110,7 @@ class OllamaProvider(LLMProvider):
             self._breaker.record_failure(exc)
             raise
 
-    async def _generate_native(
-        self, system: str, query: str, context_pack_text: str
-    ) -> str:
+    async def _generate_native(self, system: str, query: str, context_pack_text: str) -> str:
         payload = {
             "model": self._model,
             "messages": [
@@ -159,9 +147,7 @@ class OllamaProvider(LLMProvider):
 class OpenAIProvider(LLMProvider):
     """OpenAI Responses API provider."""
 
-    def __init__(
-        self, api_key: str, model: str, *, timeout_s: float, retries: int
-    ) -> None:
+    def __init__(self, api_key: str, model: str, *, timeout_s: float, retries: int) -> None:
         self._api_key = api_key
         self._model = model
         self._log = get_logger("llm.openai")
@@ -169,9 +155,7 @@ class OpenAIProvider(LLMProvider):
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
 
-    async def generate_answer(
-        self, system_prompt: str, query: str, context_pack_text: str
-    ) -> str:
+    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         payload = {

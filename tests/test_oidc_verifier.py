@@ -48,9 +48,7 @@ def test_email_verified_required(monkeypatch: pytest.MonkeyPatch) -> None:
     claims = {
         "iss": "https://accounts.google.com",
         "aud": "client",
-        "exp": int(
-            (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)).timestamp()
-        ),
+        "exp": int((dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)).timestamp()),
         "email": "user@example.com",
         "email_verified": False,
     }
@@ -103,9 +101,7 @@ def test_kid_miss_triggers_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     claims = {
         "iss": "https://accounts.google.com",
         "aud": "client",
-        "exp": int(
-            (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)).timestamp()
-        ),
+        "exp": int((dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)).timestamp()),
         "email": "user@example.com",
         "email_verified": True,
     }

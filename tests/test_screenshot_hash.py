@@ -20,9 +20,7 @@ def test_screenshot_hash_deterministic_with_encryption(tmp_path: Path) -> None:
         staging_dir=tmp_path / "staging",
         data_dir=tmp_path / "data",
     )
-    encryption_config = EncryptionConfig(
-        enabled=True, key_provider=f"file:{tmp_path / 'key.bin'}"
-    )
+    encryption_config = EncryptionConfig(enabled=True, key_provider=f"file:{tmp_path / 'key.bin'}")
     manager = EncryptionManager(encryption_config)
     store = MediaStore(capture_config, encryption_config)
 

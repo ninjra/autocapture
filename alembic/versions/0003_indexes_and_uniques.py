@@ -24,9 +24,7 @@ def upgrade() -> None:
         ["status", "heartbeat_at"],
     )
     with op.batch_alter_table("ocr_spans") as batch:
-        batch.create_unique_constraint(
-            "uq_ocr_spans_capture_span_key", ["capture_id", "span_key"]
-        )
+        batch.create_unique_constraint("uq_ocr_spans_capture_span_key", ["capture_id", "span_key"])
     with op.batch_alter_table("embeddings") as batch:
         batch.create_unique_constraint(
             "uq_embeddings_capture_span_model",

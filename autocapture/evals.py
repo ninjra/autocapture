@@ -71,9 +71,7 @@ def run_eval(
 
     for item in items:
         query = item["query"]
-        evidence, events = _build_evidence(
-            retrieval, entities, query, limit=5, sanitized=True
-        )
+        evidence, events = _build_evidence(retrieval, entities, query, limit=5, sanitized=True)
         pack = build_context_pack(
             query=query,
             evidence=evidence,

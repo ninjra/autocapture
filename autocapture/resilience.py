@@ -31,9 +31,7 @@ class CircuitBreaker:
     OPEN = "open"
     HALF_OPEN = "half_open"
 
-    def __init__(
-        self, failure_threshold: int = 5, reset_timeout_s: float = 30.0
-    ) -> None:
+    def __init__(self, failure_threshold: int = 5, reset_timeout_s: float = 30.0) -> None:
         self._failure_threshold = failure_threshold
         self._reset_timeout_s = reset_timeout_s
         self._lock = threading.Lock()

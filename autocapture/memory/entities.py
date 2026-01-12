@@ -110,9 +110,7 @@ class EntityResolver:
         with self._db.session() as session:
             existing = session.execute(
                 select(EntityAliasRecord, EntityRecord)
-                .join(
-                    EntityRecord, EntityAliasRecord.entity_id == EntityRecord.entity_id
-                )
+                .join(EntityRecord, EntityAliasRecord.entity_id == EntityRecord.entity_id)
                 .where(EntityAliasRecord.alias_norm == alias_norm)
                 .where(EntityRecord.entity_type == entity_type)
             ).all()
@@ -121,9 +119,7 @@ class EntityResolver:
                 return EntityToken(record.canonical_token, record.entity_type)
             if len(existing) > 1:
                 token = stable_token(f"{entity_type}_ALIAS_", alias_norm, self._secret)
-                entity = self._insert_entity_with_token(
-                    session, entity_type, alias_text, token
-                )
+                entity = self._insert_entity_with_token(session, entity_type, alias_text, token)
                 session.add(
                     EntityAliasRecord(
                         entity_id=entity.entity_id,
@@ -133,9 +129,7 @@ class EntityResolver:
                         confidence=0.5,
                     )
                 )
-                return EntityToken(
-                    entity.canonical_token, entity_type, notes="ambiguous alias"
-                )
+                return EntityToken(entity.canonical_token, entity_type, notes="ambiguous alias")
             entity = self._insert_entity(session, entity_type, alias_norm, alias_text)
             session.add(
                 EntityAliasRecord(
@@ -166,21 +160,15 @@ class EntityResolver:
 
     def pseudonymize_text(self, text: str) -> str:
         redacted = EMAIL_RE.sub(
-            lambda match: stable_token(
-                "EMAIL_", match.group(0).casefold(), self._secret
-            ),
+            lambda match: stable_token("EMAIL_", match.group(0).casefold(), self._secret),
             text,
         )
         redacted = WINDOWS_PATH_RE.sub(
-            lambda match: stable_token(
-                "PATH_", match.group(0).casefold(), self._secret
-            ),
+            lambda match: stable_token("PATH_", match.group(0).casefold(), self._secret),
             redacted,
         )
         redacted = DOMAIN_RE.sub(
-            lambda match: stable_token(
-                "DOMAIN_", match.group(0).casefold(), self._secret
-            ),
+            lambda match: stable_token("DOMAIN_", match.group(0).casefold(), self._secret),
             redacted,
         )
         return redacted
@@ -215,9 +203,7 @@ class EntityResolver:
         alias_text: str,
     ) -> EntityRecord:
         base_token = stable_token(f"{entity_type}_", alias_norm, self._secret)
-        return self._insert_entity_with_token(
-            session, entity_type, alias_text, base_token
-        )
+        return self._insert_entity_with_token(session, entity_type, alias_text, base_token)
 
     def _insert_entity_with_token(
         self,
@@ -230,9 +216,7 @@ class EntityResolver:
         for attempt in range(5):
             token = base_token if attempt == 0 else f"{base_token}-{attempt}"
             existing = (
-                session.execute(
-                    select(EntityRecord).where(EntityRecord.canonical_token == token)
-                )
+                session.execute(select(EntityRecord).where(EntityRecord.canonical_token == token))
                 .scalars()
                 .first()
             )
@@ -276,9 +260,7 @@ def _collect_replacements(text: str, secret: bytes) -> list[tuple[int, int, str]
     ):
         for match in pattern.finditer(text):
             start, end = match.span()
-            if any(
-                start < occ_end and end > occ_start for occ_start, occ_end in occupied
-            ):
+            if any(start < occ_end and end > occ_start for occ_start, occ_end in occupied):
                 continue
             token = stable_token(prefix, match.group(0).casefold(), secret)
             replacements.append((start, end, token))

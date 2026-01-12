@@ -58,7 +58,10 @@ def test_promptops_github_pr_creation() -> None:
             excerpt="hello",
         )
     ]
-    eval_results = {"baseline": {"verifier_pass_rate": 0.5}, "proposed": {"verifier_pass_rate": 0.6}}
+    eval_results = {
+        "baseline": {"verifier_pass_rate": 0.5},
+        "proposed": {"verifier_pass_rate": 0.6},
+    }
 
     pr_url = _open_github_pr(
         "org/repo",

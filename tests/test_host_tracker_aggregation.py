@@ -16,14 +16,10 @@ def _payload(row):
 
 
 def test_aggregation_flush_and_session() -> None:
-    agg = HostEventAggregator(
-        flush_interval_ms=500, idle_grace_ms=300, track_mouse_movement=True
-    )
+    agg = HostEventAggregator(flush_interval_ms=500, idle_grace_ms=300, track_mouse_movement=True)
     ctx = ForegroundContext(process_name="demo.exe", window_title="Demo")
 
-    rows = agg.handle_event(
-        ForegroundChangeEvent(ts_ms=1000, new=ctx, old=None), now_ms=1000
-    )
+    rows = agg.handle_event(ForegroundChangeEvent(ts_ms=1000, new=ctx, old=None), now_ms=1000)
     assert rows and rows[0].kind == "foreground_change"
 
     rows = agg.handle_event(
@@ -80,9 +76,7 @@ def test_aggregation_flush_and_session() -> None:
 
 
 def test_payload_is_sanitized() -> None:
-    agg = HostEventAggregator(
-        flush_interval_ms=100, idle_grace_ms=50, track_mouse_movement=False
-    )
+    agg = HostEventAggregator(flush_interval_ms=100, idle_grace_ms=50, track_mouse_movement=False)
     rows = agg.handle_event(
         InputVectorEvent(ts_ms=1000, device="keyboard", mouse={"events": 2}),
         now_ms=1000,

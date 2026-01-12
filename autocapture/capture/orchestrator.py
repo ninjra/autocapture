@@ -199,16 +199,12 @@ class CaptureOrchestrator:
 
     def _run_capture_loop(self) -> None:  # pragma: no cover - depends on Windows APIs
         min_interval = self._capture_config.hid.min_interval_ms / 1000
-        interval = max(
-            1.0 / max(self._capture_config.hid.fps_soft_cap, 0.01), min_interval
-        )
+        interval = max(1.0 / max(self._capture_config.hid.fps_soft_cap, 0.01), min_interval)
         try:
             while self._running.is_set():
                 loop_start = time.monotonic()
                 now_ms = int(loop_start * 1000)
-                active = (
-                    now_ms < self._raw_input.active_until_ts
-                ) and not self._paused.is_set()
+                active = (now_ms < self._raw_input.active_until_ts) and not self._paused.is_set()
 
                 if active:
                     if not self._was_active:
@@ -261,9 +257,7 @@ class CaptureOrchestrator:
             return
         if monitor and monitor.id in frames:
             roi = self._crop_roi(frames[monitor.id], monitor, cursor_x, cursor_y)
-            duplicate = self._duplicate_detector.update(
-                Image.fromarray(np.ascontiguousarray(roi))
-            )
+            duplicate = self._duplicate_detector.update(Image.fromarray(np.ascontiguousarray(roi)))
             observation_id = str(uuid4())
             if not duplicate.is_duplicate:
                 roi_item = ROIItem(
@@ -280,9 +274,7 @@ class CaptureOrchestrator:
                 )
                 self._enqueue_roi(roi_item)
                 captures_taken_total.inc()
-        self._enqueue_video(
-            frames, foreground_process, foreground_window, is_fullscreen
-        )
+        self._enqueue_video(frames, foreground_process, foreground_window, is_fullscreen)
 
     def _enqueue_roi(self, item: ROIItem) -> None:
         if self._should_throttle_ocr():
@@ -354,17 +346,10 @@ class CaptureOrchestrator:
                 if len(self._video_drop_window) >= 10:
                     self._video_disabled_until = now + 10.0
                     self._video_drop_window.clear()
-                    self._log.warning(
-                        "Video capture disabled for cooldown due to backpressure"
-                    )
+                    self._log.warning("Video capture disabled for cooldown due to backpressure")
             else:
-                if (
-                    self._video_sampling_divisor > 1
-                    and now - self._video_last_drop > 5.0
-                ):
-                    self._video_sampling_divisor = max(
-                        1, self._video_sampling_divisor - 1
-                    )
+                if self._video_sampling_divisor > 1 and now - self._video_last_drop > 5.0:
+                    self._video_sampling_divisor = max(1, self._video_sampling_divisor - 1)
 
     def _run_roi_saver(self) -> None:
         while self._running.is_set() or not self._roi_queue.empty():
@@ -402,9 +387,7 @@ class CaptureOrchestrator:
             self._apply_backpressure("disk_low")
             return None
         if self._media_store:
-            return self._media_store.write_roi(
-                item.image, item.captured_at, item.observation_id
-            )
+            return self._media_store.write_roi(item.image, item.captured_at, item.observation_id)
         timestamp = item.captured_at.astimezone(dt.timezone.utc)
         path = (
             Path(self._capture_config.data_dir)
@@ -478,9 +461,7 @@ class CaptureOrchestrator:
         )
         output_path = None
         if self._media_store:
-            staging_path, final_path = self._media_store.reserve_video_paths(
-                started_at, segment_id
-            )
+            staging_path, final_path = self._media_store.reserve_video_paths(started_at, segment_id)
             output_path = staging_path
             self._segment_video_paths[segment_id] = final_path
         self._segment_recorder.start_segment(
@@ -507,14 +488,10 @@ class CaptureOrchestrator:
                     if segment.video_path and self._media_store:
                         final_path = self._media_store.finalize_video(
                             Path(segment.video_path),
-                            self._segment_video_paths.get(
-                                segment_id, Path(segment.video_path)
-                            ),
+                            self._segment_video_paths.get(segment_id, Path(segment.video_path)),
                         )
                     record.video_path = (
-                        str(final_path or segment.video_path)
-                        if segment.video_path
-                        else None
+                        str(final_path or segment.video_path) if segment.video_path else None
                     )
                     record.encoder = segment.encoder
                     record.frame_count = segment.frame_count
@@ -541,9 +518,7 @@ class CaptureOrchestrator:
                 return monitor
         return self._monitors[0] if self._monitors else None
 
-    def _crop_roi(
-        self, frame: np.ndarray, monitor: MonitorInfo, x: int, y: int
-    ) -> np.ndarray:
+    def _crop_roi(self, frame: np.ndarray, monitor: MonitorInfo, x: int, y: int) -> np.ndarray:
         local_x = x - monitor.left
         local_y = y - monitor.top
         half_w = self._roi_w // 2
@@ -576,8 +551,7 @@ class CaptureOrchestrator:
                     .select_from(CaptureRecord)
                     .where(
                         CaptureRecord.ocr_status.in_(["pending", "processing"]),
-                        CaptureRecord.ocr_attempts
-                        < self._worker_config.ocr_max_attempts,
+                        CaptureRecord.ocr_attempts < self._worker_config.ocr_max_attempts,
                     )
                 ).scalar_one()
                 lease_cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
@@ -588,9 +562,7 @@ class CaptureOrchestrator:
                     .select_from(CaptureRecord)
                     .where(
                         CaptureRecord.ocr_status == "processing",
-                        func.coalesce(
-                            CaptureRecord.ocr_heartbeat_at, CaptureRecord.ocr_started_at
-                        )
+                        func.coalesce(CaptureRecord.ocr_heartbeat_at, CaptureRecord.ocr_started_at)
                         < lease_cutoff,
                     )
                 ).scalar_one()
@@ -617,9 +589,7 @@ class CaptureOrchestrator:
     def _apply_backpressure(self, reason: str) -> None:
         self._backoff_s = min(2.0, self._backoff_s * 2 or 0.25)
         if self._backoff_s > 0:
-            self._log.debug(
-                "Backpressure ({}): sleeping for {:.2f}s", reason, self._backoff_s
-            )
+            self._log.debug("Backpressure ({}): sleeping for {:.2f}s", reason, self._backoff_s)
             time.sleep(self._backoff_s)
 
     def _has_disk_space(self) -> bool:
