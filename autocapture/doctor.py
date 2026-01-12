@@ -302,7 +302,7 @@ def _check_ocr(config: AppConfig) -> DoctorCheckResult:
         providers = _available_onnx_providers()
         processor = OCRProcessor(config.ocr)
         spans = processor.run(image)
-        text = " ".join(span[1] for span in spans if len(span) > 1)
+        text = " ".join(span[0] for span in spans if span)
         if not text.strip():
             return DoctorCheckResult("ocr", False, "Empty OCR output")
         detail = f"device={config.ocr.device}; providers={providers or 'none'}"
@@ -348,6 +348,13 @@ def _check_embeddings(config: AppConfig) -> DoctorCheckResult:
 def _check_vector_index(config: AppConfig) -> DoctorCheckResult:
     if not config.qdrant.enabled:
         return DoctorCheckResult("vector_index", True, "Disabled")
+    host, _port = _parse_qdrant_host(config.qdrant.url)
+    if host and is_loopback_host(host) and resolve_qdrant_path(config.qdrant):
+        return DoctorCheckResult(
+            "vector_index",
+            True,
+            "Qdrant configured for sidecar; will initialize when running.",
+        )
     try:
         from qdrant_client import QdrantClient  # type: ignore
 
