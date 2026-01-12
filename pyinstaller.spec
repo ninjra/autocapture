@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import Tree
+
 block_cipher = None
 
 a = Analysis(
@@ -9,8 +11,11 @@ a = Analysis(
     datas=[
         ("alembic.ini", "."),
         ("alembic", "alembic"),
+        ("autocapture.yml", "."),
         ("autocapture/prompts/derived/*.yaml", "autocapture/prompts/derived"),
         ("autocapture/ui/web", "autocapture/ui/web"),
+        Tree("vendor/ffmpeg", prefix="ffmpeg"),
+        Tree("vendor/qdrant", prefix="qdrant"),
     ],
     hiddenimports=[],
     hookspath=[],

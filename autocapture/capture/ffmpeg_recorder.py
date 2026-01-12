@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import queue
 import subprocess
 import threading
@@ -88,6 +89,7 @@ class SegmentRecorder:
         self._stop_event = threading.Event()
         self._stderr_thread: Optional[threading.Thread] = None
         self._stderr_lines: deque[str] = deque(maxlen=200)
+        self._ffmpeg_log_file: Optional[object] = None
         self._dropped_frames = 0
         self._last_drop_log = 0.0
         self._drop_window_s = 10.0
@@ -327,14 +329,23 @@ class SegmentRecorder:
             str(output_path),
         ]
         try:
+            log_dir = self._config.data_dir / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "ffmpeg.log"
+            self._ffmpeg_log_file = log_path.open("ab")
+            creationflags = 0
+            if os.name == "nt":
+                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             process = subprocess.Popen(
                 cmd,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
+                stdout=self._ffmpeg_log_file,
                 stderr=subprocess.PIPE,
+                creationflags=creationflags,
             )
         except OSError as exc:
             self._log.warning("Failed to launch ffmpeg: {}", exc)
+            self._close_ffmpeg_log_file()
             return None
 
         self._start_stderr_reader(process)
@@ -345,6 +356,7 @@ class SegmentRecorder:
                 self._log.warning("FFmpeg encoder unsupported: {}", encoder)
             else:
                 self._log.warning("FFmpeg failed to start: {}", stderr_text.strip())
+            self._close_ffmpeg_log_file()
             return None
 
         return process
@@ -376,6 +388,7 @@ class SegmentRecorder:
             return
         return_code = self._shutdown_process()
         self._stop_stderr_reader()
+        self._close_ffmpeg_log_file()
         if self._segment:
             self._segment.state = "completed" if return_code == 0 else "failed"
             if return_code != 0 and not self._segment.error:
@@ -397,6 +410,7 @@ class SegmentRecorder:
             self._process.kill()
         self._stop_event.set()
         self._stop_stderr_reader()
+        self._close_ffmpeg_log_file()
         self._process = None
 
     def _shutdown_process(self) -> int:
@@ -451,6 +465,11 @@ class SegmentRecorder:
                 line = process.stderr.readline()
                 if not line:
                     break
+                if self._ffmpeg_log_file:
+                    try:
+                        self._ffmpeg_log_file.write(line)
+                    except Exception:
+                        pass
                 self._stderr_lines.append(line.decode("utf-8", errors="ignore"))
 
         self._stderr_thread = threading.Thread(target=_drain, daemon=True)
@@ -463,3 +482,11 @@ class SegmentRecorder:
 
     def _drain_stderr_text(self) -> str:
         return "".join(self._stderr_lines)
+
+    def _close_ffmpeg_log_file(self) -> None:
+        if self._ffmpeg_log_file:
+            try:
+                self._ffmpeg_log_file.close()
+            except Exception:  # pragma: no cover - defensive
+                pass
+            self._ffmpeg_log_file = None

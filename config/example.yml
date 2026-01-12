@@ -73,8 +73,8 @@ capture:
   downscale_width: 256
   always_store_fullres: true
   thumbnail_width: 640
-  staging_dir: "D:/autocapture/staging"
-  data_dir: "D:/autocapture/data"
+  # staging_dir: "%LOCALAPPDATA%/Autocapture/staging"  # optional override
+  # data_dir: "%LOCALAPPDATA%/Autocapture/data"       # optional override
   encoder: "nvenc_webp"
   record_video: true
   layout_mode: "virtual_desktop"
@@ -112,7 +112,7 @@ reranker:
   model: "BAAI/bge-reranker-v2-m3"
   top_k: 100
 worker:
-  data_dir: "D:/autocapture/data"
+  # data_dir: "%LOCALAPPDATA%/Autocapture/data"       # optional override
   lease_ms: 60000
   ocr_lease_ms: 60000
   embedding_lease_ms: 60000
@@ -134,13 +134,14 @@ storage:
   prune_grace_days: 90
   prune_batch: 3000
 database:
-  url: "sqlite:///D:/autocapture/data/autocapture.db"
+  # url: "sqlite:///C:/Path/To/Autocapture/data/autocapture.db"  # optional override
   echo: false
   pool_size: 10
   max_overflow: 10
 qdrant:
   enabled: true
   url: "http://127.0.0.1:6333"
+  # binary_path: "C:/Path/To/qdrant.exe"  # optional override
   text_collection: "text_spans"
   image_collection: "image_tiles"
   text_vector_size: 768

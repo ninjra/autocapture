@@ -16,6 +16,7 @@ from . import claim_single_instance, ensure_expected_interpreter
 from .config import AppConfig, is_loopback_host, load_config, overlay_interface_ips
 from .logging_utils import configure_logging, get_logger
 from .doctor import run_doctor
+from .paths import default_config_path, ensure_config_path
 from .runtime import AppRuntime
 from .security.offline_guard import apply_offline_guard
 from .storage.database import DatabaseManager
@@ -26,8 +27,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(prog="autocapture")
     p.add_argument(
         "--config",
-        default=os.environ.get("AUTOCAPTURE_CONFIG", "autocapture.yml"),
-        help="Path to config YAML (default: autocapture.yml or AUTOCAPTURE_CONFIG).",
+        default=os.environ.get("AUTOCAPTURE_CONFIG", str(default_config_path())),
+        help=(
+            "Path to config YAML (default: AUTOCAPTURE_CONFIG or platform default)."
+        ),
     )
     p.add_argument(
         "--log-dir",
@@ -96,7 +99,7 @@ def main(argv: list[str] | None = None) -> None:
 
     ensure_expected_interpreter()
 
-    config_path = Path(args.config)
+    config_path = ensure_config_path(Path(args.config))
     config = load_config(config_path)
     configure_logging(args.log_dir or getattr(config, "logging", None))
     logger = get_logger("cli")

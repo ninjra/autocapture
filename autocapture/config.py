@@ -12,7 +12,14 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
+from .paths import default_data_dir, default_staging_dir
 from .settings_store import read_settings
+
+
+def _default_database_url() -> str:
+    path = (default_data_dir() / "autocapture.db").resolve()
+    return f"sqlite:///{path.as_posix()}"
+
 
 class HIDConfig(BaseModel):
     min_interval_ms: int = Field(
@@ -67,11 +74,11 @@ class CaptureConfig(BaseModel):
     always_store_fullres: bool = Field(True)
     thumbnail_width: int = Field(640, ge=64)
     staging_dir: Path = Field(
-        Path("./staging"),
+        default_factory=default_staging_dir,
         description="Local NVMe-backed directory for temporary assets.",
     )
     data_dir: Path = Field(
-        Path("./data"),
+        default_factory=default_data_dir,
         description="Base directory for media and recorder assets.",
     )
     encoder: str = Field(
@@ -166,7 +173,7 @@ class RerankerConfig(BaseModel):
 
 class WorkerConfig(BaseModel):
     data_dir: Path = Field(
-        Path("./data"),
+        default_factory=default_data_dir,
         description="Local directory for worker databases, indexes, and media.",
     )
     lease_ms: int = Field(60_000, ge=1000)
@@ -216,7 +223,7 @@ class StorageQuotaConfig(BaseModel):
 
 class DatabaseConfig(BaseModel):
     url: str = Field(
-        "sqlite:///./data/autocapture.db",
+        default_factory=lambda: _default_database_url(),
         description="SQLAlchemy URL for local metadata storage (SQLite by default).",
     )
     echo: bool = False
@@ -241,6 +248,9 @@ class DatabaseConfig(BaseModel):
 class QdrantConfig(BaseModel):
     enabled: bool = True
     url: str = Field("http://127.0.0.1:6333")
+    binary_path: Optional[Path] = Field(
+        None, description="Optional path to qdrant.exe for sidecar management."
+    )
     text_collection: str = Field("text_spans")
     image_collection: str = Field("image_tiles")
     text_vector_size: int = Field(768, ge=64)
@@ -438,6 +448,11 @@ class AppConfig(BaseModel):
         # If a user explicitly enables API-key auth, ensure a key is actually set.
         if self.api.require_api_key and not self.api.api_key:
             raise ValueError("api.api_key is required when api.require_api_key=true")
+
+        default_db = _default_database_url()
+        if self.database.url == default_db:
+            data_dir = Path(self.capture.data_dir).resolve()
+            self.database.url = f"sqlite:///{(data_dir / 'autocapture.db').as_posix()}"
 
         if self.mode.mode != "remote" and not is_loopback_host(self.api.bind_host):
             if not self.api.require_api_key:

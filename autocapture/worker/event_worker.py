@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import re
 import threading
 import time
@@ -15,7 +16,7 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
-from ..config import AppConfig
+from ..config import AppConfig, OCRConfig
 from ..image_utils import ensure_rgb, hash_rgb_image
 from ..indexing.lexical_index import LexicalIndex
 from ..logging_utils import get_logger
@@ -23,6 +24,29 @@ from ..media.store import MediaStore
 from ..observability.metrics import ocr_backlog, ocr_latency_ms, worker_errors_total
 from ..storage.database import DatabaseManager
 from ..storage.models import CaptureRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
+
+
+def _available_onnx_providers() -> list[str]:
+    import importlib.util
+
+    if importlib.util.find_spec("onnxruntime") is None:
+        return []
+    import onnxruntime as ort  # type: ignore
+
+    return list(ort.get_available_providers())
+
+
+def _build_rapidocr_kwargs(rapidocr_cls, use_cuda: bool) -> dict[str, object]:
+    try:
+        sig = inspect.signature(rapidocr_cls.__init__)
+    except (TypeError, ValueError):
+        return {}
+    supported = sig.parameters
+    kwargs: dict[str, object] = {}
+    for key in ("use_cuda", "det_use_cuda", "cls_use_cuda", "rec_use_cuda", "use_gpu"):
+        if key in supported:
+            kwargs[key] = use_cuda
+    return kwargs
 
 
 @dataclass(frozen=True)
@@ -37,10 +61,27 @@ class CapturePayload:
 
 
 class OCRProcessor:
-    def __init__(self) -> None:
+    def __init__(self, config: OCRConfig) -> None:
         from rapidocr_onnxruntime import RapidOCR
 
-        self._engine = RapidOCR()
+        self._config = config
+        self._log = get_logger("ocr")
+        providers = _available_onnx_providers()
+        self._log.info("ONNX Runtime providers available: {}", providers or "none")
+        use_cuda = config.device.lower() == "cuda"
+        if use_cuda and "CUDAExecutionProvider" not in providers:
+            self._log.warning(
+                "OCR device=cuda but CUDAExecutionProvider unavailable; falling back to CPU. "
+                "Install onnxruntime-gpu and CUDA/cuDNN."
+            )
+            use_cuda = False
+        selected = "CUDAExecutionProvider" if use_cuda else "CPUExecutionProvider"
+        self._log.info("OCR execution provider selected: {}", selected)
+
+        kwargs = _build_rapidocr_kwargs(RapidOCR, use_cuda)
+        if kwargs:
+            self._log.info("RapidOCR init kwargs: {}", kwargs)
+        self._engine = RapidOCR(**kwargs)
         self._warmup()
 
     def _warmup(self) -> None:
@@ -74,7 +115,7 @@ class EventIngestWorker:
         self._max_attempts = config.worker.ocr_max_attempts
         self._max_task_runtime_s = config.worker.max_task_runtime_s
         if ocr_processor is None:
-            self._ocr = OCRProcessor()
+            self._ocr = OCRProcessor(config.ocr)
         else:
             self._ocr = ocr_processor
 

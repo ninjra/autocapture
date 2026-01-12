@@ -1,12 +1,12 @@
 # Autocapture
 
-A local-first desktop recall app for Windows 11 that runs as a single binary: tray UI + local web dashboard + background worker.
+A local-first desktop recall app for Windows 11 that runs as a single binary: tray UI + local web dashboard + background worker. Docker is optional for advanced, remote deployments.
 
 ## Features
 
 - **Tray + local web UI** with a lightweight search popup and dashboard.
 - **Local capture + OCR** using DXCam (with MSS fallback) and on-device OCR.
-- **Embedded search** with Qdrant-backed vector indexes and fast embeddings (falls back to lexical-only retrieval if Qdrant is unavailable).
+- **Embedded search** with Qdrant-backed vector indexes and fast embeddings (falls back to lexical-only retrieval if Qdrant is unavailable). Windows release builds bundle a local Qdrant sidecar.
 - **Private by default** with local storage and optional cloud LLM fallback.
 
 ## Repository Layout
@@ -39,14 +39,24 @@ pyproject.toml        # Project dependencies and tooling configuration
    ```
    For the full Windows app (tray UI + capture + OCR + embeddings):
    ```powershell
-   poetry install --with dev --extras "ui windows ocr embed-fast"
-   # Optional extras: ocr-gpu, embed-st
+   poetry install --with dev --extras "ui windows ocr ocr-gpu embed-fast"
+   # Optional extras: embed-st
    ```
 3. Run Autocapture:
    ```powershell
    poetry run autocapture
    ```
-   On first run, Autocapture creates `%LOCALAPPDATA%/Autocapture/config.yml` and opens a folder picker to choose your data directory.
+   On first run, Autocapture writes a default config to `%LOCALAPPDATA%/Autocapture/autocapture.yml`
+   on Windows and stores data under `%LOCALAPPDATA%/Autocapture/data` unless overridden.
+
+### Windows release bundling
+
+Windows release builds bundle Qdrant + FFmpeg so local mode runs without Docker. Use the vendor
+bootstrap before packaging:
+
+```powershell
+python tools/vendor_windows_binaries.py
+```
 
 ### Development & Testing
 

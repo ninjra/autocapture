@@ -9,8 +9,8 @@ and observable.
 >
 > * Windows 11 workstation with administrator privileges, CUDA-capable GPU,
 >   and Python 3.12.
-> * TNAS appliance with Docker support and sufficient capacity for long-term storage.
-> * Basic familiarity with PowerShell on Windows and a POSIX shell on the NAS.
+> * Docker is **optional** and only needed for advanced remote/NAS hosting.
+> * Basic familiarity with PowerShell on Windows (and a POSIX shell if using a NAS).
 
 ---
 
@@ -25,26 +25,29 @@ and observable.
    ```
 2. **Install Autocapture (and optional dev tooling).**
    ```powershell
-   poetry install --with dev --extras "ui windows ocr embed-fast"
-   # Optional extras: ocr-gpu, embed-st
+   poetry install --with dev --extras "ui windows ocr ocr-gpu embed-fast"
+   # Optional extras: embed-st
    ```
    This pulls in the tray UI, capture stack, OCR, embeddings, and dev tooling.
    For minimal dev/test installs without the Windows app stack, use:
    ```powershell
    poetry install --with dev
    ```
+   If you want GPU OCR, keep `ocr.device=cuda` and ensure NVIDIA drivers, CUDA,
+   and the `ocr-gpu` extra (onnxruntime-gpu) are installed.
 3. **Duplicate and customize the configuration.**
    ```powershell
    Copy-Item config/example.yml autocapture.yml
    ```
    Open `autocapture.yml` in your editor and adjust the following:
-   * `capture.staging_dir` → fast local NVMe path that can absorb bursts before
-     the NAS sync kicks in (e.g., `D:/autocapture/staging`).
+   * `capture.staging_dir` / `capture.data_dir` → optional overrides (default to
+     `%LOCALAPPDATA%/Autocapture/*` on Windows).
    * `capture.hid.min_interval_ms` / `fps_soft_cap` → tune cadence.
    * `capture.hid.block_fullscreen` → leave `true` so fullscreen apps are
      ignored automatically.
    * `ocr`, `embed`, `database`, `qdrant`, `encryption`, and
      `observability` URLs → point at the services you intend to run (local or NAS).
+     Local mode auto-starts a bundled Qdrant sidecar when `qdrant.url` is localhost.
 4. **Create directories referenced in the config.** For example:
    ```powershell
    New-Item -ItemType Directory -Force -Path D:\autocapture\staging
@@ -79,7 +82,7 @@ and observable.
 
 ---
 
-## Step 2 – Prepare the TNAS for container hosting and storage
+## Step 2 – (Optional) Prepare the TNAS for container hosting and storage
 
 1. **Enable Docker on the NAS.** Install TerraMaster’s Docker Center (or enable
    the CLI via SSH) so you can run Compose stacks directly on the appliance.
@@ -98,7 +101,7 @@ and observable.
 
 ---
 
-## Step 3 – Run infrastructure containers on the TNAS
+## Step 3 – (Optional) Run infrastructure containers on the TNAS
 
 1. **Create an infrastructure workspace.** SSH into the NAS and create a
    directory (e.g., `/volume1/autocapture/infra`). Place the Compose file and
