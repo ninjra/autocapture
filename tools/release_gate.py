@@ -32,7 +32,7 @@ def _read_version(pyproject_path: Path) -> str:
     return str(version)
 
 
-def _write_doctor_config() -> Path:
+def _write_doctor_config(*, windows: bool) -> Path:
     content = """offline: true
 capture:
   record_video: false
@@ -54,6 +54,27 @@ encryption:
 database:
   url: "sqlite:///./data/autocapture.db"
 """
+    if windows:
+        content = """offline: true
+capture:
+  record_video: true
+  data_dir: "./data"
+tracking:
+  enabled: true
+ocr:
+  engine: "rapidocr-onnxruntime"
+  device: "cuda"
+embed:
+  text_model: "disabled"
+routing:
+  embedding: "disabled"
+qdrant:
+  enabled: true
+encryption:
+  enabled: false
+database:
+  url: "sqlite:///./data/autocapture.db"
+"""
     tmp = tempfile.NamedTemporaryFile("w", delete=False, suffix="-doctor.yml")
     tmp.write(content)
     tmp.flush()
@@ -69,7 +90,10 @@ def main() -> int:
     _poetry_run(["pytest", "-q"])
     doctor_config = Path("autocapture.yml")
     if sys.platform != "win32":
-        doctor_config = _write_doctor_config()
+        doctor_config = _write_doctor_config(windows=False)
+    else:
+        _poetry_run(["python", "tools/vendor_windows_binaries.py"])
+        doctor_config = _write_doctor_config(windows=True)
     _poetry_run(
         [
             "python",

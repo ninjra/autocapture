@@ -59,6 +59,12 @@ def ensure_config_path(config_path: Path) -> Path:
 def find_bundled_ffmpeg(config: FFmpegConfig) -> Path:
     root = resource_root()
     candidates = [root / candidate for candidate in config.relative_path_candidates]
+    candidates.extend(
+        [
+            root / "vendor" / "ffmpeg" / "bin" / "ffmpeg.exe",
+            root / "vendor" / "ffmpeg" / "ffmpeg.exe",
+        ]
+    )
 
     exe_path = Path(sys.executable)
     candidates.append(exe_path.parent / "ffmpeg" / "bin" / "ffmpeg.exe")
@@ -116,7 +122,10 @@ def resolve_ffmpeg_path(config: FFmpegConfig) -> Path | None:
 
 def find_bundled_qdrant(config: QdrantConfig) -> Path:
     root = resource_root()
-    candidates = [root / "qdrant" / "qdrant.exe"]
+    candidates = [
+        root / "qdrant" / "qdrant.exe",
+        root / "vendor" / "qdrant" / "qdrant.exe",
+    ]
     exe_path = Path(sys.executable)
     candidates.append(exe_path.parent / "qdrant" / "qdrant.exe")
 

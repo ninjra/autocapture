@@ -315,6 +315,7 @@ def _check_ocr(config: AppConfig) -> DoctorCheckResult:
 
 def _build_ocr_fixture():
     from PIL import Image, ImageDraw, ImageFont
+    import numpy as np
 
     image = Image.new("RGB", (200, 80), color="white")
     draw = ImageDraw.Draw(image)
@@ -328,7 +329,7 @@ def _build_ocr_fixture():
     text_h = bbox[3] - bbox[1]
     position = ((200 - text_w) // 2, (80 - text_h) // 2)
     draw.text(position, text, fill="black", font=font)
-    return image
+    return np.array(image)
 
 
 def _check_embeddings(config: AppConfig) -> DoctorCheckResult:
