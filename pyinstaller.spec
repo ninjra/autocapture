@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-from PyInstaller.utils.hooks import Tree
+from PyInstaller.building.datastruct import Tree
 
 block_cipher = None
 
