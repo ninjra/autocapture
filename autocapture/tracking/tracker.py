@@ -454,7 +454,7 @@ class HostVectorTracker:
             self._dropped += 1
 
     def _run_loop(self) -> None:
-        store = SqliteHostEventStore(Path(self._db_path))
+        store = SqliteHostEventStore(Path(self._db_path), config=self._config)
         store.init_schema()
         aggregator = HostEventAggregator(
             flush_interval_ms=self._config.flush_interval_ms,

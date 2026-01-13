@@ -64,6 +64,112 @@ class EventRecord(Base):
     )
 
 
+class AgentJobRecord(Base):
+    __tablename__ = "agent_jobs"
+
+    __table_args__ = (
+        UniqueConstraint("job_key", name="uq_agent_jobs_job_key"),
+        Index("ix_agent_jobs_status", "status"),
+        Index("ix_agent_jobs_scheduled_for", "scheduled_for"),
+        Index("ix_agent_jobs_type", "job_type"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    job_key: Mapped[str] = mapped_column(String(128))
+    job_type: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    event_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    day: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    scheduled_for: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    leased_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    leased_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    lease_expires_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class AgentResultRecord(Base):
+    __tablename__ = "agent_results"
+
+    __table_args__ = (
+        Index("ix_agent_results_type", "job_type"),
+        Index("ix_agent_results_event", "event_id"),
+        Index("ix_agent_results_day", "day"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    job_type: Mapped[str] = mapped_column(String(64))
+    event_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    day: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    schema_version: Mapped[str] = mapped_column(String(16))
+    output_json: Mapped[dict] = mapped_column(JSON)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class EventEnrichmentRecord(Base):
+    __tablename__ = "event_enrichments"
+
+    __table_args__ = (UniqueConstraint("event_id", name="uq_event_enrichments_event_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(36), index=True)
+    result_id: Mapped[str] = mapped_column(String(36))
+    schema_version: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class DailyHighlightsRecord(Base):
+    __tablename__ = "daily_highlights"
+
+    __table_args__ = (UniqueConstraint("day", name="uq_daily_highlights_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    day: Mapped[str] = mapped_column(String(10))
+    schema_version: Mapped[str] = mapped_column(String(16))
+    data_json: Mapped[dict] = mapped_column(JSON)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class TokenVaultRecord(Base):
+    __tablename__ = "token_vault"
+
+    token: Mapped[str] = mapped_column(String(64), primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(32))
+    value_ciphertext: Mapped[str] = mapped_column(Text)
+    value_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    last_seen: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
 class EntityRecord(Base):
     __tablename__ = "entities"
 

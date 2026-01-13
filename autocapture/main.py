@@ -71,6 +71,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     promptops_sub.add_parser("status", help="Show latest PromptOps run.")
     promptops_sub.add_parser("list", help="List recent PromptOps runs.")
 
+    db_cmd = sub.add_parser("db", help="Database utilities.")
+    db_sub = db_cmd.add_subparsers(dest="db_cmd", required=True)
+    db_sub.add_parser("encrypt", help="Encrypt the SQLite database with SQLCipher.")
+
     return p.parse_args(argv)
 
 
@@ -170,6 +174,14 @@ def main(argv: list[str] | None = None) -> None:
         )
         logger.info("Export complete: {}", out_path)
         return
+
+    if cmd == "db":
+        if args.db_cmd == "encrypt":
+            from .storage.sqlcipher_migrate import encrypt_sqlite_database
+
+            encrypt_sqlite_database(config.database)
+            logger.info("Database encryption complete.")
+            return
 
     if cmd == "api":
         from .api.server import create_app

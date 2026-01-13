@@ -18,6 +18,7 @@ from .logging_utils import get_logger
 from .memory.compression import extractive_answer
 from .memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
 from .memory.entities import EntityResolver, SecretStore
+from .security.token_vault import TokenVaultStore
 from .memory.prompts import PromptRegistry, PromptTemplate
 from .memory.retrieval import RetrievalService
 from .memory.router import ProviderRouter
@@ -52,7 +53,7 @@ def run_eval(
     db = DatabaseManager(config.database)
     retrieval = RetrievalService(db, config)
     secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
-    entities = EntityResolver(db, secret)
+    entities = EntityResolver(db, secret, token_vault=TokenVaultStore(config, db))
     verifier = RulesVerifier()
     prompts = _load_prompt_registry(overrides)
 

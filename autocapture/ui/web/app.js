@@ -205,6 +205,92 @@ saveSettings.addEventListener('click', async () => {
   alert('Settings saved locally.');
 });
 
+const highlightsDay = document.getElementById('highlightsDay');
+const highlightsContent = document.getElementById('highlightsContent');
+const refreshHighlights = document.getElementById('refreshHighlights');
+
+async function loadHighlightsList() {
+  highlightsDay.textContent = '';
+  let response;
+  try {
+    response = await apiFetch('/api/highlights');
+  } catch (err) {
+    return;
+  }
+  if (!response.ok) return;
+  const data = await response.json();
+  data.forEach((item) => {
+    const option = document.createElement('option');
+    option.value = item.day;
+    option.textContent = item.day;
+    highlightsDay.appendChild(option);
+  });
+  if (highlightsDay.options.length > 0) {
+    await loadHighlightsDetail(highlightsDay.value);
+  }
+}
+
+async function loadHighlightsDetail(day) {
+  highlightsContent.textContent = '';
+  if (!day) return;
+  let response;
+  try {
+    response = await apiFetch(`/api/highlights/${day}`);
+  } catch (err) {
+    highlightsContent.textContent = 'Failed to load highlights.';
+    return;
+  }
+  if (!response.ok) {
+    highlightsContent.textContent = 'Highlights not available.';
+    return;
+  }
+  const data = await response.json();
+  const payload = data.data || {};
+  const summary = document.createElement('p');
+  summary.textContent = payload.summary || '';
+  highlightsContent.appendChild(summary);
+
+  const list = document.createElement('ul');
+  (payload.highlights || []).forEach((item) => {
+    const li = document.createElement('li');
+    li.textContent = item;
+    li.addEventListener('click', async () => {
+      await apiFetch('/api/retrieve', {
+        method: 'POST',
+        body: JSON.stringify({ query: item, k: 5 })
+      });
+    });
+    list.appendChild(li);
+  });
+  highlightsContent.appendChild(list);
+
+  if (payload.open_loops && payload.open_loops.length) {
+    const openLoops = document.createElement('div');
+    openLoops.className = 'open-loops';
+    const title = document.createElement('h4');
+    title.textContent = 'Open loops';
+    openLoops.appendChild(title);
+    const openList = document.createElement('ul');
+    payload.open_loops.forEach((item) => {
+      const li = document.createElement('li');
+      li.textContent = item;
+      openList.appendChild(li);
+    });
+    openLoops.appendChild(openList);
+    highlightsContent.appendChild(openLoops);
+  }
+}
+
+refreshHighlights.addEventListener('click', async () => {
+  await loadHighlightsList();
+});
+
+highlightsDay.addEventListener('change', async () => {
+  await loadHighlightsDetail(highlightsDay.value);
+});
+
+loadHighlightsList();
+
 async function loadSettings() {
   try {
     const response = await apiFetch('/api/settings');

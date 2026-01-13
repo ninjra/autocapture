@@ -13,6 +13,7 @@
       <nav>
         <button data-tab="chat" class="active">Chat</button>
         <button data-tab="search">Search</button>
+        <button data-tab="highlights">Highlights</button>
         <button data-tab="settings">Settings</button>
       </nav>
     </header>
@@ -89,6 +90,18 @@
           </div>
           <button id="saveSettings">Save Settings</button>
           <p class="hint">Remote mode status: <span id="remoteStatus">local-only</span></p>
+        </div>
+      </section>
+      <section id="highlights" class="tab">
+        <div class="panel">
+          <h2>Nightly Highlights</h2>
+          <div class="highlights-controls">
+            <label>Day
+              <select id="highlightsDay"></select>
+            </label>
+            <button id="refreshHighlights">Refresh</button>
+          </div>
+          <div id="highlightsContent" class="highlights-content"></div>
         </div>
       </section>
     </main>

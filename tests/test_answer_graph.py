@@ -1,0 +1,107 @@
+from __future__ import annotations
+
+import asyncio
+import datetime as dt
+
+from autocapture.agents.answer_graph import AnswerGraph
+from autocapture.config import AppConfig, DatabaseConfig, ProviderRoutingConfig
+from autocapture.memory.entities import EntityResolver, SecretStore
+from autocapture.memory.retrieval import RetrievalService
+from autocapture.storage.database import DatabaseManager
+from autocapture.storage.models import EventRecord
+
+
+class _StubEmbedder:
+    model_name = "stub"
+    dim = 3
+
+    def embed_texts(self, texts):
+        return [[0.1, 0.2, 0.3] for _ in texts]
+
+
+class _StubVectorIndex:
+    def search(self, *_args, **_kwargs):
+        return []
+
+    def upsert_spans(self, *_args, **_kwargs):
+        return None
+
+
+class _StubPromptRegistry:
+    def get(self, _name):
+        return type("Prompt", (), {"system_prompt": "Answer with citations"})()
+
+
+class _StubProvider:
+    async def generate_answer(self, *_args, **_kwargs):
+        return "Answer [E1]"
+
+
+def _setup_graph() -> tuple[AnswerGraph, RetrievalService, DatabaseManager]:
+    config = AppConfig(database=DatabaseConfig(url="sqlite:///:memory:", sqlite_wal=False))
+    db = DatabaseManager(config.database)
+    now = dt.datetime.now(dt.timezone.utc)
+    with db.session() as session:
+        session.add(
+            EventRecord(
+                event_id="evt-graph",
+                ts_start=now,
+                ts_end=None,
+                app_name="Editor",
+                window_title="Notes",
+                url=None,
+                domain=None,
+                screenshot_path=None,
+                screenshot_hash="hash",
+                ocr_text="hello world",
+                tags={},
+            )
+        )
+    retrieval = RetrievalService(
+        db, config, embedder=_StubEmbedder(), vector_index=_StubVectorIndex()
+    )
+    secret = SecretStore(config.capture.data_dir).get_or_create()
+    entities = EntityResolver(db, secret)
+    graph = AnswerGraph(config, retrieval, prompt_registry=_StubPromptRegistry(), entities=entities)
+    return graph, retrieval, db
+
+
+def test_answer_graph_extractive_only(monkeypatch) -> None:
+    graph, _retrieval, _db = _setup_graph()
+    result = asyncio.run(
+        graph.run(
+            "hello",
+            time_range=None,
+            filters=None,
+            k=3,
+            sanitized=False,
+            extractive_only=True,
+            routing=ProviderRoutingConfig().model_dump(),
+            aggregates=None,
+        )
+    )
+    assert result.answer
+    assert result.citations
+
+
+def test_answer_graph_llm_path(monkeypatch) -> None:
+    graph, _retrieval, _db = _setup_graph()
+
+    def _select_llm(self):
+        return _StubProvider(), type("Decision", (), {"llm_provider": "stub"})()
+
+    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _select_llm)
+    result = asyncio.run(
+        graph.run(
+            "hello",
+            time_range=None,
+            filters=None,
+            k=3,
+            sanitized=False,
+            extractive_only=False,
+            routing=ProviderRoutingConfig().model_dump(),
+            aggregates=None,
+        )
+    )
+    assert result.answer
+    assert "E1" in result.citations

@@ -3,6 +3,7 @@
 ## Phase 1 (Local mode)
 - API binds to `127.0.0.1` by default.
 - If you bind the API to a non-loopback address, an API key is required (fail closed).
+- HTTPS is required when binding to non-loopback hosts.
 - Cloud calls are disabled unless `privacy.cloud_enabled` is set.
 - Screenshots are pruned after `retention.screenshot_ttl_days`.
 - The bundled dashboard enforces a strict Content Security Policy and renders API output as plain text.
@@ -21,3 +22,18 @@
 - On Windows, DPAPI is used when available.
 - On POSIX systems, secret files are tightened to `0600` permissions (best effort).
 - Avoid logging sensitive data.
+
+## Database encryption at rest
+- SQLite can be encrypted with SQLCipher by enabling `database.encryption_enabled`.
+- SQLCipher keys can be stored via DPAPI-protected files (`dpapi_file`), plain files, or env vars.
+- Use `autocapture db encrypt` to migrate a plaintext SQLite DB to encrypted form safely.
+- Host tracking DB supports optional SQLCipher encryption via `tracking.encryption_enabled`.
+
+## Encryption in motion
+- Postgres URLs must include `sslmode=require`/`verify-*` when `database.require_tls_for_remote=true`.
+- Qdrant URLs must be HTTPS when `qdrant.require_tls_for_remote=true`.
+
+## Token vault (reversible pseudonyms)
+- When `privacy.token_vault_enabled=true`, sensitive tokens map to encrypted originals in `token_vault`.
+- Decrypting tokens requires local authorization (`privacy.allow_token_vault_decrypt=true`) and API key when remote.
+- Token vault plaintext is never sent to cloud LLMs.

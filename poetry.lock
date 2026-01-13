@@ -2737,6 +2737,18 @@ files = [
 shiboken6 = "6.10.1"
 
 [[package]]
+name = "pysqlcipher3"
+version = "1.2.0"
+description = "DB-API 2.0 interface for SQLCIPHER 3.x"
+optional = true
+python-versions = ">=3.3"
+groups = ["main"]
+markers = "extra == \"sqlcipher\""
+files = [
+    {file = "pysqlcipher3-1.2.0.tar.gz", hash = "sha256:3c8033812655947ebf29a809ac5106b2bc69be0274eaccef6b58f4580c8d06c5"},
+]
+
+[[package]]
 name = "pystemmer"
 version = "2.2.0.3"
 description = "Snowball stemming algorithms, for information retrieval"
@@ -4352,10 +4364,11 @@ embed-fast = ["fastembed"]
 embed-st = ["sentence-transformers"]
 ocr = ["rapidocr-onnxruntime"]
 ocr-gpu = ["onnxruntime-gpu"]
+sqlcipher = ["pysqlcipher3"]
 ui = ["pyside6"]
 windows = ["dxcam"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12,<3.13"
-content-hash = "6aeabe7f7d33416ddae111396b5489b47007dd86ea19078da8f89431ecd6b9a0"
+content-hash = "03c0421456397da2013a160e52aefdaae8f67ad83a59798774b9fa01fbcd255b"

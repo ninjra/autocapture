@@ -125,6 +125,12 @@ class CaptureConfig(BaseModel):
         ge=0,
         description="Minimum free space (MB) required in data_dir. Set to 0 to disable.",
     )
+    vision_sample_rate: float = Field(
+        0.0,
+        ge=0.0,
+        le=1.0,
+        description="Sample rate for vision-caption jobs (0 disables).",
+    )
 
 
 class TrackingConfig(BaseModel):
@@ -141,6 +147,18 @@ class TrackingConfig(BaseModel):
     mouse_move_sample_ms: int = Field(50, ge=10)
     enable_clipboard: bool = False
     retention_days: int | None = None
+    encryption_enabled: bool = Field(
+        False, description="Enable SQLCipher encryption for host events DB."
+    )
+    encryption_key_provider: str = Field(
+        "dpapi_file",
+        description="dpapi_file|file|env (for host events DB).",
+    )
+    encryption_key_path: Path = Field(
+        Path("./secrets/host_events.key"),
+        description="Path to store encryption key for host events DB.",
+    )
+    encryption_env_var: str = Field("AUTOCAPTURE_HOST_EVENTS_KEY")
 
 
 class OCRConfig(BaseModel):
@@ -197,6 +215,11 @@ class WorkerConfig(BaseModel):
         ge=1,
         description="Number of embedding/indexing workers.",
     )
+    agent_workers: int = Field(
+        1,
+        ge=0,
+        description="Number of agent job workers.",
+    )
     embedding_max_attempts: int = Field(5, ge=1)
     watchdog_interval_s: float = Field(
         5.0, gt=0.0, description="Worker watchdog polling interval (seconds)."
@@ -235,6 +258,29 @@ class DatabaseConfig(BaseModel):
     sqlite_busy_timeout_ms: int = Field(5000, ge=0)
     sqlite_wal: bool = True
     sqlite_synchronous: str = Field("NORMAL")
+    encryption_enabled: bool = Field(
+        False, description="Enable SQLCipher encryption for SQLite databases."
+    )
+    encryption_provider: str = Field(
+        "dpapi_file",
+        description="dpapi_file|file|env (key storage for SQLCipher).",
+    )
+    encryption_key_name: str = Field(
+        "autocapture/sqlcipher-key",
+        description="Key name for DPAPI-backed storage.",
+    )
+    encryption_key_path: Path = Field(
+        Path("./secrets/sqlcipher.key"),
+        description="Path for SQLCipher key (file provider).",
+    )
+    encryption_env_var: str = Field(
+        "AUTOCAPTURE_SQLCIPHER_KEY",
+        description="Environment variable for SQLCipher key hex.",
+    )
+    require_tls_for_remote: bool = Field(
+        True,
+        description="Require TLS for remote Postgres connections.",
+    )
 
     @field_validator("sqlite_synchronous")
     @classmethod
@@ -260,6 +306,10 @@ class QdrantConfig(BaseModel):
     hnsw_ef_construct: int = Field(128, ge=1)
     hnsw_m: int = Field(16, ge=1)
     search_ef: int = Field(64, ge=1)
+    require_tls_for_remote: bool = Field(
+        True,
+        description="Require HTTPS for remote Qdrant connections.",
+    )
 
     collection_name: Optional[str] = Field(
         None, description="Legacy alias for text_collection (deprecated)."
@@ -357,6 +407,16 @@ class PrivacyConfig(BaseModel):
     cloud_enabled: bool = Field(False)
     sanitize_default: bool = Field(True)
     extractive_only_default: bool = Field(True)
+    token_vault_enabled: bool = Field(
+        False, description="Store reversible tokens in the encrypted token vault."
+    )
+    allow_token_vault_decrypt: bool = Field(
+        False, description="Allow decrypting token vault values via API."
+    )
+    allow_cloud_images: bool = Field(
+        False,
+        description="Allow sending images to cloud vision endpoints.",
+    )
     paused: bool = Field(False)
     snooze_until_utc: dt.datetime | None = None
     exclude_monitors: list[str] = Field(default_factory=list)
@@ -392,13 +452,43 @@ class PromptOpsConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    provider: str = Field("ollama", description="ollama or openai")
+    provider: str = Field("ollama", description="ollama|openai|openai_compatible")
     ollama_url: str = Field("http://127.0.0.1:11434")
     ollama_model: str = Field("llama3")
     openai_api_key: Optional[str] = Field(None, description="OpenAI API key")
     openai_model: str = Field("gpt-4.1-mini")
+    openai_compatible_base_url: Optional[str] = Field(
+        None, description="OpenAI-compatible base URL (llama.cpp/Open WebUI/etc)."
+    )
+    openai_compatible_api_key: Optional[str] = Field(
+        None, description="Optional API key for OpenAI-compatible server."
+    )
+    openai_compatible_model: str = Field("llama3")
     timeout_s: float = Field(60.0, gt=0.0)
     retries: int = Field(3, ge=0, le=10)
+
+
+class AgentAnswerConfig(BaseModel):
+    enabled: bool = Field(True)
+
+
+class AgentVisionConfig(BaseModel):
+    provider: str = Field("ollama", description="ollama|openai_compatible")
+    model: str = Field("llava")
+    base_url: Optional[str] = Field(None)
+    api_key: Optional[str] = Field(None)
+    max_jobs_per_hour: int = Field(20, ge=0)
+    run_only_when_idle: bool = Field(True)
+    idle_hours_start: int = Field(22, ge=0, le=23)
+    idle_hours_end: int = Field(6, ge=0, le=23)
+
+
+class AgentConfig(BaseModel):
+    enabled: bool = Field(True)
+    max_pending_jobs: int = Field(5000, ge=10)
+    nightly_cron: str = Field("0 3 * * *")
+    answer_agent: AgentAnswerConfig = AgentAnswerConfig()
+    vision: AgentVisionConfig = AgentVisionConfig()
 
 
 class AppConfig(BaseModel):
@@ -427,6 +517,7 @@ class AppConfig(BaseModel):
     security: SecurityConfig = SecurityConfig()
     presets: PresetConfig = PresetConfig()
     promptops: PromptOpsConfig = PromptOpsConfig()
+    agents: AgentConfig = AgentConfig()
 
     @field_validator("capture")
     @classmethod
@@ -473,6 +564,12 @@ class AppConfig(BaseModel):
                 )
             if not self.api.api_key:
                 raise ValueError("api.api_key is required when binding to non-loopback host")
+            if not self.mode.https_enabled:
+                raise ValueError(
+                    "mode.https_enabled must be true when binding to non-loopback host"
+                )
+        _validate_database_tls(self.database)
+        _validate_qdrant_tls(self.qdrant)
         return self
 
 
@@ -490,6 +587,39 @@ def is_loopback_host(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except Exception:
         return False
+
+
+def _validate_database_tls(config: DatabaseConfig) -> None:
+    from urllib.parse import parse_qs, urlparse
+
+    if not config.url.startswith("postgres"):
+        return
+    if not config.require_tls_for_remote:
+        return
+    parsed = urlparse(config.url)
+    host = parsed.hostname
+    if not host or is_loopback_host(host):
+        return
+    sslmode = (parse_qs(parsed.query).get("sslmode") or [""])[0]
+    if sslmode not in {"require", "verify-ca", "verify-full"}:
+        raise ValueError(
+            "database.require_tls_for_remote=true but postgres sslmode is not set "
+            "to require/verify-ca/verify-full. Add ?sslmode=require to database.url."
+        )
+
+
+def _validate_qdrant_tls(config: QdrantConfig) -> None:
+    from urllib.parse import urlparse
+
+    if not config.require_tls_for_remote:
+        return
+    parsed = urlparse(config.url)
+    if not parsed.hostname or is_loopback_host(parsed.hostname):
+        return
+    if parsed.scheme != "https":
+        raise ValueError(
+            "qdrant.require_tls_for_remote=true but qdrant.url is not https for remote host."
+        )
 
 
 def overlay_interface_ips(interface: str) -> list[str]:

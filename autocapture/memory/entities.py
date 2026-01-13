@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from ..logging_utils import get_logger
 from ..storage.database import DatabaseManager
+from ..security.token_vault import TokenVaultStore
 from ..storage.models import EntityAliasRecord, EntityRecord, EventRecord
 
 EMAIL_RE = re.compile(r"\b[\w\.-]+@[\w\.-]+\.\w+\b")
@@ -94,10 +95,17 @@ def stable_token(prefix: str, value: str, secret: bytes, length: int = 20) -> st
 
 
 class EntityResolver:
-    def __init__(self, db: DatabaseManager, secret: bytes) -> None:
+    def __init__(
+        self,
+        db: DatabaseManager,
+        secret: bytes,
+        *,
+        token_vault: TokenVaultStore | None = None,
+    ) -> None:
         self._db = db
         self._secret = secret
         self._log = get_logger("privacy.entities")
+        self._token_vault = token_vault
 
     def resolve_alias(
         self,
@@ -159,16 +167,22 @@ class EntityResolver:
         return tokens
 
     def pseudonymize_text(self, text: str) -> str:
+        def _replace(prefix: str, value: str, entity_type: str) -> str:
+            token = stable_token(prefix, value.casefold(), self._secret)
+            if self._token_vault:
+                self._token_vault.record_token(token, entity_type, value)
+            return token
+
         redacted = EMAIL_RE.sub(
-            lambda match: stable_token("EMAIL_", match.group(0).casefold(), self._secret),
+            lambda match: _replace("EMAIL_", match.group(0), "EMAIL"),
             text,
         )
         redacted = WINDOWS_PATH_RE.sub(
-            lambda match: stable_token("PATH_", match.group(0).casefold(), self._secret),
+            lambda match: _replace("PATH_", match.group(0), "PATH"),
             redacted,
         )
         redacted = DOMAIN_RE.sub(
-            lambda match: stable_token("DOMAIN_", match.group(0).casefold(), self._secret),
+            lambda match: _replace("DOMAIN_", match.group(0), "DOMAIN"),
             redacted,
         )
         return redacted
@@ -176,7 +190,7 @@ class EntityResolver:
     def pseudonymize_text_with_mapping(
         self, text: str
     ) -> tuple[str, list[tuple[int, int, int, int]]]:
-        replacements = _collect_replacements(text, self._secret)
+        replacements = _collect_replacements(text, self._secret, self._token_vault)
         if not replacements:
             return text, []
         parts: list[str] = []
@@ -250,7 +264,9 @@ class EntityResolver:
         return entity
 
 
-def _collect_replacements(text: str, secret: bytes) -> list[tuple[int, int, str]]:
+def _collect_replacements(
+    text: str, secret: bytes, token_vault: TokenVaultStore | None
+) -> list[tuple[int, int, str]]:
     replacements: list[tuple[int, int, str]] = []
     occupied: list[tuple[int, int]] = []
     for pattern, prefix in (
@@ -262,7 +278,13 @@ def _collect_replacements(text: str, secret: bytes) -> list[tuple[int, int, str]
             start, end = match.span()
             if any(start < occ_end and end > occ_start for occ_start, occ_end in occupied):
                 continue
-            token = stable_token(prefix, match.group(0).casefold(), secret)
+            value = match.group(0)
+            token = stable_token(prefix, value.casefold(), secret)
+            if token_vault:
+                entity_type = (
+                    "EMAIL" if prefix == "EMAIL_" else "PATH" if prefix == "PATH_" else "DOMAIN"
+                )
+                token_vault.record_token(token, entity_type, value)
             replacements.append((start, end, token))
             occupied.append((start, end))
     replacements.sort(key=lambda item: item[0])

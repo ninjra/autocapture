@@ -210,6 +210,66 @@ class OpenAIProvider(LLMProvider):
         return extract_response_text(data)
 
 
+class OpenAICompatibleProvider(LLMProvider):
+    """OpenAI-compatible chat/completions provider (llama.cpp, Open WebUI)."""
+
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        *,
+        api_key: str | None,
+        timeout_s: float,
+        retries: int,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+        self._api_key = api_key
+        self._log = get_logger("llm.openai_compatible")
+        self._timeout = timeout_s
+        self._retry_policy = RetryPolicy(max_retries=retries)
+        self._breaker = CircuitBreaker()
+
+    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
+        if not self._breaker.allow():
+            raise RuntimeError("LLM circuit open")
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query},
+                {"role": "user", "content": _format_evidence_message(context_pack_text)},
+            ],
+            "temperature": 0.2,
+        }
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        async def _request() -> dict:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
+                response = await client.post(
+                    f"{self._base_url}/v1/chat/completions",
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+                return response.json()
+
+        try:
+            data = await retry_async(
+                _request,
+                policy=self._retry_policy,
+                is_retryable=_is_retryable_http_error,
+            )
+            self._breaker.record_success()
+        except Exception as exc:
+            self._breaker.record_failure(exc)
+            self._log.warning("OpenAI-compatible request failed: {}", exc)
+            raise
+        return data["choices"][0]["message"]["content"].strip()
+
+
 def build_prompt(query: str, context: Sequence[ContextChunk]) -> tuple[str, str]:
     system_prompt = (
         "You are an assistant answering questions about a personal activity archive. "

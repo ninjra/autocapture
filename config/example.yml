@@ -31,6 +31,9 @@ privacy:
   cloud_enabled: false
   sanitize_default: true
   extractive_only_default: true
+  token_vault_enabled: false
+  allow_token_vault_decrypt: false
+  allow_cloud_images: false
   paused: false
   snooze_until_utc: null
   exclude_monitors: []
@@ -68,6 +71,9 @@ llm:
   ollama_model: "llama3"
   openai_api_key: null
   openai_model: "gpt-4.1-mini"
+  openai_compatible_base_url: null
+  openai_compatible_api_key: null
+  openai_compatible_model: "llama3"
   timeout_s: 60.0
   retries: 3
 promptops:
@@ -101,6 +107,7 @@ capture:
   video_bitrate: "8M"
   video_preset: "p4"
   max_pending: 8000
+  vision_sample_rate: 0.0
 tracking:
   enabled: true
   db_path: "db/host_events.sqlite"
@@ -112,6 +119,10 @@ tracking:
   mouse_move_sample_ms: 50
   enable_clipboard: false
   retention_days: null
+  encryption_enabled: false
+  encryption_key_provider: "dpapi_file"
+  encryption_key_path: "secrets/host_events.key"
+  encryption_env_var: "AUTOCAPTURE_HOST_EVENTS_KEY"
 ocr:
   queue_maxsize: 4000
   batch_size: 32
@@ -141,6 +152,7 @@ worker:
   ocr_max_attempts: 5
   ocr_workers: 4
   embed_workers: 1
+  agent_workers: 1
   embedding_max_attempts: 5
   watchdog_interval_s: 5.0
   max_task_runtime_s: 900.0
@@ -158,6 +170,12 @@ database:
   echo: false
   pool_size: 10
   max_overflow: 10
+  encryption_enabled: false
+  encryption_provider: "dpapi_file"
+  encryption_key_name: "autocapture/sqlcipher-key"
+  encryption_key_path: "secrets/sqlcipher.key"
+  encryption_env_var: "AUTOCAPTURE_SQLCIPHER_KEY"
+  require_tls_for_remote: true
 qdrant:
   enabled: true
   url: "http://127.0.0.1:6333"
@@ -170,6 +188,7 @@ qdrant:
   hnsw_ef_construct: 128
   hnsw_m: 16
   search_ef: 64
+  require_tls_for_remote: true
 ffmpeg:
   enabled: true
   require_bundled: true
@@ -186,6 +205,21 @@ promptops:
   github_token: null
   github_repo: null
   acceptance_tolerance: 0.02
+agents:
+  enabled: true
+  max_pending_jobs: 5000
+  nightly_cron: "0 3 * * *"
+  answer_agent:
+    enabled: true
+  vision:
+    provider: "ollama"
+    model: "llava"
+    base_url: null
+    api_key: null
+    max_jobs_per_hour: 20
+    run_only_when_idle: true
+    idle_hours_start: 22
+    idle_hours_end: 6
 encryption:
   enabled: true
   key_provider: "windows-credential-manager"

@@ -16,6 +16,8 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
+from ..agents import AGENT_JOB_ENRICH_EVENT
+from ..agents.jobs import AgentJobQueue
 from ..config import AppConfig, OCRConfig
 from ..image_utils import ensure_rgb, hash_rgb_image
 from ..indexing.lexical_index import LexicalIndex
@@ -111,6 +113,7 @@ class EventIngestWorker:
         self._log = get_logger("worker.event_ingest")
         self._lexical = LexicalIndex(self._db)
         self._media_store = MediaStore(config.capture, config.encryption)
+        self._agent_jobs = AgentJobQueue(self._db)
         self._lease_timeout_s = config.worker.ocr_lease_ms / 1000
         self._max_attempts = config.worker.ocr_max_attempts
         self._max_task_runtime_s = config.worker.max_task_runtime_s
@@ -222,6 +225,7 @@ class EventIngestWorker:
                 event_existing=True,
             )
             self._lexical.upsert_event(existing_event)
+            self._enqueue_enrichment(existing_event.event_id)
             return True
 
         if not capture.image_path:
@@ -254,6 +258,7 @@ class EventIngestWorker:
             event = self._load_event(capture_id)
             if event:
                 self._lexical.upsert_event(event)
+                self._enqueue_enrichment(event.event_id)
         except FileNotFoundError:
             self._mark_failed(capture_id, "missing_media")
             return False
@@ -264,6 +269,19 @@ class EventIngestWorker:
             stop_event.set()
             heartbeat_thread.join(timeout=1.0)
         return True
+
+    def _enqueue_enrichment(self, event_id: str) -> None:
+        if not self._config.agents.enabled:
+            return
+        job_key = f"enrich:{event_id}:v1"
+        self._agent_jobs.enqueue(
+            job_key=job_key,
+            job_type=AGENT_JOB_ENRICH_EVENT,
+            event_id=event_id,
+            payload={"event_id": event_id},
+            max_attempts=3,
+            max_pending=self._config.agents.max_pending_jobs,
+        )
 
     def _load_capture(self, capture_id: str) -> CapturePayload | None:
         with self._db.session() as session:
