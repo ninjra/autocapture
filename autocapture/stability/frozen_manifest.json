@@ -6,14 +6,14 @@
       "sha256": "9be13a6356b635ce91f3d8d7e0e3daf9a45e442e68967b83c6663624fb7a60b4"
     },
     "autocapture/tracking/store.py": {
-      "frozen_at_utc": "2026-01-12T16:55:29Z",
-      "reason": "black formatting",
-      "sha256": "cecf6c0f00d06a6e8f4c3af22ae7c36138219cadfc032a838ec75650ca820d2a"
+      "frozen_at_utc": "2026-01-13T04:48:23Z",
+      "reason": "Add SQLCipher encryption support for tracking DB",
+      "sha256": "6656df04e58341284e906cc6be6fefe3ef719b53849f4eeceb4990059de2912c"
     },
     "autocapture/tracking/tracker.py": {
-      "frozen_at_utc": "2026-01-12T16:55:29Z",
-      "reason": "black formatting",
-      "sha256": "4fa433a9c0a4b9ff1af7c72964a97b33827f589ccf8f8d2f339a60f1c2ea1342"
+      "frozen_at_utc": "2026-01-13T04:48:23Z",
+      "reason": "Add SQLCipher encryption support for tracking DB",
+      "sha256": "8c4a2be2a70cb2fbdbb0b36e58cc9f58b2e7c724ec0054f40b8143234b658dc1"
     },
     "autocapture/tracking/types.py": {
       "frozen_at_utc": "2026-01-09T23:21:57Z",

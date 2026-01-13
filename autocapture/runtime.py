@@ -12,6 +12,8 @@ import datetime as dt
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from .agents import AGENT_JOB_DAILY_HIGHLIGHTS, AGENT_JOB_VISION_CAPTION
+from .agents.jobs import AgentJobQueue
 from .capture.orchestrator import CaptureOrchestrator
 from .capture.raw_input import RawInputListener
 from .capture.backends.monitor_utils import set_process_dpi_awareness
@@ -97,6 +99,52 @@ class PromptOpsScheduler:
             self._lock.release()
 
 
+class HighlightsScheduler:
+    def __init__(self, queue: AgentJobQueue, cron: str, max_pending: int) -> None:
+        self._queue = queue
+        self._cron = cron
+        self._max_pending = max_pending
+        self._scheduler = BackgroundScheduler(timezone="UTC")
+        self._lock = threading.Lock()
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            return
+        trigger = CronTrigger.from_crontab(self._cron)
+        self._scheduler.add_job(
+            self._enqueue_job,
+            trigger=trigger,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+        self._scheduler.start()
+        self._started = True
+
+    def stop(self) -> None:
+        if not self._started:
+            return
+        self._scheduler.shutdown(wait=False)
+        self._started = False
+
+    def _enqueue_job(self) -> None:
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
+            day = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)).date().isoformat()
+            job_key = f"highlights:{day}:v1"
+            self._queue.enqueue(
+                job_key=job_key,
+                job_type=AGENT_JOB_DAILY_HIGHLIGHTS,
+                day=day,
+                payload={"day": day},
+                max_pending=self._max_pending,
+            )
+        finally:
+            self._lock.release()
+
+
 class AppRuntime:
     """Start/stop the entire Autocapture pipeline in one process."""
 
@@ -108,6 +156,7 @@ class AppRuntime:
         self._running = False
 
         self._db = DatabaseManager(config.database)
+        self._agent_jobs = AgentJobQueue(self._db)
         self._retrieval_embedder = EmbeddingService(config.embed)
         self._vector_index = VectorIndex(config, self._retrieval_embedder.dim)
         self._tracker = (
@@ -133,7 +182,7 @@ class AppRuntime:
             worker_config=config.worker,
             privacy_config=config.privacy,
             on_ocr_observation=self._on_ocr_observation,
-            on_vision_observation=None,
+            on_vision_observation=self._on_vision_observation,
             vision_sample_rate=getattr(config.capture, "vision_sample_rate", 0.0),
             raw_input=self._raw_input,
             ocr_backlog_check_s=1.0,
@@ -160,10 +209,15 @@ class AppRuntime:
         self._snooze_timer: threading.Timer | None = None
         self._promptops_runner: PromptOpsRunner | None = None
         self._promptops_scheduler: PromptOpsScheduler | None = None
+        self._highlights_scheduler: HighlightsScheduler | None = None
         if config.promptops.enabled:
             self._promptops_runner = PromptOpsRunner(config, self._db)
             self._promptops_scheduler = PromptOpsScheduler(
                 self._promptops_runner, config.promptops.schedule_cron
+            )
+        if config.agents.enabled:
+            self._highlights_scheduler = HighlightsScheduler(
+                self._agent_jobs, config.agents.nightly_cron, config.agents.max_pending_jobs
             )
 
     def start(self) -> None:
@@ -182,6 +236,8 @@ class AppRuntime:
         self._metrics.start()
         if self._promptops_scheduler:
             self._promptops_scheduler.start()
+        if self._highlights_scheduler:
+            self._highlights_scheduler.start()
         self._apply_startup_pause()
         self._log.info("Runtime started")
 
@@ -209,6 +265,8 @@ class AppRuntime:
             self._retention_scheduler.stop()
             if self._promptops_scheduler:
                 self._promptops_scheduler.stop()
+            if self._highlights_scheduler:
+                self._highlights_scheduler.stop()
             self._cancel_snooze_timer()
         finally:
             self._qdrant_sidecar.stop()
@@ -233,6 +291,19 @@ class AppRuntime:
 
     def _on_ocr_observation(self, observation_id: str) -> None:
         self._workers.notify_ocr_observation(observation_id)
+
+    def _on_vision_observation(self, observation_id: str) -> None:
+        if not self._config.agents.enabled:
+            return
+        job_key = f"vision:{observation_id}:v1"
+        self._agent_jobs.enqueue(
+            job_key=job_key,
+            job_type=AGENT_JOB_VISION_CAPTION,
+            event_id=observation_id,
+            payload={"event_id": observation_id},
+            max_attempts=2,
+            max_pending=self._config.agents.max_pending_jobs,
+        )
 
     def wait_forever(self) -> None:
         try:

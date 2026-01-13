@@ -35,9 +35,13 @@ class LexicalIndex:
             conn.execute(
                 text(
                     "CREATE VIRTUAL TABLE IF NOT EXISTS event_fts "
-                    "USING fts5(event_id UNINDEXED, ocr_text, window_title, app_name, domain, url)"
+                    "USING fts5(event_id UNINDEXED, ocr_text, window_title, app_name, domain, url, agent_text)"
                 )
             )
+            try:
+                conn.execute(text("ALTER TABLE event_fts ADD COLUMN agent_text"))
+            except Exception:
+                pass
 
     def upsert_event(self, event: EventRecord) -> None:
         engine = self._db.engine
@@ -73,6 +77,16 @@ class LexicalIndex:
     def bulk_upsert(self, events: Iterable[EventRecord]) -> None:
         for event in events:
             self.upsert_event(event)
+
+    def upsert_agent_text(self, event_id: str, agent_text: str) -> None:
+        engine = self._db.engine
+        if engine.dialect.name != "sqlite":
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE event_fts SET agent_text = :agent_text WHERE event_id = :event_id"),
+                {"agent_text": agent_text, "event_id": event_id},
+            )
 
     def search(self, query: str, limit: int = 20) -> list[LexicalHit]:
         engine = self._db.engine

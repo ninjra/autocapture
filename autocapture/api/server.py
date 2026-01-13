@@ -25,6 +25,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 from sqlalchemy import func, select
 
+from ..agents.answer_graph import AnswerGraph
+from ..agents import AGENT_JOB_DAILY_HIGHLIGHTS
+from ..agents.jobs import AgentJobQueue
 from ..config import AppConfig, ProviderRoutingConfig, apply_settings_overrides, is_loopback_host
 from ..encryption import EncryptionManager
 from ..logging_utils import get_logger
@@ -34,6 +37,7 @@ from ..settings_store import read_settings, update_settings
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
 from ..memory.entities import EntityResolver, SecretStore
+from ..security.token_vault import TokenVaultStore
 from ..memory.prompts import PromptLibraryService, PromptRegistry
 from ..memory.retrieval import RetrieveFilters, RetrievalService
 from ..embeddings.service import EmbeddingService
@@ -46,6 +50,7 @@ from ..storage.database import DatabaseManager
 from ..storage.deletion import delete_range as delete_range_records
 from ..storage.models import (
     CaptureRecord,
+    DailyHighlightsRecord,
     EventRecord,
     OCRSpanRecord,
     PromptOpsRunRecord,
@@ -77,6 +82,26 @@ class ContextPackRequest(BaseModel):
     extractive_only: Optional[bool] = None
     pack_format: str = Field("json", description="json or text")
     routing: Optional[dict[str, str]] = None
+
+
+class HighlightsSummary(BaseModel):
+    day: str
+    summary: str
+    highlights: list[str]
+
+
+class HighlightsDetail(BaseModel):
+    day: str
+    data: dict[str, Any]
+
+
+class HighlightsRegenerateRequest(BaseModel):
+    day: str
+
+
+class ResolveTokensRequest(BaseModel):
+    tokens: list[str]
+    sanitize: Optional[bool] = None
 
 
 class ContextPackResponse(BaseModel):
@@ -227,9 +252,17 @@ def create_app(
     )
     encryption_mgr = EncryptionManager(config.encryption)
     secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
-    entities = EntityResolver(db, secret)
+    token_vault = TokenVaultStore(config, db)
+    entities = EntityResolver(db, secret, token_vault=token_vault)
+    agent_jobs = AgentJobQueue(db)
     prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
     PromptLibraryService(db).sync_registry(prompt_registry)
+    answer_graph = AnswerGraph(
+        config,
+        retrieval,
+        prompt_registry=prompt_registry,
+        entities=entities,
+    )
     retention = RetentionManager(
         config.storage, config.retention, db, Path(config.capture.data_dir)
     )
@@ -283,6 +316,8 @@ def create_app(
         "/api/context_pack/",
         "/api/context-pack/",
         "/api/event/",
+        "/api/highlights",
+        "/api/privacy/resolve_tokens",
         "/api/delete_range",
         "/api/delete_all",
     )
@@ -665,6 +700,7 @@ def create_app(
             sanitized=sanitized,
         )
         routing_data = _merge_routing(config.routing, request.routing)
+        aggregates = _build_aggregates(db, request.time_range)
         pack = build_context_pack(
             query=request.query,
             evidence=evidence,
@@ -676,6 +712,7 @@ def create_app(
                 "domains": request.filters.get("domain") if request.filters else None,
             },
             sanitized=sanitized,
+            aggregates=aggregates,
         )
         text_pack = None
         if request.pack_format == "text":
@@ -708,6 +745,7 @@ def create_app(
             sanitized,
         )
         routing_data = _merge_routing(config.routing, request.routing)
+        aggregates = _build_aggregates(db, request.time_range)
         pack = build_context_pack(
             query=query_text,
             evidence=evidence,
@@ -719,12 +757,55 @@ def create_app(
                 "domains": request.filters.get("domain") if request.filters else None,
             },
             sanitized=sanitized,
+            aggregates=aggregates,
         )
         start = dt.datetime.now(dt.timezone.utc)
+        graph_attempted = False
+        graph_used_llm = False
+        if config.agents.answer_agent.enabled:
+            try:
+                graph_attempted = True
+                result = await answer_graph.run(
+                    query_text,
+                    time_range=request.time_range,
+                    filters=request.filters,
+                    k=k,
+                    sanitized=sanitized,
+                    extractive_only=extractive_only,
+                    routing=_model_dump(routing_data),
+                    aggregates=aggregates,
+                )
+                answer_text = result.answer
+                citations = result.citations
+                graph_used_llm = result.used_llm
+                pack = build_context_pack(
+                    query=query_text,
+                    evidence=evidence,
+                    entity_tokens=entities.tokens_for_events(events),
+                    routing=_model_dump(routing_data),
+                    filters={
+                        "time_range": request.time_range,
+                        "apps": request.filters.get("app") if request.filters else None,
+                        "domains": request.filters.get("domain") if request.filters else None,
+                    },
+                    sanitized=sanitized,
+                    aggregates=aggregates,
+                )
+            except Exception as exc:
+                log.warning("Agentic answer failed; falling back to baseline: {}", exc)
+                answer_text = ""
+                citations = []
+                graph_attempted = False
+        else:
+            answer_text = ""
+            citations = []
+
         if extractive_only:
             compressed = extractive_answer(evidence)
             answer_text = compressed.answer
             citations = compressed.citations
+        elif graph_attempted and graph_used_llm:
+            pass
         else:
             provider, decision = ProviderRouter(
                 routing_data, config.llm, offline=config.offline, privacy=config.privacy
@@ -779,6 +860,72 @@ def create_app(
             used_context_pack=pack.to_json(),
             latency_ms=latency,
         )
+
+    @app.get("/api/highlights")
+    def list_highlights() -> list[HighlightsSummary]:
+        with db.session() as session:
+            rows = (
+                session.execute(
+                    select(DailyHighlightsRecord).order_by(DailyHighlightsRecord.day.desc())
+                )
+                .scalars()
+                .all()
+            )
+        summaries = []
+        for row in rows:
+            data = row.data_json or {}
+            summaries.append(
+                HighlightsSummary(
+                    day=row.day,
+                    summary=data.get("summary", ""),
+                    highlights=data.get("highlights", []),
+                )
+            )
+        return summaries
+
+    @app.get("/api/highlights/{day}")
+    def get_highlights(day: str) -> HighlightsDetail:
+        with db.session() as session:
+            row = (
+                session.execute(
+                    select(DailyHighlightsRecord).where(DailyHighlightsRecord.day == day)
+                )
+                .scalars()
+                .first()
+            )
+        if not row:
+            raise HTTPException(status_code=404, detail="Highlights not found")
+        return HighlightsDetail(day=row.day, data=row.data_json or {})
+
+    @app.post("/api/highlights/regenerate")
+    def regenerate_highlights(request: HighlightsRegenerateRequest, http_request: Request) -> dict:
+        client_host = http_request.client.host if http_request.client else "unknown"
+        if not is_loopback_host(client_host):
+            _require_api_key(http_request, config)
+        job_key = f"highlights:{request.day}:v1"
+        job_id = agent_jobs.enqueue(
+            job_key=job_key,
+            job_type=AGENT_JOB_DAILY_HIGHLIGHTS,
+            day=request.day,
+            payload={"day": request.day},
+            max_pending=config.agents.max_pending_jobs,
+        )
+        if not job_id:
+            raise HTTPException(status_code=429, detail="Agent backlog exceeded")
+        return {"job_id": job_id}
+
+    @app.post("/api/privacy/resolve_tokens")
+    def resolve_tokens(request: ResolveTokensRequest, http_request: Request) -> dict:
+        if not config.privacy.allow_token_vault_decrypt:
+            raise HTTPException(status_code=403, detail="Token vault decryption disabled")
+        client_host = http_request.client.host if http_request.client else "unknown"
+        if not is_loopback_host(client_host):
+            _require_api_key(http_request, config)
+        sanitized = _resolve_bool(request.sanitize, config.privacy.sanitize_default)
+        if sanitized:
+            return {"resolved": {}}
+        resolved = token_vault.resolve_tokens(request.tokens)
+        return {"resolved": resolved}
 
     @app.post("/api/suggest")
     def suggest(request: SuggestRequest) -> list[dict[str, Any]]:
@@ -1021,6 +1168,45 @@ def _build_evidence(
             )
         )
     return evidence, events
+
+
+def _build_aggregates(
+    db: DatabaseManager,
+    time_range: Optional[tuple[dt.datetime, dt.datetime]],
+) -> dict[str, Any]:
+    aggregates: dict[str, Any] = {"time_spent_by_app": [], "notable_changes": []}
+    if not time_range:
+        return aggregates
+    start, end = time_range
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=dt.timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=dt.timezone.utc)
+    days = []
+    cursor = start.date()
+    end_date = end.date()
+    while cursor <= end_date:
+        days.append(cursor.isoformat())
+        cursor = cursor + dt.timedelta(days=1)
+    if not days:
+        return aggregates
+    with db.session() as session:
+        rows = (
+            session.execute(
+                select(DailyHighlightsRecord).where(DailyHighlightsRecord.day.in_(days))
+            )
+            .scalars()
+            .all()
+        )
+    aggregates["daily_highlights"] = [
+        {
+            "day": row.day,
+            "summary": row.data_json.get("summary", ""),
+            "highlights": row.data_json.get("highlights", []),
+        }
+        for row in rows
+    ]
+    return aggregates
 
 
 def _fetch_spans(

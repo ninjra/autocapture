@@ -28,6 +28,26 @@ nav button {
   cursor: pointer;
 }
 
+.highlights-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.highlights-content ul {
+  margin: 8px 0 16px;
+  padding-left: 20px;
+}
+
+.highlights-content li {
+  cursor: pointer;
+}
+
+.open-loops h4 {
+  margin-top: 12px;
+}
+
 nav button.active {
   background: #2563eb;
   border-color: #2563eb;
