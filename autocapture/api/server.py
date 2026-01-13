@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 from sqlalchemy import func, select
 
-from ..config import AppConfig, ProviderRoutingConfig, apply_settings_overrides
+from ..config import AppConfig, ProviderRoutingConfig, apply_settings_overrides, is_loopback_host
 from ..encryption import EncryptionManager
 from ..logging_utils import get_logger
 from ..observability.metrics import get_gpu_snapshot, get_metrics_port
@@ -41,7 +41,9 @@ from ..indexing.vector_index import VectorIndex
 from ..memory.router import ProviderRouter
 from ..memory.verification import Claim, RulesVerifier
 from ..security.oidc import GoogleOIDCVerifier
+from ..security.session import SecuritySessionManager, is_test_mode
 from ..storage.database import DatabaseManager
+from ..storage.deletion import delete_range as delete_range_records
 from ..storage.models import (
     CaptureRecord,
     EventRecord,
@@ -139,6 +141,25 @@ class SettingsSnapshot(BaseModel):
 
 class SuggestRequest(BaseModel):
     q: str
+
+
+class DeleteRangeRequest(BaseModel):
+    start_utc: dt.datetime
+    end_utc: dt.datetime
+    process: Optional[str] = None
+    window_title: Optional[str] = None
+
+
+class DeleteRangeResponse(BaseModel):
+    deleted_captures: int
+    deleted_events: int
+    deleted_segments: int
+    deleted_files: int
+
+
+class UnlockResponse(BaseModel):
+    token: str
+    expires_at: Optional[str] = None
 
 
 class PromptOpsRunSummary(BaseModel):
@@ -253,6 +274,31 @@ def create_app(
         "/api/retrieve",
         "/api/context-pack",
     }
+    protected_prefixes = (
+        "/api/answer",
+        "/api/retrieve",
+        "/api/context-pack",
+        "/api/context_pack",
+        "/api/screenshot/",
+        "/api/context_pack/",
+        "/api/context-pack/",
+        "/api/event/",
+        "/api/delete_range",
+        "/api/delete_all",
+    )
+
+    security_manager: SecuritySessionManager | None = None
+    if (
+        config.security.local_unlock_enabled
+        and config.mode.mode != "remote"
+        and is_loopback_host(config.api.bind_host)
+        and config.security.provider != "disabled"
+    ):
+        security_manager = SecuritySessionManager(
+            ttl_seconds=config.security.session_ttl_seconds,
+            provider=config.security.provider,
+            test_mode_bypass=is_test_mode(),
+        )
 
     ui_dir = resource_root() / "autocapture" / "ui" / "web"
     if ui_dir.exists():
@@ -443,6 +489,14 @@ def create_app(
                 )
         return await call_next(request)
 
+    @app.middleware("http")
+    async def security_session_middleware(request: Request, call_next):  # type: ignore[no-redef]
+        if security_manager and _needs_unlock(request, protected_prefixes):
+            token = _extract_unlock_token(request)
+            if not security_manager.is_unlocked(token):
+                return JSONResponse(status_code=401, content={"detail": "Unlock required"})
+        return await call_next(request)
+
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {
@@ -496,6 +550,22 @@ def create_app(
             },
             "gpu": gpu,
         }
+
+    @app.post("/api/unlock")
+    def unlock_session() -> UnlockResponse:
+        if not security_manager:
+            return UnlockResponse(token="", expires_at=None)
+        session = security_manager.unlock()
+        if not session:
+            raise HTTPException(status_code=401, detail="Unlock failed")
+        return UnlockResponse(token=session.token, expires_at=session.expires_at.isoformat())
+
+    @app.post("/api/lock")
+    def lock_session() -> dict[str, Any]:
+        if not security_manager:
+            return {"status": "ok", "cleared": 0}
+        cleared = security_manager.lock()
+        return {"status": "ok", "cleared": cleared}
 
     @app.get("/api/promptops/latest")
     def promptops_latest() -> PromptOpsRunsResponse:
@@ -760,6 +830,37 @@ def create_app(
             tags=event.tags,
         )
 
+    @app.post("/api/delete_range")
+    def delete_range_endpoint(request: DeleteRangeRequest) -> DeleteRangeResponse:
+        counts = delete_range_records(
+            db,
+            Path(config.capture.data_dir),
+            start_utc=request.start_utc,
+            end_utc=request.end_utc,
+            process=request.process,
+            window_title=request.window_title,
+        )
+        return DeleteRangeResponse(
+            deleted_captures=counts.deleted_captures,
+            deleted_events=counts.deleted_events,
+            deleted_segments=counts.deleted_segments,
+            deleted_files=counts.deleted_files,
+        )
+
+    @app.post("/api/delete_all")
+    def delete_all() -> DeleteRangeResponse:
+        now = dt.datetime.now(dt.timezone.utc)
+        start = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+        counts = delete_range_records(
+            db, Path(config.capture.data_dir), start_utc=start, end_utc=now
+        )
+        return DeleteRangeResponse(
+            deleted_captures=counts.deleted_captures,
+            deleted_events=counts.deleted_events,
+            deleted_segments=counts.deleted_segments,
+            deleted_files=counts.deleted_files,
+        )
+
     @app.post("/api/settings")
     def settings(request: SettingsRequest) -> SettingsResponse:
         settings_path = Path(config.capture.data_dir) / "settings.json"
@@ -782,6 +883,8 @@ def create_app(
                 "paused": config.privacy.paused,
                 "snooze_until_utc": _to_iso(config.privacy.snooze_until_utc),
             }
+        if "active_preset" not in settings:
+            settings["active_preset"] = config.presets.active_preset
         if "backup" not in settings:
             settings["backup"] = {"last_export_at_utc": None}
         return SettingsSnapshot(settings=settings)
@@ -791,6 +894,20 @@ def create_app(
 
 def _resolve_bool(value: Optional[bool], default: bool) -> bool:
     return default if value is None else value
+
+
+def _needs_unlock(request: Request, prefixes: tuple[str, ...]) -> bool:
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return False
+    return any(path.startswith(prefix) for prefix in prefixes)
+
+
+def _extract_unlock_token(request: Request) -> str | None:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth.split(" ", 1)[1]
+    return request.query_params.get("unlock")
 
 
 def _require_api_key(request: Request, config: AppConfig) -> None:

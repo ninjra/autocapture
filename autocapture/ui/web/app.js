@@ -1,5 +1,26 @@
 const tabs = document.querySelectorAll('nav button');
 const sections = document.querySelectorAll('.tab');
+const urlParams = new URLSearchParams(window.location.search);
+const unlockToken = urlParams.get('unlock');
+
+function apiHeaders() {
+  const headers = { 'Content-Type': 'application/json' };
+  if (unlockToken) {
+    headers['Authorization'] = `Bearer ${unlockToken}`;
+  }
+  return headers;
+}
+
+function withUnlock(url) {
+  if (!unlockToken) return url;
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}unlock=${encodeURIComponent(unlockToken)}`;
+}
+
+async function apiFetch(path, options = {}) {
+  const headers = { ...apiHeaders(), ...(options.headers || {}) };
+  return fetch(path, { ...options, headers });
+}
 
 tabs.forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -81,9 +102,8 @@ chatForm.addEventListener('submit', async (event) => {
   let response;
   let data = {};
   try {
-    response = await fetch('/api/answer', {
+    response = await apiFetch('/api/answer', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
     try {
@@ -115,10 +135,9 @@ searchForm.addEventListener('submit', async (event) => {
   let response;
   let data = {};
   try {
-    response = await fetch('/api/retrieve', {
+    response = await apiFetch('/api/retrieve', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, k: 10 })
+      body: JSON.stringify({ query, k: 10, include_screenshots: true })
     });
     try {
       data = await response.json();
@@ -153,14 +172,24 @@ searchForm.addEventListener('submit', async (event) => {
     card.appendChild(strong);
     card.appendChild(paragraph);
     card.appendChild(small);
+    if (item.event_id) {
+      const link = document.createElement('a');
+      link.href = withUnlock(`/api/screenshot/${item.event_id}`);
+      link.textContent = 'View screenshot';
+      link.target = '_blank';
+      link.rel = 'noreferrer';
+      card.appendChild(link);
+    }
     searchResults.appendChild(card);
   });
 });
 
 const saveSettings = document.getElementById('saveSettings');
+const presetToggle = document.getElementById('privacyPresetToggle');
 
 saveSettings.addEventListener('click', async () => {
   const payload = {
+    active_preset: presetToggle.checked ? 'privacy_first' : 'high_fidelity',
     routing: {
       ocr: document.getElementById('routingOcr').value,
       embedding: document.getElementById('routingEmbedding').value,
@@ -169,9 +198,8 @@ saveSettings.addEventListener('click', async () => {
       verifier: document.getElementById('routingVerifier').value
     }
   };
-  await fetch('/api/settings', {
+  await apiFetch('/api/settings', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ settings: payload })
   });
   alert('Settings saved locally.');
@@ -179,7 +207,7 @@ saveSettings.addEventListener('click', async () => {
 
 async function loadSettings() {
   try {
-    const response = await fetch('/api/settings');
+    const response = await apiFetch('/api/settings');
     const data = await response.json();
     const routing = (data.settings && data.settings.routing) || {};
     if (routing.ocr) document.getElementById('routingOcr').value = routing.ocr;
@@ -190,6 +218,9 @@ async function loadSettings() {
     if (routing.llm) {
       modelSelect.value = routing.llm.startsWith('openai') ? 'cloud' : 'local';
     }
+    if (data.settings && data.settings.active_preset) {
+      presetToggle.checked = data.settings.active_preset === 'privacy_first';
+    }
   } catch (err) {
     return;
   }
@@ -197,7 +228,7 @@ async function loadSettings() {
 
 async function loadStatus() {
   try {
-    const response = await fetch('/health');
+    const response = await apiFetch('/health', { headers: {} });
     const data = await response.json();
     const status = document.getElementById('remoteStatus');
     status.textContent = data.mode || 'local-only';

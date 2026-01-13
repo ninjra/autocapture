@@ -40,8 +40,9 @@ Source: "dist\autocapture\*"; DestDir: "{app}"; Flags: recursesubdirs createalls
 Name: "{group}\Autocapture"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\Uninstall Autocapture"; Filename: "{uninstallexe}"
 
-[Registry]
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Autocapture"; ValueData: "\"{app}\{#MyAppExeName}\""; Tasks: startup
-
 [Run]
+Filename: "schtasks"; Parameters: "/Create /SC ONLOGON /TN \"Autocapture\" /TR \"\"\"{app}\\{#MyAppExeName}\"\"\" /RL LIMITED /F"; Tasks: startup; Flags: runhidden
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Autocapture"; Flags: nowait postinstall skipifsilent
+
+[UninstallRun]
+Filename: "schtasks"; Parameters: "/Delete /TN \"Autocapture\" /F"; Flags: runhidden

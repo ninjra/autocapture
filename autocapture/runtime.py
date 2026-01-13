@@ -131,6 +131,7 @@ class AppRuntime:
             database=self._db,
             capture_config=config.capture,
             worker_config=config.worker,
+            privacy_config=config.privacy,
             on_ocr_observation=self._on_ocr_observation,
             on_vision_observation=None,
             vision_sample_rate=getattr(config.capture, "vision_sample_rate", 0.0),

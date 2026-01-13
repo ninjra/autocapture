@@ -22,6 +22,10 @@ api:
   default_page_size: 50
   max_query_chars: 2000
   max_context_k: 50
+security:
+  local_unlock_enabled: true
+  session_ttl_seconds: 300
+  provider: "windows_hello"
 offline: true
 privacy:
   cloud_enabled: false
@@ -30,9 +34,25 @@ privacy:
   paused: false
   snooze_until_utc: null
   exclude_monitors: []
-  exclude_processes: []
-  exclude_window_title_regex: []
+  exclude_processes:
+    - "1password.exe"
+    - "bitwarden.exe"
+    - "keepass.exe"
+    - "keepassxc.exe"
+    - "lastpass.exe"
+    - "dashlane.exe"
+    - "nordpass.exe"
+    - "keeper.exe"
+    - "roboform.exe"
+    - "authy.exe"
+  exclude_window_title_regex:
+    - "(?i)\\b(inprivate|incognito)\\b"
+    - "(?i)windows security"
+    - "(?i)user account control"
+    - "(?i)credential(s)?"
   exclude_regions: []
+presets:
+  active_preset: "privacy_first"
 routing:
   capture: "local"
   ocr: "local"
@@ -64,19 +84,19 @@ capture:
     duplicate_window_s: 10.0
     duplicate_max_items: 16
     duplicate_pixel_threshold: 2.5
-    fps_soft_cap: 4.0
+    fps_soft_cap: 0.5
     block_fullscreen: true
   fps_min: 0.5
   fps_max: 2.0
   tile_size: 512
   diff_epsilon: 0.04
   downscale_width: 256
-  always_store_fullres: true
+  always_store_fullres: false
   thumbnail_width: 640
   # staging_dir: "%LOCALAPPDATA%/Autocapture/staging"  # optional override
   # data_dir: "%LOCALAPPDATA%/Autocapture/data"       # optional override
   encoder: "nvenc_webp"
-  record_video: true
+  record_video: false
   layout_mode: "virtual_desktop"
   video_bitrate: "8M"
   video_preset: "p4"
@@ -126,9 +146,9 @@ worker:
   max_task_runtime_s: 900.0
 retention:
   video_days: 3
-  roi_days: 14
+  roi_days: 7
   max_media_gb: 200
-  screenshot_ttl_days: 90
+  screenshot_ttl_days: 30
 storage:
   image_quota_gb: 2500
   prune_grace_days: 90

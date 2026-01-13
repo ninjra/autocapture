@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+import datetime as dt
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -26,6 +27,8 @@ class SearchPopup(QtWidgets.QWidget):
         self._suggest_timer.timeout.connect(self._request_suggestions)
         self._current_suggest_token: str | None = None
         self._current_answer_token: str | None = None
+        self._unlock_token: str | None = None
+        self._unlock_expires_at: dt.datetime | None = None
         self._log = get_logger("ui.popup")
         self._setup_ui()
         self.suggestions_ready.connect(self._apply_suggestions)
@@ -62,6 +65,25 @@ class SearchPopup(QtWidgets.QWidget):
             "}"
         )
 
+        self._time_range = QtWidgets.QComboBox()
+        self._time_range.addItems(["Last 24h", "Last 7 days", "Last 30 days"])
+        self._time_range.setCurrentIndex(0)
+        self._time_range.setStyleSheet("color: #f4f5f7;")
+
+        self._sanitize_toggle = QtWidgets.QCheckBox("Sanitize")
+        self._sanitize_toggle.setChecked(True)
+        self._sanitize_toggle.setStyleSheet("color: #d0d7ff;")
+
+        self._extractive_toggle = QtWidgets.QCheckBox("Extractive-only")
+        self._extractive_toggle.setChecked(True)
+        self._extractive_toggle.setStyleSheet("color: #d0d7ff;")
+
+        controls = QtWidgets.QHBoxLayout()
+        controls.addWidget(self._time_range)
+        controls.addStretch(1)
+        controls.addWidget(self._sanitize_toggle)
+        controls.addWidget(self._extractive_toggle)
+
         self._suggestions = QtWidgets.QListWidget()
         self._suggestions.setFixedHeight(160)
         self._suggestions.setStyleSheet(
@@ -82,12 +104,21 @@ class SearchPopup(QtWidgets.QWidget):
         self._preview.setWordWrap(True)
         self._preview.setStyleSheet("color: #9ad1ff; font-size: 12px;")
 
+        self._citations = QtWidgets.QTextBrowser()
+        self._citations.setOpenExternalLinks(True)
+        self._citations.setStyleSheet(
+            "color: #c2d6ff; font-size: 11px; background: transparent; border: none;"
+        )
+        self._citations.setFixedHeight(60)
+
         layout = QtWidgets.QVBoxLayout(container)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
         layout.addWidget(self._input)
+        layout.addLayout(controls)
         layout.addWidget(self._suggestions)
         layout.addWidget(self._preview)
+        layout.addWidget(self._citations)
 
         outer = QtWidgets.QVBoxLayout(self)
         outer.setContentsMargins(12, 12, 12, 12)
@@ -159,9 +190,20 @@ class SearchPopup(QtWidgets.QWidget):
         )
 
     def _fetch_answer(self, query: str) -> dict[str, Any]:
-        payload = {"q": query}
+        payload = {
+            "q": query,
+            "sanitize": self._sanitize_toggle.isChecked(),
+            "extractive_only": self._extractive_toggle.isChecked(),
+            "time_range": self._selected_time_range(),
+        }
         with httpx.Client(timeout=45.0) as client:
-            response = client.post(f"{self._api_base_url}/api/answer", json=payload)
+            headers = {}
+            token = self._ensure_unlocked(client)
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            response = client.post(
+                f"{self._api_base_url}/api/answer", json=payload, headers=headers
+            )
             response.raise_for_status()
             return response.json()
 
@@ -170,9 +212,7 @@ class SearchPopup(QtWidgets.QWidget):
             return
         text = answer.get("answer", "")
         self._preview.setText(text)
-        answer_url = answer.get("answer_url")
-        if answer_url:
-            QtGui.QDesktopServices.openUrl(QtCore.QUrl(answer_url))
+        self._apply_citations(answer)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self.hide()
@@ -192,3 +232,56 @@ class SearchPopup(QtWidgets.QWidget):
         if signal == self.answer_ready:
             return {}
         return {}
+
+    def _selected_time_range(self) -> list[str]:
+        now = dt.datetime.now(dt.timezone.utc)
+        selection = self._time_range.currentIndex()
+        if selection == 0:
+            start = now - dt.timedelta(hours=24)
+        elif selection == 1:
+            start = now - dt.timedelta(days=7)
+        else:
+            start = now - dt.timedelta(days=30)
+        return [start.isoformat(), now.isoformat()]
+
+    def _ensure_unlocked(self, client: httpx.Client) -> str | None:
+        if self._unlock_token and self._unlock_expires_at:
+            if self._unlock_expires_at > dt.datetime.now(dt.timezone.utc):
+                return self._unlock_token
+        try:
+            response = client.post(f"{self._api_base_url}/api/unlock")
+            response.raise_for_status()
+            data = response.json()
+            token = data.get("token")
+            expires_at = data.get("expires_at")
+            if token and expires_at:
+                self._unlock_token = token
+                self._unlock_expires_at = dt.datetime.fromisoformat(expires_at)
+            return token
+        except Exception as exc:
+            self._log.warning("Unlock failed: {}", exc)
+            return None
+
+    def _apply_citations(self, answer: dict[str, Any]) -> None:
+        citations = answer.get("citations") or []
+        pack = answer.get("used_context_pack") or {}
+        evidence = pack.get("evidence") or []
+        evidence_map = {
+            item.get("id"): (item.get("meta") or {}).get("event_id") for item in evidence
+        }
+        if not citations:
+            self._citations.setHtml("")
+            return
+        links = []
+        token = self._unlock_token or ""
+        for cite in citations:
+            event_id = evidence_map.get(cite)
+            if event_id:
+                url = f"{self._api_base_url}/api/screenshot/{event_id}"
+                if token:
+                    url = f"{url}?unlock={token}"
+                links.append(f'<a href="{url}">{cite}</a>')
+            else:
+                links.append(str(cite))
+        html = "Citations: " + ", ".join(links)
+        self._citations.setHtml(html)
