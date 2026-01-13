@@ -18,7 +18,13 @@ from .. import configure_logging, load_config
 from ..config import AppConfig
 from ..logging_utils import get_logger
 from ..runtime import AppRuntime
-from ..windows.startup import ensure_startup_task
+from ..tracking.win_foreground import get_foreground_context
+from ..win32.startup import (
+    build_startup_command,
+    disable_startup,
+    enable_startup,
+    is_startup_enabled,
+)
 from .api_supervisor import ApiSupervisor
 from .popup import SearchPopup
 
@@ -48,10 +54,16 @@ class TrayApp(QtCore.QObject):
         self._search_action = QtGui.QAction("Search", self._menu)
         self._dashboard_action = QtGui.QAction("Open Dashboard", self._menu)
         self._pause_action = QtGui.QAction("Pause now", self._menu)
+        self._snooze_menu = QtWidgets.QMenu("Snooze capture", self._menu)
+        self._snooze_5_action = QtGui.QAction("5 minutes", self._menu)
+        self._snooze_15_action = QtGui.QAction("15 minutes", self._menu)
+        self._snooze_60_action = QtGui.QAction("60 minutes", self._menu)
+        self._snooze_resume_action = QtGui.QAction("Resume now", self._menu)
+        self._exclude_app_action = QtGui.QAction("Exclude Current App", self._menu)
+        self._startup_action = QtGui.QAction("Start on login", self._menu)
         self._delete_15_action = QtGui.QAction("Delete last 15 minutes", self._menu)
         self._delete_24_action = QtGui.QAction("Delete last 24 hours", self._menu)
         self._delete_all_action = QtGui.QAction("Delete everything", self._menu)
-        self._repair_startup_action = QtGui.QAction("Repair startup", self._menu)
         self._logs_action = QtGui.QAction("Open Logs Folder", self._menu)
         self._quit_action = QtGui.QAction("Quit", self._menu)
 
@@ -59,12 +71,15 @@ class TrayApp(QtCore.QObject):
         self._menu.addAction(self._dashboard_action)
         self._menu.addSeparator()
         self._menu.addAction(self._pause_action)
+        self._menu.addMenu(self._snooze_menu)
+        self._menu.addAction(self._exclude_app_action)
+        self._menu.addSeparator()
+        self._menu.addAction(self._startup_action)
         self._menu.addSeparator()
         self._menu.addAction(self._delete_15_action)
         self._menu.addAction(self._delete_24_action)
         self._menu.addAction(self._delete_all_action)
         self._menu.addSeparator()
-        self._menu.addAction(self._repair_startup_action)
         self._menu.addAction(self._logs_action)
         self._menu.addSeparator()
         self._menu.addAction(self._quit_action)
@@ -73,12 +88,26 @@ class TrayApp(QtCore.QObject):
         self._search_action.triggered.connect(self.show_popup)
         self._dashboard_action.triggered.connect(self.open_dashboard)
         self._pause_action.triggered.connect(self.toggle_pause)
+        self._snooze_5_action.triggered.connect(lambda: self._snooze_for(5))
+        self._snooze_15_action.triggered.connect(lambda: self._snooze_for(15))
+        self._snooze_60_action.triggered.connect(lambda: self._snooze_for(60))
+        self._snooze_resume_action.triggered.connect(self.resume_capture)
+        self._exclude_app_action.triggered.connect(self.exclude_current_app)
+        self._startup_action.triggered.connect(self.toggle_startup)
         self._delete_15_action.triggered.connect(lambda: self.delete_range(minutes=15))
         self._delete_24_action.triggered.connect(lambda: self.delete_range(hours=24))
         self._delete_all_action.triggered.connect(self.delete_all)
-        self._repair_startup_action.triggered.connect(self.repair_startup)
         self._logs_action.triggered.connect(self.open_logs)
         self._quit_action.triggered.connect(self._quit)
+
+        self._snooze_menu.addAction(self._snooze_5_action)
+        self._snooze_menu.addAction(self._snooze_15_action)
+        self._snooze_menu.addAction(self._snooze_60_action)
+        self._snooze_menu.addSeparator()
+        self._snooze_menu.addAction(self._snooze_resume_action)
+
+        self._startup_action.setCheckable(True)
+        self._startup_action.setChecked(is_startup_enabled())
 
         self._api_url = f"http://{config.api.bind_host}:{config.api.port}"
         self._popup = SearchPopup(self._api_url)
@@ -87,6 +116,7 @@ class TrayApp(QtCore.QObject):
         self._health_timer.setInterval(5000)
         self._health_timer.timeout.connect(self._tick_supervisor)
         self._supervisor = ApiSupervisor(self._api_is_healthy, self._restart_api)
+        self._sync_pause_state()
 
     def start(self) -> None:
         self._tray.show()
@@ -103,13 +133,16 @@ class TrayApp(QtCore.QObject):
         if self._popup.isVisible():
             self._popup.hide()
         else:
-            self._popup.show_popup()
+            self.show_popup()
 
     def show_popup(self) -> None:
+        if not self._ensure_api_ready("Search popup"):
+            return
         self._popup.show_popup()
 
     def open_dashboard(self) -> None:
-        self._wait_for_api_ready()
+        if not self._ensure_api_ready("Dashboard"):
+            return
         token = self._request_unlock_token()
         url = f"http://{self._config.api.bind_host}:{self._config.api.port}/"
         if token:
@@ -117,12 +150,45 @@ class TrayApp(QtCore.QObject):
         webbrowser.open(url)
 
     def toggle_pause(self) -> None:
-        self._paused = not self._paused
-        self._pause_action.setText("Resume Capture" if self._paused else "Pause now")
         if self._paused:
-            self._runtime.pause_capture()
-        else:
             self._runtime.resume_capture()
+        else:
+            self._runtime.pause_capture()
+        self._sync_pause_state()
+
+    def resume_capture(self) -> None:
+        self._runtime.resume_capture()
+        self._sync_pause_state()
+
+    def _snooze_for(self, minutes: int) -> None:
+        self._runtime.snooze_capture(minutes)
+        self._sync_pause_state()
+
+    def exclude_current_app(self) -> None:
+        ctx = get_foreground_context()
+        process_name = ctx.process_name if ctx else None
+        if not process_name:
+            self._notify("Exclude App", "Unable to detect the current app.")
+            return
+        if self._runtime.add_excluded_process(process_name):
+            self._notify("Exclude App", f"Added {process_name} to excluded apps.")
+        else:
+            self._notify("Exclude App", f"{process_name} is already excluded.")
+
+    def toggle_startup(self) -> None:
+        if sys.platform != "win32":
+            self._startup_action.setChecked(False)
+            QtWidgets.QMessageBox.information(
+                None, "Start on login", "Start on login is only available on Windows."
+            )
+            return
+        command = build_startup_command(self._config_path, self._log_dir)
+        if self._startup_action.isChecked():
+            enable_startup(command)
+            self._notify("Start on login", "Autocapture will start on login.")
+        else:
+            disable_startup()
+            self._notify("Start on login", "Autocapture will not start on login.")
 
     def delete_range(self, *, minutes: int = 0, hours: int = 0) -> None:
         duration = dt.timedelta(minutes=minutes, hours=hours)
@@ -142,16 +208,6 @@ class TrayApp(QtCore.QObject):
             return
         self._delete_range_request(None, None, endpoint="/api/delete_all")
 
-    def repair_startup(self) -> None:
-        if sys.platform != "win32":
-            QtWidgets.QMessageBox.information(
-                None, "Autostart", "Startup repair is only available on Windows."
-            )
-            return
-        success = ensure_startup_task(Path(sys.executable))
-        message = "Startup task repaired." if success else "Failed to repair startup task."
-        QtWidgets.QMessageBox.information(None, "Autostart", message)
-
     def open_logs(self) -> None:
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(self._log_dir.resolve())))
 
@@ -159,17 +215,18 @@ class TrayApp(QtCore.QObject):
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
             self.toggle_popup()
 
-    def _wait_for_api_ready(self) -> None:
+    def _wait_for_api_ready(self) -> bool:
         url = f"{self._api_url}/health"
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
             try:
                 response = httpx.get(url, timeout=1.0)
                 if response.status_code == 200:
-                    return
+                    return True
             except Exception:
                 time.sleep(0.2)
         self._log.warning("API health check timed out; opening dashboard anyway")
+        return False
 
     def _api_is_healthy(self) -> bool:
         try:
@@ -179,13 +236,12 @@ class TrayApp(QtCore.QObject):
             return False
 
     def _tick_supervisor(self) -> None:
+        self._sync_pause_state()
+        if self._api_process and self._api_process.poll() is not None:
+            self._notify("Autocapture", "API process stopped; restarting.")
+            self._restart_api()
         state = self._supervisor.tick()
-        if state.status == "healthy":
-            self._tray.setToolTip("Autocapture running")
-        elif state.status == "backoff":
-            self._tray.setToolTip("Autocapture recovering (backoff)")
-        elif state.status == "restarting":
-            self._tray.setToolTip("Autocapture restarting API")
+        self._tray.setToolTip(self._build_status_tooltip(state.status))
 
     def _restart_api(self) -> None:
         self._log.warning("Restarting API process")
@@ -269,6 +325,48 @@ class TrayApp(QtCore.QObject):
         if self._api_log:
             self._api_log.close()
             self._api_log = None
+
+    def _ensure_api_ready(self, action_label: str) -> bool:
+        if self._api_process and self._api_process.poll() is not None:
+            self._log.warning("API process exited; restarting before %s", action_label)
+            self._restart_api()
+        elif not self._api_process:
+            self._restart_api()
+        if not self._wait_for_api_ready():
+            self._notify(
+                action_label,
+                "Autocapture is still starting up. Please try again in a moment.",
+            )
+            return False
+        return True
+
+    def _sync_pause_state(self) -> None:
+        paused = bool(self._config.privacy.paused)
+        self._paused = paused
+        self._pause_action.setText("Resume Capture" if paused else "Pause now")
+
+    def _build_status_tooltip(self, api_status: str) -> str:
+        now = dt.datetime.now(dt.timezone.utc)
+        snooze_until = self._config.privacy.snooze_until_utc
+        if snooze_until and snooze_until.tzinfo is None:
+            snooze_until = snooze_until.replace(tzinfo=dt.timezone.utc)
+        if self._config.privacy.paused:
+            if snooze_until and snooze_until > now:
+                local_time = snooze_until.astimezone().strftime("%Y-%m-%d %H:%M")
+                status = f"Snoozed until {local_time}"
+            else:
+                status = "Paused"
+        else:
+            status = "Capturing"
+        if api_status == "backoff":
+            return f"Autocapture: {status} (API recovering)"
+        if api_status == "restarting":
+            return f"Autocapture: {status} (API restarting)"
+        return f"Autocapture: {status}"
+
+    def _notify(self, title: str, message: str) -> None:
+        if self._tray.supportsMessages():
+            self._tray.showMessage(title, message)
 
     def _quit(self) -> None:
         try:
