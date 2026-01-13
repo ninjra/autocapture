@@ -639,6 +639,18 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
             config.privacy.snooze_until_utc = None
         elif parsed is not None:
             config.privacy.snooze_until_utc = parsed
+        exclude_monitors = privacy.get("exclude_monitors")
+        if isinstance(exclude_monitors, list):
+            config.privacy.exclude_monitors = list(exclude_monitors)
+        exclude_processes = privacy.get("exclude_processes")
+        if isinstance(exclude_processes, list):
+            config.privacy.exclude_processes = list(exclude_processes)
+        exclude_titles = privacy.get("exclude_window_title_regex")
+        if isinstance(exclude_titles, list):
+            config.privacy.exclude_window_title_regex = list(exclude_titles)
+        exclude_regions = privacy.get("exclude_regions")
+        if isinstance(exclude_regions, list):
+            config.privacy.exclude_regions = list(exclude_regions)
     active_preset = raw.get("active_preset")
     if isinstance(active_preset, str) and active_preset:
         config.presets.active_preset = active_preset

@@ -20,6 +20,7 @@ from PIL import Image
 from sqlalchemy import func, select
 
 from .privacy import PrivacyPolicy, get_screen_lock_status
+from .privacy_filter import apply_exclude_region_masks, should_skip_capture
 from ..config import CaptureConfig, FFmpegConfig, PrivacyConfig, WorkerConfig
 from ..logging_utils import get_logger
 from ..observability.metrics import (
@@ -91,7 +92,8 @@ class CaptureOrchestrator:
         self._capture_config = capture_config
         self._worker_config = worker_config
         self._privacy_config = privacy_config or PrivacyConfig()
-        self._privacy_policy = PrivacyPolicy(self._privacy_config)
+        self._privacy = self._privacy_config
+        self._privacy_policy = PrivacyPolicy(self._privacy)
         self._roi_w = roi_w
         self._roi_h = roi_h
         self._on_ocr_observation = on_ocr_observation
@@ -306,6 +308,16 @@ class CaptureOrchestrator:
             is_fullscreen = is_fullscreen_window(ctx.hwnd)
         if is_fullscreen and self._capture_config.hid.block_fullscreen:
             return
+        if should_skip_capture(
+            paused=self._privacy.paused,
+            monitor_id=monitor.id if monitor else None,
+            process_name=foreground_process,
+            window_title=foreground_window,
+            exclude_monitors=self._privacy.exclude_monitors,
+            exclude_processes=self._privacy.exclude_processes,
+            exclude_window_title_regex=self._privacy.exclude_window_title_regex,
+        ):
+            return
         screen_locked, secure_desktop = get_screen_lock_status()
         decision = self._privacy_policy.evaluate(
             ctx, screen_locked=screen_locked, secure_desktop=secure_desktop
@@ -316,7 +328,14 @@ class CaptureOrchestrator:
             return
         self._clear_auto_pause()
         if monitor and monitor.id in frames:
-            roi = self._crop_roi(frames[monitor.id], monitor, cursor_x, cursor_y)
+            roi, roi_origin = self._crop_roi(frames[monitor.id], monitor, cursor_x, cursor_y)
+            apply_exclude_region_masks(
+                roi,
+                monitor_id=monitor.id,
+                roi_origin_x=roi_origin[0],
+                roi_origin_y=roi_origin[1],
+                exclude_regions=self._privacy.exclude_regions,
+            )
             duplicate = self._duplicate_detector.update(Image.fromarray(np.ascontiguousarray(roi)))
             observation_id = str(uuid4())
             if not duplicate.is_duplicate:
@@ -578,7 +597,9 @@ class CaptureOrchestrator:
                 return monitor
         return self._monitors[0] if self._monitors else None
 
-    def _crop_roi(self, frame: np.ndarray, monitor: MonitorInfo, x: int, y: int) -> np.ndarray:
+    def _crop_roi(
+        self, frame: np.ndarray, monitor: MonitorInfo, x: int, y: int
+    ) -> tuple[np.ndarray, tuple[int, int]]:
         local_x = x - monitor.left
         local_y = y - monitor.top
         half_w = self._roi_w // 2
@@ -589,7 +610,7 @@ class CaptureOrchestrator:
         y1 = min(frame.shape[0], y0 + self._roi_h)
         x0 = max(0, x1 - self._roi_w)
         y0 = max(0, y1 - self._roi_h)
-        return frame[y0:y1, x0:x1]
+        return frame[y0:y1, x0:x1], (x0, y0)
 
     @staticmethod
     def _get_cursor_pos() -> tuple[int, int]:

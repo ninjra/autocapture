@@ -13,6 +13,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from .capture.orchestrator import CaptureOrchestrator
+from .capture.privacy_filter import normalize_process_name
 from .capture.raw_input import RawInputListener
 from .capture.backends.monitor_utils import set_process_dpi_awareness
 from .config import AppConfig
@@ -228,6 +229,37 @@ class AppRuntime:
         self._persist_privacy()
         self._orchestrator.resume()
 
+    def snooze_capture(self, minutes: int) -> None:
+        if minutes <= 0:
+            return
+        self._cancel_snooze_timer()
+        until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=minutes)
+        self._config.privacy.paused = True
+        self._config.privacy.snooze_until_utc = until
+        self._persist_privacy()
+        self._orchestrator.pause()
+        self._schedule_snooze_resume(until)
+
+    def add_excluded_process(self, process_name: str) -> bool:
+        normalized = normalize_process_name(process_name)
+        if not normalized:
+            return False
+        existing = {normalize_process_name(name) for name in self._config.privacy.exclude_processes}
+        if normalized in existing:
+            return False
+        self._config.privacy.exclude_processes.append(normalized)
+        self._persist_privacy()
+        return True
+
+    def add_excluded_window_title_regex(self, pattern: str) -> bool:
+        if not pattern:
+            return False
+        if pattern in self._config.privacy.exclude_window_title_regex:
+            return False
+        self._config.privacy.exclude_window_title_regex.append(pattern)
+        self._persist_privacy()
+        return True
+
     def set_hotkey_callback(self, callback) -> None:
         self._raw_input.set_hotkey_callback(callback)
 
@@ -282,6 +314,12 @@ class AppRuntime:
                 privacy = {}
             privacy["paused"] = self._config.privacy.paused
             privacy["snooze_until_utc"] = _to_iso(self._config.privacy.snooze_until_utc)
+            privacy["exclude_monitors"] = list(self._config.privacy.exclude_monitors)
+            privacy["exclude_processes"] = list(self._config.privacy.exclude_processes)
+            privacy["exclude_window_title_regex"] = list(
+                self._config.privacy.exclude_window_title_regex
+            )
+            privacy["exclude_regions"] = list(self._config.privacy.exclude_regions)
             settings["privacy"] = privacy
             return settings
 
