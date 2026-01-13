@@ -13,12 +13,21 @@ import yaml
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
 from .paths import default_data_dir, default_staging_dir
+from .presets import apply_preset
 from .settings_store import read_settings
 
 
 def _default_database_url() -> str:
     path = (default_data_dir() / "autocapture.db").resolve()
     return f"sqlite:///{path.as_posix()}"
+
+
+def _default_security_provider() -> str:
+    if os.environ.get("AUTOCAPTURE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
+        return "test"
+    if sys.platform == "win32":
+        return "windows_hello"
+    return "disabled"
 
 
 class HIDConfig(BaseModel):
@@ -356,6 +365,23 @@ class PrivacyConfig(BaseModel):
     exclude_regions: list[dict] = Field(default_factory=list)
 
 
+class SecurityConfig(BaseModel):
+    local_unlock_enabled: bool = Field(
+        True, description="Require local unlock session for sensitive endpoints."
+    )
+    session_ttl_seconds: int = Field(300, ge=30, description="Unlock session TTL in seconds.")
+    provider: str = Field(
+        default_factory=_default_security_provider,
+        description="windows_hello|cred_ui|test|disabled",
+    )
+
+
+class PresetConfig(BaseModel):
+    active_preset: str = Field(
+        "privacy_first", description="privacy_first or high_fidelity preset name."
+    )
+
+
 class PromptOpsConfig(BaseModel):
     enabled: bool = Field(False)
     schedule_cron: str = Field("0 6 * * 1")
@@ -398,6 +424,8 @@ class AppConfig(BaseModel):
     mode: ModeConfig = ModeConfig()
     routing: ProviderRoutingConfig = ProviderRoutingConfig()
     privacy: PrivacyConfig = PrivacyConfig()
+    security: SecurityConfig = SecurityConfig()
+    presets: PresetConfig = PresetConfig()
     promptops: PromptOpsConfig = PromptOpsConfig()
 
     @field_validator("capture")
@@ -588,6 +616,7 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
     settings_path = Path(config.capture.data_dir) / "settings.json"
     raw = read_settings(settings_path)
     if not raw:
+        apply_preset(config, config.presets.active_preset)
         return config
     routing = raw.get("routing")
     if isinstance(routing, dict):
@@ -610,6 +639,10 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
             config.privacy.snooze_until_utc = None
         elif parsed is not None:
             config.privacy.snooze_until_utc = parsed
+    active_preset = raw.get("active_preset")
+    if isinstance(active_preset, str) and active_preset:
+        config.presets.active_preset = active_preset
+    apply_preset(config, config.presets.active_preset)
     return config
 
 

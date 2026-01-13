@@ -19,7 +19,8 @@ import numpy as np
 from PIL import Image
 from sqlalchemy import func, select
 
-from ..config import CaptureConfig, FFmpegConfig, WorkerConfig
+from .privacy import PrivacyPolicy, get_screen_lock_status
+from ..config import CaptureConfig, FFmpegConfig, PrivacyConfig, WorkerConfig
 from ..logging_utils import get_logger
 from ..observability.metrics import (
     captures_skipped_backpressure_total,
@@ -70,6 +71,7 @@ class CaptureOrchestrator:
         database: DatabaseManager,
         capture_config: CaptureConfig,
         worker_config: WorkerConfig,
+        privacy_config: PrivacyConfig | None = None,
         roi_w: int = 512,
         roi_h: int = 512,
         roi_queue_size: int = 256,
@@ -88,6 +90,8 @@ class CaptureOrchestrator:
         self._database = database
         self._capture_config = capture_config
         self._worker_config = worker_config
+        self._privacy_config = privacy_config or PrivacyConfig()
+        self._privacy_policy = PrivacyPolicy(self._privacy_config)
         self._roi_w = roi_w
         self._roi_h = roi_h
         self._on_ocr_observation = on_ocr_observation
@@ -116,6 +120,8 @@ class CaptureOrchestrator:
         self._segment_video_paths: dict[str, Path] = {}
         self._running = threading.Event()
         self._paused = threading.Event()
+        self._auto_paused = threading.Event()
+        self._auto_pause_reason: str | None = None
         self._capture_thread: Optional[threading.Thread] = None
         self._roi_thread: Optional[threading.Thread] = None
         self._active_segment_id: Optional[str] = None
@@ -134,6 +140,10 @@ class CaptureOrchestrator:
         self._video_disabled_until = 0.0
         self._video_last_drop = 0.0
         self._state_lock = threading.Lock()
+        self._capture_restart_attempts = 0
+        self._capture_restart_limit = 5
+        self._capture_restart_backoff_s = 0.5
+        self._capture_restart_max_backoff_s = 30.0
 
     def start(self) -> None:
         with self._state_lock:
@@ -193,18 +203,59 @@ class CaptureOrchestrator:
         self._paused.clear()
         self._log.info("Capture orchestrator resumed")
 
+    def _set_auto_pause(self, reason: str) -> None:
+        if not self._auto_paused.is_set() or self._auto_pause_reason != reason:
+            self._auto_pause_reason = reason
+            self._auto_paused.set()
+            self._log.info("Capture auto-paused (%s)", reason)
+
+    def _clear_auto_pause(self) -> None:
+        if self._auto_paused.is_set():
+            self._auto_paused.clear()
+            self._auto_pause_reason = None
+            self._log.info("Capture auto-pause cleared")
+
     @property
     def is_paused(self) -> bool:
-        return self._paused.is_set()
+        return self._paused.is_set() or self._auto_paused.is_set()
 
     def _run_capture_loop(self) -> None:  # pragma: no cover - depends on Windows APIs
+        while self._running.is_set():
+            try:
+                self._run_capture_loop_once()
+                if not self._running.is_set():
+                    return
+                self._capture_restart_attempts += 1
+                self._log.warning("Capture loop exited unexpectedly; restarting.")
+            except Exception as exc:
+                self._capture_restart_attempts += 1
+                self._log.exception("Capture loop crashed: {}", exc)
+            if self._capture_restart_attempts >= self._capture_restart_limit:
+                self._log.error(
+                    "Capture loop failed %s times; giving up to avoid crash loop.",
+                    self._capture_restart_attempts,
+                )
+                self._running.clear()
+                return
+            delay = min(self._capture_restart_backoff_s, self._capture_restart_max_backoff_s)
+            self._log.warning("Restarting capture loop in %.1fs", delay)
+            time.sleep(delay)
+            self._capture_restart_backoff_s = min(
+                self._capture_restart_backoff_s * 2, self._capture_restart_max_backoff_s
+            )
+
+    def _run_capture_loop_once(self) -> None:  # pragma: no cover - depends on Windows APIs
         min_interval = self._capture_config.hid.min_interval_ms / 1000
         interval = max(1.0 / max(self._capture_config.hid.fps_soft_cap, 0.01), min_interval)
         try:
             while self._running.is_set():
                 loop_start = time.monotonic()
                 now_ms = int(loop_start * 1000)
-                active = (now_ms < self._raw_input.active_until_ts) and not self._paused.is_set()
+                active = (
+                    (now_ms < self._raw_input.active_until_ts)
+                    and not self._paused.is_set()
+                    and not self._auto_paused.is_set()
+                )
 
                 if active:
                     if not self._was_active:
@@ -255,6 +306,15 @@ class CaptureOrchestrator:
             is_fullscreen = is_fullscreen_window(ctx.hwnd)
         if is_fullscreen and self._capture_config.hid.block_fullscreen:
             return
+        screen_locked, secure_desktop = get_screen_lock_status()
+        decision = self._privacy_policy.evaluate(
+            ctx, screen_locked=screen_locked, secure_desktop=secure_desktop
+        )
+        if not decision.allowed:
+            if decision.auto_pause:
+                self._set_auto_pause(decision.reason or "privacy")
+            return
+        self._clear_auto_pause()
         if monitor and monitor.id in frames:
             roi = self._crop_roi(frames[monitor.id], monitor, cursor_x, cursor_y)
             duplicate = self._duplicate_detector.update(Image.fromarray(np.ascontiguousarray(roi)))

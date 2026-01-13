@@ -21,4 +21,22 @@ if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
 }
 & iscc installer/autocapture.iss /DMyAppVersion=$version
 
+if ($env:AUTOCAPTURE_SIGNING_CERT_PATH) {
+  Write-Host "Signing installer with provided certificate"
+  if (-not (Get-Command signtool -ErrorAction SilentlyContinue)) {
+    throw "signtool not found. Install Windows SDK to enable signing."
+  }
+  $certPath = $env:AUTOCAPTURE_SIGNING_CERT_PATH
+  $installerPath = Join-Path $repoRoot "dist-installer/Autocapture-$version-Setup.exe"
+  $timestampUrl = $env:AUTOCAPTURE_SIGNING_TIMESTAMP_URL
+  if (-not $timestampUrl) {
+    $timestampUrl = "http://timestamp.digicert.com"
+  }
+  $passwordArg = ""
+  if ($env:AUTOCAPTURE_SIGNING_CERT_PASSWORD) {
+    $passwordArg = "/p $env:AUTOCAPTURE_SIGNING_CERT_PASSWORD"
+  }
+  & signtool sign /f $certPath $passwordArg /tr $timestampUrl /td sha256 /fd sha256 $installerPath
+}
+
 Write-Host "Windows release build complete."
