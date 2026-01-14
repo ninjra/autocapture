@@ -449,6 +449,32 @@ class PromptOpsConfig(BaseModel):
     github_token: Optional[str] = Field(None)
     github_repo: Optional[str] = Field(None)
     acceptance_tolerance: float = Field(0.02, ge=0.0, le=1.0)
+    max_iterations: int = Field(3, ge=1)
+    max_llm_attempts_per_prompt: int = Field(3, ge=1)
+    eval_repeats: int = Field(3, ge=1)
+    eval_aggregation: str = Field("worst_case")
+    require_improvement: bool = Field(True)
+    min_delta_verifier_pass_rate: float = Field(0.02)
+    min_delta_citation_coverage: float = Field(0.02)
+    min_delta_refusal_rate: float = Field(0.02)
+    min_delta_latency_ms: float = Field(200.0)
+    tolerance_citation_coverage: float = Field(0.02)
+    tolerance_refusal_rate: float = Field(0.02)
+    tolerance_latency_ms: float = Field(250.0)
+    min_verifier_pass_rate: float = Field(0.60)
+    min_citation_coverage: float = Field(0.60)
+    max_refusal_rate: float = Field(0.30)
+    max_mean_latency_ms: float = Field(15000.0)
+    max_source_bytes: int = Field(1_048_576, ge=1)
+    max_source_excerpt_chars: int = Field(2000, ge=1)
+    max_sources: int = Field(32, ge=1)
+
+    @field_validator("eval_aggregation")
+    @classmethod
+    def validate_eval_aggregation(cls, value: str) -> str:
+        if value not in {"worst_case", "mean"}:
+            raise ValueError("promptops.eval_aggregation must be 'worst_case' or 'mean'")
+        return value
 
 
 class LLMConfig(BaseModel):
