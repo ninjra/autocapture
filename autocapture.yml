@@ -76,6 +76,27 @@ promptops:
   sources: []
   github_token: null
   github_repo: "https://github.com/ninjra/promptops"
+  # Phase 1 settings (PromptOps)
+  max_iterations: 3
+  max_llm_attempts_per_prompt: 3
+  eval_repeats: 3
+  eval_aggregation: "worst_case"
+  require_improvement: true
+  min_delta_verifier_pass_rate: 0.02
+  min_delta_citation_coverage: 0.02
+  min_delta_refusal_rate: 0.02
+  min_delta_latency_ms: 200.0
+  acceptance_tolerance: 0.02
+  tolerance_citation_coverage: 0.02
+  tolerance_refusal_rate: 0.02
+  tolerance_latency_ms: 250.0
+  min_verifier_pass_rate: 0.60
+  min_citation_coverage: 0.60
+  max_refusal_rate: 0.30
+  max_mean_latency_ms: 15000.0
+  max_source_bytes: 1048576
+  max_source_excerpt_chars: 2000
+  max_sources: 32
 capture:
   hid:
     min_interval_ms: 500

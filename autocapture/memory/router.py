@@ -28,12 +28,11 @@ class ProviderRouter:
         self._privacy = privacy
 
     def select_llm(self) -> tuple[LLMProvider, RoutingDecision]:
-        if self._offline and not self._privacy.cloud_enabled:
-            if self._routing.llm == "openai":
-                raise RuntimeError(
-                    "Offline mode enabled; cloud provider blocked. Enable a cloud profile "
-                    "(privacy.cloud_enabled=true and offline=false) to allow egress."
-                )
+        if self._routing.llm == "openai" and not self._privacy.cloud_enabled:
+            raise RuntimeError(
+                "Cloud provider blocked. Enable a cloud profile (privacy.cloud_enabled=true) "
+                "to allow OpenAI usage."
+            )
         if self._routing.llm == "openai_compatible":
             base_url = self._llm_config.openai_compatible_base_url
             if not base_url:
