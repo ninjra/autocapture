@@ -12,7 +12,16 @@ def test_parse_no_semantic_change_keeps_version() -> None:
         derived_template="derived",
         tags=["a"],
     )
-    response = "name: TEST\nversion: v99\nrationale: keep\n"
+    response = (
+        "name: TEST\n"
+        "version: v99\n"
+        "system_prompt: system\n"
+        "raw_template: raw\n"
+        "derived_template: derived\n"
+        "tags:\n"
+        "  - a\n"
+        "rationale: keep\n"
+    )
     parsed = _parse_promptops_response(response, current)
     assert parsed.version == "v3"
     assert parsed.raw_template == "raw"
@@ -28,7 +37,16 @@ def test_parse_bumps_version_on_change() -> None:
         derived_template="derived",
         tags=["a"],
     )
-    response = "name: TEST\nsystem_prompt: updated\n"
+    response = (
+        "name: TEST\n"
+        "version: v1\n"
+        "system_prompt: updated\n"
+        "raw_template: raw\n"
+        "derived_template: derived\n"
+        "tags:\n"
+        "  - a\n"
+        "rationale: updated\n"
+    )
     parsed = _parse_promptops_response(response, current)
     assert parsed.version == "v2"
     assert parsed.system_prompt == "updated"
@@ -43,7 +61,16 @@ def test_parse_defaults_templates_to_current() -> None:
         derived_template="derived",
         tags=["a"],
     )
-    response = "name: TEST\nsystem_prompt: updated\n"
+    response = (
+        "name: TEST\n"
+        "version: v5\n"
+        "system_prompt: updated\n"
+        "raw_template: raw\n"
+        "derived_template: derived\n"
+        "tags:\n"
+        "  - a\n"
+        "rationale: updated\n"
+    )
     parsed = _parse_promptops_response(response, current)
     assert parsed.raw_template == "raw"
     assert parsed.derived_template == "derived"
