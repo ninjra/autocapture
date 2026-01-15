@@ -25,3 +25,11 @@
 - Gates (Phase 2): `poetry run pytest -q` timed out after 300s.
 - Gates (Phase 2): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
 - Gates (Phase 2): `poetry run python tools/freeze_surfaces.py verify` OK.
+- Phase 3: added query refinement prompt + AnswerGraph prompt-based refinement fallback.
+- Phase 3: added PromptOps Jinja2 sandbox validation + prompt size guard.
+- Phase 3 tests: added refinement tests + PromptOps validation coverage.
+- Gates (Phase 3): `poetry run ruff check .` OK.
+- Gates (Phase 3): `poetry run black --check .` OK.
+- Gates (Phase 3): `poetry run pytest -q` timed out after 300s.
+- Gates (Phase 3): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
+- Gates (Phase 3): `poetry run python tools/freeze_surfaces.py verify` OK.

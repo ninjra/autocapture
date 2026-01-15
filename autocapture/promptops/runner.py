@@ -15,6 +15,7 @@ from typing import Iterable, Optional
 from urllib.parse import urlparse
 
 import httpx
+from jinja2 import Environment, nodes
 import yaml
 
 from ..config import AppConfig, PromptOpsConfig
@@ -152,9 +153,7 @@ class PromptOpsRunner:
                         return session.get(PromptOpsRunRecord, run_id)
 
                 proposed_runs = self._run_eval_repeats(overrides=proposals)
-                proposed_aggregated = aggregate_metrics(
-                    proposed_runs, promptops.eval_aggregation
-                )
+                proposed_aggregated = aggregate_metrics(proposed_runs, promptops.eval_aggregation)
                 gate = gate_decision(promptops, baseline_aggregated, proposed_aggregated)
                 last_gate = gate
                 eval_results["attempts"].append(
@@ -368,6 +367,7 @@ class PromptOpsRunner:
             response = asyncio.run(llm.generate_answer(system_prompt, query, context))
             try:
                 spec = _parse_promptops_response(response, prompt)
+                _validate_prompt_spec(spec, self._config.promptops.max_prompt_chars)
                 break
             except Exception as exc:
                 last_error = str(exc)
@@ -515,7 +515,9 @@ def _is_noop_proposals(proposals: list[PromptProposal]) -> bool:
             derived_existing = ""
         if _normalize_whitespace(raw_existing) != _normalize_whitespace(proposal.raw_content):
             return False
-        if _normalize_whitespace(derived_existing) != _normalize_whitespace(proposal.derived_content):
+        if _normalize_whitespace(derived_existing) != _normalize_whitespace(
+            proposal.derived_content
+        ):
             return False
     return True
 
@@ -638,6 +640,33 @@ def _parse_promptops_response(response: str, current: PromptSpec) -> PromptSpec:
         tags=tags,
         rationale=rationale,
     )
+
+
+def _validate_prompt_spec(spec: PromptSpec, max_chars: int) -> None:
+    _validate_prompt_template(spec.system_prompt, max_chars, label="system_prompt")
+    _validate_prompt_template(spec.raw_template, max_chars, label="raw_template")
+    _validate_prompt_template(spec.derived_template, max_chars, label="derived_template")
+
+
+def _validate_prompt_template(template: str, max_chars: int, *, label: str) -> None:
+    if len(template) > max_chars:
+        raise ValueError(f"PromptOps {label} exceeds max length ({max_chars} chars)")
+    if "__" in template:
+        raise ValueError(f"PromptOps {label} contains disallowed dunder sequence")
+    parsed = Environment().parse(template)
+    forbidden_nodes = (
+        nodes.Import,
+        nodes.FromImport,
+        nodes.Include,
+        nodes.Extends,
+        nodes.Macro,
+        nodes.CallBlock,
+    )
+    for node_type in forbidden_nodes:
+        if any(parsed.find_all(node_type)):
+            raise ValueError(
+                f"PromptOps {label} contains forbidden Jinja2 construct: {node_type.__name__}"
+            )
 
 
 def _extract_yaml(response: str) -> str:

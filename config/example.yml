@@ -100,6 +100,7 @@ promptops:
   min_citation_coverage: 0.60
   max_refusal_rate: 0.30
   max_mean_latency_ms: 15000.0
+  max_prompt_chars: 12000
   max_source_bytes: 1048576
   max_source_excerpt_chars: 2000
   max_sources: 32

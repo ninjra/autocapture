@@ -472,6 +472,7 @@ class PromptOpsConfig(BaseModel):
     min_citation_coverage: float = Field(0.60)
     max_refusal_rate: float = Field(0.30)
     max_mean_latency_ms: float = Field(15000.0)
+    max_prompt_chars: int = Field(12000, ge=1)
     max_source_bytes: int = Field(1_048_576, ge=1)
     max_source_excerpt_chars: int = Field(2000, ge=1)
     max_sources: int = Field(32, ge=1)

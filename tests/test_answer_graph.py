@@ -37,6 +37,16 @@ class _StubProvider:
         return "Answer [E1]"
 
 
+class _RefineProvider:
+    async def generate_answer(self, *_args, **_kwargs):
+        return '{"refined_query": "hello notes"}'
+
+
+class _BadRefineProvider:
+    async def generate_answer(self, *_args, **_kwargs):
+        return "not-json"
+
+
 def _setup_graph() -> tuple[AnswerGraph, RetrievalService, DatabaseManager]:
     config = AppConfig(database=DatabaseConfig(url="sqlite:///:memory:", sqlite_wal=False))
     db = DatabaseManager(config.database)
@@ -105,3 +115,27 @@ def test_answer_graph_llm_path(monkeypatch) -> None:
     )
     assert result.answer
     assert "E1" in result.citations
+
+
+def test_refine_query_uses_prompt_output(monkeypatch) -> None:
+    graph, _retrieval, _db = _setup_graph()
+
+    def _select_llm(self):
+        return _RefineProvider(), type("Decision", (), {"llm_provider": "stub"})()
+
+    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _select_llm)
+    evidence, _events = graph._build_evidence("hello", None, None, 2, sanitized=False)
+    refined = asyncio.run(graph._refine_query("hello", evidence))
+    assert refined == "hello notes"
+
+
+def test_refine_query_falls_back_on_invalid_output(monkeypatch) -> None:
+    graph, _retrieval, _db = _setup_graph()
+
+    def _select_llm(self):
+        return _BadRefineProvider(), type("Decision", (), {"llm_provider": "stub"})()
+
+    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _select_llm)
+    evidence, _events = graph._build_evidence("hello", None, None, 2, sanitized=False)
+    refined = asyncio.run(graph._refine_query("hello", evidence))
+    assert refined == "hello Editor"
