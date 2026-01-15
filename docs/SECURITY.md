@@ -23,6 +23,13 @@
 - On POSIX systems, secret files are tightened to `0600` permissions (best effort).
 - Avoid logging sensitive data.
 
+## Key portability (export/import)
+- Export an encrypted bundle: `autocapture keys export --out keys.json --password "passphrase"`.
+- Import on a new machine: `autocapture keys import keys.json --password "passphrase"`.
+- Bundles use scrypt-derived keys + AES-256-GCM; losing the password means the keys are unrecoverable.
+- Import writes keys into the configured secure storage (DPAPI-backed files on Windows, `0600` files on POSIX).
+- If a key provider is `env:*`, set the environment variable manually after import.
+
 ## Database encryption at rest
 - SQLite can be encrypted with SQLCipher by enabling `database.encryption_enabled`.
 - SQLCipher keys can be stored via DPAPI-protected files (`dpapi_file`), plain files, or env vars.
