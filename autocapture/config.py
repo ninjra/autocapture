@@ -173,6 +173,10 @@ class OCRConfig(BaseModel):
     max_latency_s: int = Field(900, ge=10)
     engine: str = Field("rapidocr-onnxruntime")
     device: str = Field("cuda", description="cuda|cpu; cuda preferred when available")
+    onnx_providers: list[str] = Field(
+        default_factory=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        description="Preferred ONNX Runtime execution providers (ordered).",
+    )
     languages: list[str] = Field(default_factory=lambda: ["en"])
     output_format: str = Field("json")
 
@@ -241,7 +245,7 @@ class RetentionPolicyConfig(BaseModel):
     roi_days: int = Field(14, ge=1)
     max_media_gb: int = Field(200, ge=1)
     screenshot_ttl_days: int = Field(
-        90, ge=1, description="Days to keep raw screenshots before pruning."
+        60, ge=1, description="Days to keep raw screenshots before pruning."
     )
     protect_recent_minutes: int = Field(
         60, ge=1, description="Protect media newer than this window from pruning."

@@ -33,3 +33,11 @@
 - Gates (Phase 3): `poetry run pytest -q` timed out after 300s.
 - Gates (Phase 3): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
 - Gates (Phase 3): `poetry run python tools/freeze_surfaces.py verify` OK.
+- Phase 4: pinned OCR provider selection + removed RapidOCR signature inspection.
+- Phase 4: set default screenshot TTL to 60 days and updated configs/tests.
+- Phase 4 tests: added RapidOCR kwargs/provider selection coverage + retention default test.
+- Gates (Phase 4): `poetry run ruff check .` OK.
+- Gates (Phase 4): `poetry run black --check .` OK.
+- Gates (Phase 4): `poetry run pytest -q` timed out after 300s.
+- Gates (Phase 4): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
+- Gates (Phase 4): `poetry run python tools/freeze_surfaces.py verify` OK.

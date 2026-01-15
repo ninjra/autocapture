@@ -151,6 +151,9 @@ ocr:
   max_latency_s: 900
   engine: "rapidocr-onnxruntime"
   device: "cuda"
+  onnx_providers:
+    - "CUDAExecutionProvider"
+    - "CPUExecutionProvider"
   languages: ["en"]
   output_format: "json"
 embed:
@@ -183,7 +186,7 @@ retention:
   video_days: 3
   roi_days: 7
   max_media_gb: 200
-  screenshot_ttl_days: 30
+  screenshot_ttl_days: 60
 storage:
   image_quota_gb: 2500
   prune_grace_days: 90
