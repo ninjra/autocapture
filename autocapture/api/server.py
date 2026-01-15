@@ -64,6 +64,8 @@ class RetrieveRequest(BaseModel):
     time_range: Optional[tuple[dt.datetime, dt.datetime]] = None
     filters: Optional[dict[str, list[str]]] = None
     k: int = Field(8, ge=1, le=100)
+    page: int = Field(0, ge=0)
+    page_size: Optional[int] = Field(None, ge=1)
     sanitize: Optional[bool] = None
     extractive_only: Optional[bool] = None
     include_screenshots: bool = False
@@ -664,7 +666,7 @@ def create_app(
     @app.post("/api/retrieve")
     def retrieve(request: RetrieveRequest) -> RetrieveResponse:
         _validate_query(request.query, config)
-        k = _cap_k(request.k, config)
+        offset, limit = _resolve_retrieve_paging(request, config)
         _record_query_history(db, request.query)
         evidence, events = _build_evidence(
             retrieval,
@@ -673,7 +675,8 @@ def create_app(
             request.query,
             request.time_range,
             request.filters,
-            k,
+            limit,
+            offset=offset,
             sanitized=_resolve_bool(request.sanitize, config.privacy.sanitize_default),
         )
         event_map = {event.event_id: event for event in events}
@@ -1083,6 +1086,19 @@ def _cap_k(k: int, config: AppConfig) -> int:
     return k
 
 
+def _resolve_retrieve_paging(request: RetrieveRequest, config: AppConfig) -> tuple[int, int]:
+    fields_set = getattr(request, "model_fields_set", set())
+    page = max(0, request.page)
+    if "page_size" in fields_set:
+        page_size = request.page_size or config.api.default_page_size
+    elif "k" in fields_set:
+        page_size = request.k
+    else:
+        page_size = config.api.default_page_size
+    page_size = max(1, min(page_size, config.api.max_page_size))
+    return page * page_size, page_size
+
+
 def _model_dump(model: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
@@ -1125,11 +1141,12 @@ def _build_evidence(
     filters: Optional[dict[str, list[str]]],
     k: int,
     sanitized: bool,
+    offset: int = 0,
 ) -> tuple[list[EvidenceItem], list[EventRecord]]:
     retrieve_filters = None
     if filters:
         retrieve_filters = RetrieveFilters(apps=filters.get("app"), domains=filters.get("domain"))
-    results = retrieval.retrieve(query, time_range, retrieve_filters, limit=k)
+    results = retrieval.retrieve(query, time_range, retrieve_filters, limit=k, offset=offset)
     evidence: list[EvidenceItem] = []
     events: list[EventRecord] = []
     for idx, result in enumerate(results, start=1):

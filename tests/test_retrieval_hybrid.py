@@ -38,6 +38,11 @@ class FakeVector:
         return self._hits
 
 
+class StubReranker:
+    def rank(self, query, documents):
+        return [1.0 if "Slack" in doc else 0.1 for doc in documents]
+
+
 def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
     config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
     config.embed.text_model = "local-test"
@@ -132,3 +137,125 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
     results = retrieval.retrieve("roadmap", None, None, limit=2)
     assert results
     assert results[0].event.event_id == "EOLD"
+
+
+def test_reranker_overrides_hybrid_scores(tmp_path: Path) -> None:
+    config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
+    config.embed.text_model = "local-test"
+    config.routing.reranker = "enabled"
+    config.reranker.enabled = True
+    db = DatabaseManager(config.database)
+
+    event_a = EventRecord(
+        event_id="EOLD",
+        ts_start=dt.datetime.now(dt.timezone.utc),
+        ts_end=None,
+        app_name="Notion",
+        window_title="Roadmap",
+        url=None,
+        domain=None,
+        screenshot_path=None,
+        screenshot_hash="hash",
+        ocr_text="Project roadmap details",
+        embedding_vector=None,
+        tags={},
+    )
+    event_b = EventRecord(
+        event_id="ENEW",
+        ts_start=dt.datetime.now(dt.timezone.utc),
+        ts_end=None,
+        app_name="Slack",
+        window_title="Chat",
+        url=None,
+        domain=None,
+        screenshot_path=None,
+        screenshot_hash="hash2",
+        ocr_text="Random chatter",
+        embedding_vector=None,
+        tags={},
+    )
+    with db.session() as session:
+        session.add(event_a)
+        session.add(event_b)
+
+    retrieval = RetrievalService(db, config, reranker=StubReranker())
+    retrieval._embedder = FakeEmbedder()  # type: ignore[attr-defined]
+    retrieval._lexical = FakeLexical(
+        [
+            LexicalHit(event_id="EOLD", score=0.9),
+            LexicalHit(event_id="ENEW", score=0.2),
+        ]
+    )  # type: ignore[attr-defined]
+    retrieval._vector = FakeVector(
+        [
+            VectorHit(event_id="EOLD", span_key="S1", score=0.9),
+            VectorHit(event_id="ENEW", span_key="S1", score=0.1),
+        ]
+    )  # type: ignore[attr-defined]
+
+    results = retrieval.retrieve("roadmap", None, None, limit=2)
+    assert results
+    assert results[0].event.event_id == "ENEW"
+
+
+def test_retrieve_offset_applies_to_fallback_query(tmp_path: Path) -> None:
+    config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
+    config.embed.text_model = "local-test"
+    db = DatabaseManager(config.database)
+
+    now = dt.datetime.now(dt.timezone.utc)
+    events = [
+        EventRecord(
+            event_id="E1",
+            ts_start=now - dt.timedelta(hours=2),
+            ts_end=None,
+            app_name="Notion",
+            window_title="Doc",
+            url=None,
+            domain=None,
+            screenshot_path=None,
+            screenshot_hash="hash1",
+            ocr_text="alpha beta",
+            embedding_vector=None,
+            tags={},
+        ),
+        EventRecord(
+            event_id="E2",
+            ts_start=now - dt.timedelta(hours=1),
+            ts_end=None,
+            app_name="Notion",
+            window_title="Doc",
+            url=None,
+            domain=None,
+            screenshot_path=None,
+            screenshot_hash="hash2",
+            ocr_text="alpha gamma",
+            embedding_vector=None,
+            tags={},
+        ),
+        EventRecord(
+            event_id="E3",
+            ts_start=now,
+            ts_end=None,
+            app_name="Notion",
+            window_title="Doc",
+            url=None,
+            domain=None,
+            screenshot_path=None,
+            screenshot_hash="hash3",
+            ocr_text="alpha delta",
+            embedding_vector=None,
+            tags={},
+        ),
+    ]
+    with db.session() as session:
+        session.add_all(events)
+
+    retrieval = RetrievalService(db, config)
+    retrieval._embedder = FakeEmbedder()  # type: ignore[attr-defined]
+    retrieval._lexical = FakeLexical([])  # type: ignore[attr-defined]
+    retrieval._vector = FakeVector([])  # type: ignore[attr-defined]
+
+    results = retrieval.retrieve("alpha", None, None, limit=1, offset=1)
+    assert results
+    assert results[0].event.event_id == "E2"

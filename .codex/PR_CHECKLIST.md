@@ -10,3 +10,4 @@
 
 Status:
 - 2026-01-15: ruff OK; black OK; pytest timed out after 300s; doctor failed creating `/home/ninjra/AppData/Local/Autocapture`; freeze verify OK.
+- 2026-01-15 (Phase 1): ruff OK; black OK; pytest timed out after 300s; doctor failed creating `/home/ninjra/AppData/Local/Autocapture`; freeze verify OK.
