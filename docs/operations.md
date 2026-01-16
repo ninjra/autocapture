@@ -26,6 +26,12 @@ Acceleration references:
 - NVIDIA RTX local acceleration: https://developer.nvidia.com/blog/open-source-ai-tool-upgrades-speed-up-llm-and-diffusion-models-on-nvidia-rtx-pcs/
 - Tiny diffusion experiments: https://github.com/nathan-barry/tiny-diffusion
 
+## Doctor + Windows paths
+
+If `autocapture doctor` reports a writable-path failure on Windows, confirm
+`LOCALAPPDATA` is set (Git Bash/MSYS sometimes omits it) or explicitly set
+`capture.data_dir`/`capture.staging_dir` in your config.
+
 ## Model Stages (Routing)
 
 Use `model_stages` to route query refinement, draft generation, final answer, and tool
@@ -36,7 +42,8 @@ transform stages. Each stage can override provider/model/base_url and requires
 
 `output.format` controls answer serialization (`text`, `json`, or `tron`). The context
 pack payload sent to LLMs is controlled by `output.context_pack_format` (`json` or
-`tron`).
+`tron`). For cloud stages, TRON context packs require `output.allow_tron_compression=true`
+(default `false`).
 
 ## Research Scout
 
@@ -47,6 +54,8 @@ poetry run autocapture research scout --out "docs/research/scout_report.json"
 ```
 
 The scout appends a short summary to `docs/research/scout_log.md` by default.
+Scheduled runs are available via `.github/workflows/research-scout.yml`, which
+opens a PR only when the ranked list changes beyond the configured threshold.
 
 ## TNAS Service Hosting (Optional)
 
@@ -80,13 +89,13 @@ you want centralized storage or shared services.
 1. **Prometheus**
    - Deploy Prometheus as a NAS container mounting `metrics/prom-data` and a
      configuration file that scrapes the workstation exporter (e.g.,
-     `workstation.lan:9005`).
+     `<capture-host>:9005`).
    - Verify connectivity from the NAS to the workstation by running
-     `docker exec prometheus wget -qO- http://workstation.lan:9005/metrics`.
+     `docker exec prometheus wget -qO- http://<capture-host>:9005/metrics`.
 
 2. **Grafana Dashboards**
    - Host Grafana on the NAS alongside Prometheus. After the container starts,
-     log in at `http://nas.local:3000`, add Prometheus (e.g.,
+     log in at `http://<grafana-host>:3000`, add Prometheus (e.g.,
      `http://prometheus:9090`) as a data source, and import
      `docs/dashboard.json`.
    - Configure folders and permissions if you create additional dashboards.

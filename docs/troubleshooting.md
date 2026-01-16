@@ -9,7 +9,7 @@ from the workstation to ensure PyCharm can see all tracked files:
 
 1. **Confirm the Git repository is recognised.**
    - In PyCharm, open *File → Settings → Version Control*.
-   - Ensure the project root (e.g. `D:\pycharm\autoscreenshjot+ocr\autocapture`)
+   - Ensure the project root (e.g. `<repo-root>`)
      appears under *Directory* with `Git` listed in the *VCS* column.
    - If it is missing, click the `+` icon, select the repository directory, and
      choose `Git` as the VCS type.
@@ -86,12 +86,12 @@ service (or in your shell) before launching Autocapture:
 
 ```powershell
 $env:AUTOCAPTURE_DEBUG_SPAWN = "1"
-$env:AUTOCAPTURE_DEBUG_SPAWN_LOG = "D:/autocapture/logs/spawn-debug.log"  # optional
+$env:AUTOCAPTURE_DEBUG_SPAWN_LOG = "%LOCALAPPDATA%/Autocapture/logs/spawn-debug.log"  # optional
 python -m autocapture.main --config autocapture.yml
 ```
 
 Each process writes its PID, interpreter path, and a traceback to the specified
 log file whenever something calls :func:`subprocess.Popen`, :func:`subprocess.run`,
-or the Windows ``multiprocessing`` spawn helpers. Inspect the latest entries in
+or the Windows ``multiprocessing`` spawn helpers. Inspect the most recent entries in
 that log to identify which code path is requesting a new Python interpreter and
 adjust the configuration accordingly.

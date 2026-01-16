@@ -23,6 +23,7 @@ Autocapture is a local-first Personal Activity Memory Engine. It captures activi
 - `autocapture/memory/retrieval.py` fetches event evidence from SQLite.
 - `autocapture/memory/context_pack.py` formats JSON + canonical text context packs.
   - Daily highlight snippets are attached under `aggregates`.
+  - Evidence payloads include event_id, timestamps, and screenshot metadata for citations.
 - `autocapture/format/tron.py` adds TRON encode/decode for compact structured payloads.
 
 ### Providers + Routing
@@ -35,7 +36,7 @@ Autocapture is a local-first Personal Activity Memory Engine. It captures activi
 
 ### Time Intent
 - `autocapture/memory/time_intent.py` deterministically parses time expressions for
-  time-range retrieval and timeline answers.
+  time-range retrieval and timeline answers (time-only queries return short timelines).
 
 ### Research Scout
 - `autocapture/research/scout.py` discovers recent models/papers, caches results, and
@@ -52,7 +53,7 @@ The local SQLite DB contains:
 - `entities`, `entity_aliases` (alias graph)
 - `daily_aggregates` (time-series metrics)
 - `agent_jobs`, `agent_results` (agent queue + outputs)
-- `event_enrichments` (latest enrichment pointer per event)
+- `event_enrichments` (most recent enrichment pointer per event)
 - `daily_highlights` (nightly summaries)
 - `token_vault` (encrypted reversible tokens)
 - `prompt_library`, `prompt_ops_runs`
@@ -64,3 +65,6 @@ The local SQLite DB contains:
 ## Configuration
 - `autocapture/config.py` defines configuration for mode, routing, privacy, retention, and PromptOps.
 - `config/example.yml` is the reference configuration.
+
+## Repo Memory
+- `.memory/` stores append-only critical memory (constraints + ADRs), enforced by `.tools/memory_guard.py`.

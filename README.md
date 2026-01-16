@@ -69,6 +69,8 @@ poetry run black --check .
 poetry run pytest -q
 ```
 
+Node.js is not required for the core workflows; the UI assets are bundled in the repo.
+
 PowerShell helper:
 ```powershell
 .\dev.ps1 check
@@ -123,7 +125,7 @@ poetry run autocapture promptops list
 Create a portable backup for the last 90 days of events (default):
 
 ```powershell
-poetry run autocapture export --out "D:/autocapture/export.zip"
+poetry run autocapture export --out "%LOCALAPPDATA%/Autocapture/export.zip"
 ```
 
 Use `--no-zip` to write a folder instead of a zip archive, and `--days N` to change the
@@ -135,6 +137,17 @@ Generate a local model/paper discovery report:
 
 ```powershell
 poetry run autocapture research scout --out "docs/research/scout_report.json"
+```
+
+Scheduled runs are available via `.github/workflows/research-scout.yml`, which
+opens a PR only when the ranked list changes beyond the configured threshold.
+
+## Repo memory
+
+This repo maintains an append-only critical memory in `.memory/`. Validate it with:
+
+```powershell
+python .tools/memory_guard.py --check
 ```
 
 ## License
