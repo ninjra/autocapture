@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote_plus
 import xml.etree.ElementTree as ET
 
 import httpx
@@ -24,6 +24,61 @@ ARXIV_KEYWORDS = [
     "prompt repetition",
     "prompt duplication",
 ]
+STOPWORDS = {
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "if",
+    "then",
+    "else",
+    "when",
+    "while",
+    "for",
+    "to",
+    "of",
+    "in",
+    "on",
+    "at",
+    "by",
+    "as",
+    "with",
+    "without",
+    "from",
+    "into",
+    "over",
+    "under",
+    "between",
+    "among",
+    "about",
+    "around",
+    "through",
+    "during",
+    "before",
+    "after",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "this",
+    "that",
+    "these",
+    "those",
+    "it",
+    "its",
+    "we",
+    "our",
+    "you",
+    "your",
+}
+_NORMALIZATION_MAP = {
+    "repitition": "repetition",
+}
 _CACHE_VERSION = 1
 
 
@@ -230,13 +285,16 @@ def _fetch_hf_items(client: httpx.Client) -> list[dict[str, Any]]:
 
 
 def _fetch_arxiv_items(client: httpx.Client, *, now: dt.datetime) -> list[dict[str, Any]]:
-    query = " OR ".join([f'all:"{keyword}"' for keyword in ARXIV_KEYWORDS])
-    url = (
-        "https://export.arxiv.org/api/query"
-        f"?search_query={quote_plus(query)}&sortBy=submittedDate&sortOrder=descending"
-        "&max_results=20"
+    query = _build_arxiv_query(ARXIV_KEYWORDS)
+    response = client.get(
+        "https://export.arxiv.org/api/query",
+        params={
+            "search_query": query,
+            "sortBy": "submittedDate",
+            "sortOrder": "descending",
+            "max_results": 20,
+        },
     )
-    response = client.get(url)
     response.raise_for_status()
     root = ET.fromstring(response.text)
     ns = {"atom": "http://www.w3.org/2005/Atom"}
@@ -269,11 +327,98 @@ def _fetch_arxiv_items(client: httpx.Client, *, now: dt.datetime) -> list[dict[s
 
 
 def _match_keyword(title: str, summary: str) -> str | None:
-    text = f"{title} {summary}".lower()
+    text = _normalize_phrase(f"{title} {summary}")
+    text_tokens = _significant_tokens(text)
+    tokens_in_text = set(text_tokens)
     for keyword in ARXIV_KEYWORDS:
-        if keyword in text:
+        phrases = _keyword_phrase_variants(keyword)
+        if any(phrase in text for phrase in phrases):
             return keyword
+        if " " in keyword and len(_significant_tokens(keyword)) >= 2:
+            tokens = _significant_tokens(keyword)
+            if all(
+                token in tokens_in_text
+                or any(text_token.startswith(token) for text_token in text_tokens)
+                for token in tokens
+            ):
+                return keyword
     return None
+
+
+def _build_arxiv_query(keywords: list[str]) -> str:
+    clauses: list[str] = []
+    seen = set()
+    for keyword in keywords:
+        phrases = _keyword_phrase_variants(keyword)
+        if len(phrases) == 1:
+            phrase_clause = f'all:"{phrases[0]}"'
+        else:
+            phrase_clause = "(" + " OR ".join([f'all:"{phrase}"' for phrase in phrases]) + ")"
+        tokens = _significant_tokens(keyword)
+        if " " in keyword and len(tokens) >= 2:
+            token_clause = "(" + " AND ".join([f'all:"{token}"' for token in tokens]) + ")"
+            keyword_clause = f"({phrase_clause} OR {token_clause})"
+        else:
+            keyword_clause = phrase_clause
+        if keyword_clause in seen:
+            continue
+        seen.add(keyword_clause)
+        clauses.append(keyword_clause)
+    return " OR ".join(clauses)
+
+
+def _keyword_phrase_variants(keyword: str) -> list[str]:
+    base = _normalize_phrase(keyword).strip()
+    variants = [base]
+    if "-" in base and " " not in base:
+        variants.append(" ".join(base.replace("-", " ").split()))
+    return _stable_dedupe(variants)
+
+
+def _significant_tokens(keyword: str) -> list[str]:
+    tokens: list[str] = []
+    seen = set()
+    for token in _extract_tokens(keyword):
+        if token in STOPWORDS:
+            continue
+        if len(token) < 4:
+            continue
+        if token.isdigit():
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return tokens
+
+
+def _extract_tokens(text: str) -> list[str]:
+    normalized = _normalize_phrase(text)
+    tokens = []
+    for match in re.findall(r"[a-z0-9]+", normalized):
+        tokens.append(_NORMALIZATION_MAP.get(match, match))
+    return tokens
+
+
+def _normalize_phrase(value: str) -> str:
+    normalized = (value or "").strip().lower()
+
+    def replace_token(match: re.Match[str]) -> str:
+        token = match.group(0)
+        return _NORMALIZATION_MAP.get(token, token)
+
+    return re.sub(r"[a-z0-9]+", replace_token, normalized)
+
+
+def _stable_dedupe(items: list[str]) -> list[str]:
+    seen = set()
+    output: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        output.append(item)
+    return output
 
 
 def _clean_text(value: str) -> str:

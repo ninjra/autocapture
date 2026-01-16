@@ -9,7 +9,10 @@ papers, then writes a ranked report plus an append-only log.
 - Hugging Face tags: vision-language, ocr, reranker, embeddings.
 - arXiv keywords: "vision-language", "document understanding", "reranking",
   "screen understanding", "diffusion transformer", "prompt repetition",
-  "prompt duplication".
+  "prompt duplication". Multi-word phrases are treated as exact phrases and
+  expanded into required-token matches after stopword filtering (e.g., "prompt
+  repetition" matches the phrase or papers that mention both prompt and
+  repetition anywhere in the text).
 
 ## Interesting Now
 
