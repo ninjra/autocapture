@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime as dt
-import inspect
 import re
 import threading
 import time
@@ -38,17 +37,23 @@ def _available_onnx_providers() -> list[str]:
     return list(ort.get_available_providers())
 
 
-def _build_rapidocr_kwargs(rapidocr_cls, use_cuda: bool) -> dict[str, object]:
-    try:
-        sig = inspect.signature(rapidocr_cls.__init__)
-    except (TypeError, ValueError):
-        return {}
-    supported = sig.parameters
-    kwargs: dict[str, object] = {}
-    for key in ("use_cuda", "det_use_cuda", "cls_use_cuda", "rec_use_cuda", "use_gpu"):
-        if key in supported:
-            kwargs[key] = use_cuda
-    return kwargs
+def _select_onnx_provider(config: OCRConfig, providers: list[str]) -> tuple[str | None, bool]:
+    preferred = list(config.onnx_providers or [])
+    device = config.device.lower()
+    if device == "cpu":
+        preferred = ["CPUExecutionProvider"]
+    elif device == "cuda" and not preferred:
+        preferred = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    if not preferred:
+        preferred = ["CPUExecutionProvider"]
+    for provider in preferred:
+        if provider in providers:
+            return provider, provider == "CUDAExecutionProvider"
+    return None, False
+
+
+def _build_rapidocr_kwargs(use_cuda: bool) -> dict[str, object]:
+    return {"use_cuda": use_cuda}
 
 
 @dataclass(frozen=True)
@@ -70,17 +75,16 @@ class OCRProcessor:
         self._log = get_logger("ocr")
         providers = _available_onnx_providers()
         self._log.info("ONNX Runtime providers available: {}", providers or "none")
-        use_cuda = config.device.lower() == "cuda"
-        if use_cuda and "CUDAExecutionProvider" not in providers:
+        selected, use_cuda = _select_onnx_provider(config, providers)
+        if config.device.lower() == "cuda" and selected != "CUDAExecutionProvider":
             self._log.warning(
                 "OCR device=cuda but CUDAExecutionProvider unavailable; falling back to CPU. "
                 "Install onnxruntime-gpu and CUDA/cuDNN."
             )
-            use_cuda = False
-        selected = "CUDAExecutionProvider" if use_cuda else "CPUExecutionProvider"
-        self._log.info("OCR execution provider selected: {}", selected)
+        selected_name = selected or "none"
+        self._log.info("OCR execution provider selected: {}", selected_name)
 
-        kwargs = _build_rapidocr_kwargs(RapidOCR, use_cuda)
+        kwargs = _build_rapidocr_kwargs(use_cuda)
         if kwargs:
             self._log.info("RapidOCR init kwargs: {}", kwargs)
         self._engine = RapidOCR(**kwargs)

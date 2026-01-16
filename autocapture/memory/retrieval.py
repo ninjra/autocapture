@@ -18,6 +18,7 @@ from ..logging_utils import get_logger
 from ..observability.metrics import retrieval_latency_ms, vector_search_failures_total
 from ..storage.database import DatabaseManager
 from ..storage.models import EventRecord
+from .reranker import CrossEncoderReranker
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,7 @@ class RetrievalService:
         *,
         embedder: EmbeddingService | None = None,
         vector_index: VectorIndex | None = None,
+        reranker: CrossEncoderReranker | None = None,
     ) -> None:
         self._db = db
         self._config = config or AppConfig()
@@ -50,7 +52,10 @@ class RetrievalService:
         self._lexical = LexicalIndex(db)
         self._embedder = embedder or EmbeddingService(self._config.embed)
         self._vector = vector_index or VectorIndex(self._config, self._embedder.dim)
+        self._reranker = reranker
+        self._reranker_failed = False
         self._last_vector_failure_log = 0.0
+        self._last_reranker_failure_log = 0.0
 
     def retrieve(
         self,
@@ -58,18 +63,22 @@ class RetrievalService:
         time_range: tuple[dt.datetime, dt.datetime] | None,
         filters: RetrieveFilters | None,
         limit: int = 12,
+        offset: int = 0,
     ) -> list[RetrievedEvent]:
         if not query.strip():
             return []
+        limit = max(1, limit)
+        offset = max(0, offset)
         start = dt.datetime.now(dt.timezone.utc)
 
-        lexical_hits = self._lexical.search(query, limit=limit * 3)
+        candidate_limit = (limit + offset) * 3
+        lexical_hits = self._lexical.search(query, limit=candidate_limit)
         vector_hits: list[VectorHit] = []
         try:
             vector = self._embedder.embed_texts([query])[0]
             vector_hits = self._vector.search(
                 vector,
-                limit * 3,
+                candidate_limit,
                 embedding_model=self._embedder.model_name,
             )
         except Exception as exc:
@@ -96,7 +105,7 @@ class RetrievalService:
                     stmt = stmt.where(EventRecord.app_name.in_(filters.apps))
                 if filters and filters.domains:
                     stmt = stmt.where(EventRecord.domain.in_(filters.domains))
-                stmt = stmt.order_by(EventRecord.ts_start.desc()).limit(limit)
+                stmt = stmt.order_by(EventRecord.ts_start.desc()).offset(offset).limit(limit)
                 rows = session.execute(stmt).scalars().all()
             return [RetrievedEvent(event=row, score=0.5) for row in rows]
 
@@ -133,7 +142,8 @@ class RetrievalService:
             )
 
         results.sort(key=lambda item: item.score, reverse=True)
-        results = results[:limit]
+        results = self._rerank_results(query, results)
+        results = results[offset : offset + limit]
         latency = (dt.datetime.now(dt.timezone.utc) - start).total_seconds() * 1000
         retrieval_latency_ms.observe(latency)
         return results
@@ -142,6 +152,52 @@ class RetrievalService:
         with self._db.session() as session:
             stmt = select(EventRecord).order_by(EventRecord.ts_start.desc()).limit(limit)
             return list(session.execute(stmt).scalars().all())
+
+    def _rerank_results(self, query: str, results: list[RetrievedEvent]) -> list[RetrievedEvent]:
+        if not results:
+            return results
+        reranker = self._get_reranker()
+        if reranker is None:
+            return results
+        documents = [_build_rerank_document(result.event) for result in results]
+        try:
+            scores = reranker.rank(query, documents)
+            if len(scores) != len(results):
+                raise RuntimeError("Reranker returned mismatched score count")
+        except Exception as exc:
+            now = time.monotonic()
+            if now - self._last_reranker_failure_log > 5.0:
+                self._last_reranker_failure_log = now
+                self._log.warning("Reranker failed; using hybrid scores: {}", exc)
+            return results
+
+        reranked = [
+            RetrievedEvent(
+                event=result.event,
+                score=float(score),
+                matched_span_keys=result.matched_span_keys,
+                lexical_score=result.lexical_score,
+                vector_score=result.vector_score,
+            )
+            for result, score in zip(results, scores, strict=True)
+        ]
+        reranked.sort(key=lambda item: item.score, reverse=True)
+        return reranked
+
+    def _get_reranker(self) -> CrossEncoderReranker | None:
+        if self._config.routing.reranker != "enabled" or not self._config.reranker.enabled:
+            return None
+        if self._reranker is not None:
+            return self._reranker
+        if self._reranker_failed:
+            return None
+        try:
+            self._reranker = CrossEncoderReranker(self._config.reranker)
+        except Exception as exc:
+            self._reranker_failed = True
+            self._log.warning("Reranker unavailable; using hybrid scores: {}", exc)
+            return None
+        return self._reranker
 
 
 def _normalize_scores(scores: dict[str, float]) -> dict[str, float]:
@@ -164,3 +220,21 @@ def _ensure_aware(timestamp: dt.datetime) -> dt.datetime:
     if timestamp.tzinfo is None:
         return timestamp.replace(tzinfo=dt.timezone.utc)
     return timestamp
+
+
+def _build_rerank_document(event: EventRecord, max_chars: int = 1000) -> str:
+    parts: list[str] = []
+    if event.app_name:
+        parts.append(f"app: {event.app_name}")
+    if event.window_title:
+        parts.append(f"title: {event.window_title}")
+    url = event.url or event.domain
+    if url:
+        parts.append(f"url: {url}")
+    text = (event.ocr_text or "").strip()
+    if text:
+        parts.append(f"text: {text}")
+    document = " | ".join(parts)
+    if len(document) > max_chars:
+        return document[:max_chars]
+    return document

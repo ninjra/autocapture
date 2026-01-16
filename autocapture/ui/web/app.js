@@ -186,6 +186,10 @@ searchForm.addEventListener('submit', async (event) => {
 
 const saveSettings = document.getElementById('saveSettings');
 const presetToggle = document.getElementById('privacyPresetToggle');
+const storageTtl = document.getElementById('storageTtl');
+const storageUsage = document.getElementById('storageUsage');
+const storagePath = document.getElementById('storagePath');
+const refreshStorage = document.getElementById('refreshStorage');
 
 saveSettings.addEventListener('click', async () => {
   const payload = {
@@ -323,8 +327,43 @@ async function loadStatus() {
   }
 }
 
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return 'n/a';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = bytes;
+  let idx = 0;
+  while (size >= 1024 && idx < units.length - 1) {
+    size /= 1024;
+    idx += 1;
+  }
+  return `${size.toFixed(1)} ${units[idx]}`;
+}
+
+async function loadStorage() {
+  if (!storageTtl || !storageUsage || !storagePath) return;
+  try {
+    const response = await apiFetch('/api/storage');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || 'request failed');
+    storageTtl.textContent = `${data.screenshot_ttl_days || '--'}`;
+    storageUsage.textContent = formatBytes(data.media_usage_bytes);
+    storagePath.textContent = data.media_path || '--';
+  } catch (err) {
+    storageTtl.textContent = '--';
+    storageUsage.textContent = 'error';
+    storagePath.textContent = '--';
+  }
+}
+
+if (refreshStorage) {
+  refreshStorage.addEventListener('click', async () => {
+    await loadStorage();
+  });
+}
+
 loadSettings();
 loadStatus();
+loadStorage();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/static/sw.js');

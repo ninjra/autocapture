@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
 
 from ..config import AppConfig
+from ..logging_utils import get_logger
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import EvidenceItem, build_context_pack
 from ..memory.retrieval import RetrieveFilters, RetrievalService, RetrievedEvent
@@ -39,6 +41,7 @@ class AnswerGraph:
         self._retrieval = retrieval
         self._prompt_registry = prompt_registry
         self._entities = entities
+        self._log = get_logger("answer_graph")
 
     async def run(
         self,
@@ -58,7 +61,7 @@ class AnswerGraph:
         if not evidence:
             warnings.append("no_evidence")
         if self._should_refine(evidence):
-            refined = self._refine_query(normalized_query, evidence)
+            refined = await self._refine_query(normalized_query, evidence)
             if refined and refined != normalized_query:
                 evidence, events = self._build_evidence(refined, time_range, filters, k, sanitized)
         pack = build_context_pack(
@@ -184,7 +187,30 @@ class AnswerGraph:
     def _should_refine(self, evidence: list) -> bool:
         return len(evidence) < 3
 
-    def _refine_query(self, query: str, evidence: list) -> str:
+    async def _refine_query(self, query: str, evidence: list) -> str:
+        fallback = self._heuristic_refine_query(query, evidence)
+        try:
+            prompt = self._prompt_registry.get("QUERY_REFINEMENT")
+        except Exception as exc:
+            self._log.warning("Query refinement prompt unavailable: {}", exc)
+            return fallback
+        try:
+            provider, _decision = ProviderRouter(
+                self._config.routing,
+                self._config.llm,
+                offline=self._config.offline,
+                privacy=self._config.privacy,
+            ).select_llm()
+            context = self._build_refinement_context(evidence)
+            response = await provider.generate_answer(prompt.system_prompt, query, context)
+            refined = _parse_refined_query(response)
+            if refined:
+                return refined
+        except Exception as exc:
+            self._log.warning("Query refinement failed; using fallback: {}", exc)
+        return fallback
+
+    def _heuristic_refine_query(self, query: str, evidence: list) -> str:
         tokens = []
         for item in evidence:
             app = getattr(item, "app", None)
@@ -193,6 +219,24 @@ class AnswerGraph:
         if not tokens:
             return query
         return f"{query} {' '.join(tokens[:3])}"
+
+    def _build_refinement_context(self, evidence: list) -> str:
+        apps = _dedupe([getattr(item, "app", "") for item in evidence])
+        titles = _dedupe([getattr(item, "title", "") for item in evidence])
+        domains = _dedupe([getattr(item, "domain", "") for item in evidence])
+        snippets = []
+        for item in evidence[:5]:
+            text = getattr(item, "text", "") or ""
+            text = " ".join(text.split())
+            if text:
+                snippets.append(text[:160])
+        payload = {
+            "apps": apps[:5],
+            "titles": titles[:5],
+            "domains": domains[:5],
+            "snippets": snippets,
+        }
+        return json.dumps(payload, ensure_ascii=False, indent=2)
 
     def _merge_routing(self, routing: dict[str, str]) -> Any:
         from ..config import ProviderRoutingConfig
@@ -211,3 +255,31 @@ def _valid_citations(citations: list[str], evidence: list) -> bool:
         return False
     evidence_ids = {item.evidence_id for item in evidence}
     return all(citation in evidence_ids for citation in citations)
+
+
+def _parse_refined_query(response: str) -> str | None:
+    if not response:
+        return None
+    try:
+        data = json.loads(response)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    refined = data.get("refined_query")
+    if not isinstance(refined, str):
+        return None
+    refined = " ".join(refined.strip().split())
+    return refined or None
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen = set()
+    output: list[str] = []
+    for value in values:
+        cleaned = (value or "").strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        output.append(cleaned)
+    return output

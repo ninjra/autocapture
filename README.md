@@ -67,6 +67,12 @@ poetry run black --check .
 poetry run pytest -q
 ```
 
+PowerShell helper:
+```powershell
+.\dev.ps1 check
+.\dev.ps1 smoke
+```
+
 ### Daily Use
 
 - `Ctrl+Shift+Space` opens the search popup.

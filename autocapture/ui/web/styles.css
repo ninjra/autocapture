@@ -167,3 +167,38 @@ button {
   margin-top: 12px;
   color: #93c5fd;
 }
+
+.storage-card {
+  margin-top: 24px;
+  padding: 16px;
+  border-radius: 12px;
+  border: 1px solid #1f2937;
+  background: #0f172a;
+}
+
+.storage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.storage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.storage-grid .label {
+  display: block;
+  font-size: 12px;
+  color: #94a3b8;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.storage-path {
+  grid-column: 1 / -1;
+  word-break: break-all;
+}

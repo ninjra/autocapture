@@ -15,6 +15,10 @@ from autocapture.storage import retention as retention_module
 from autocapture.storage.retention import RetentionManager
 
 
+def test_retention_default_ttl_days_is_60() -> None:
+    assert RetentionPolicyConfig().screenshot_ttl_days == 60
+
+
 def test_retention_prunes_media(tmp_path: Path) -> None:
     config = AppConfig(
         database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"),

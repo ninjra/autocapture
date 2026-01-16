@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from ..config import EmbedConfig
+from ..config import EmbedConfig, is_dev_mode
 from ..logging_utils import get_logger
 
 
@@ -39,6 +39,12 @@ class EmbeddingService:
             self._log.info("Embedding backend: sentence-transformers ({})", self._model_name)
             return
 
+        if is_dev_mode():
+            self._backend = "dev-fallback"
+            self._dim = 16
+            self._log.warning("Embedding backend: dev-fallback (hash) for {}", self._model_name)
+            return
+
         raise RuntimeError("No embedding backend available")
 
     @property
@@ -58,7 +64,7 @@ class EmbeddingService:
         if self._backend is None:
             raise RuntimeError("Embedding backend not initialized")
 
-        if self._backend == "local-test":
+        if self._backend in {"local-test", "dev-fallback"}:
             return [_hash_embedding(text, self.dim) for text in text_list]
 
         if hasattr(self._backend, "embed"):

@@ -5,15 +5,20 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hmac
+import io
 import tempfile
 import threading
 import time
+from uuid import uuid4
+
+import numpy as np
+from PIL import Image
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -34,6 +39,8 @@ from ..logging_utils import get_logger
 from ..observability.metrics import get_gpu_snapshot, get_metrics_port
 from ..paths import resource_root
 from ..settings_store import read_settings, update_settings
+from ..media.store import MediaStore
+from ..capture.privacy_filter import should_skip_capture
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
 from ..memory.entities import EntityResolver, SecretStore
@@ -64,6 +71,8 @@ class RetrieveRequest(BaseModel):
     time_range: Optional[tuple[dt.datetime, dt.datetime]] = None
     filters: Optional[dict[str, list[str]]] = None
     k: int = Field(8, ge=1, le=100)
+    page: int = Field(0, ge=0)
+    page_size: Optional[int] = Field(None, ge=1)
     sanitize: Optional[bool] = None
     extractive_only: Optional[bool] = None
     include_screenshots: bool = False
@@ -71,6 +80,28 @@ class RetrieveRequest(BaseModel):
 
 class RetrieveResponse(BaseModel):
     evidence: list[dict[str, Any]]
+
+
+class IngestMetadata(BaseModel):
+    observation_id: Optional[str] = None
+    captured_at: Optional[dt.datetime] = None
+    app_name: Optional[str] = None
+    window_title: Optional[str] = None
+    url: Optional[str] = None
+    domain: Optional[str] = None
+    monitor_id: Optional[str] = None
+    is_fullscreen: bool = False
+
+
+class IngestResponse(BaseModel):
+    observation_id: str
+    status: str
+
+
+class StorageResponse(BaseModel):
+    media_path: str
+    media_usage_bytes: int
+    screenshot_ttl_days: int
 
 
 class ContextPackRequest(BaseModel):
@@ -266,7 +297,11 @@ def create_app(
     retention = RetentionManager(
         config.storage, config.retention, db, Path(config.capture.data_dir)
     )
+    media_store = MediaStore(config.capture, config.encryption)
     log = get_logger("api")
+    storage_cache = {"ts": 0.0, "bytes": 0}
+    storage_cache_ttl_s = 30.0
+    media_root = Path(config.capture.data_dir) / "media"
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -320,6 +355,8 @@ def create_app(
         "/api/privacy/resolve_tokens",
         "/api/delete_range",
         "/api/delete_all",
+        "/api/events/ingest",
+        "/api/storage",
     )
 
     security_manager: SecuritySessionManager | None = None
@@ -491,6 +528,8 @@ def create_app(
 
         @app.middleware("http")
         async def auth_middleware(request: Request, call_next):  # type: ignore[no-redef]
+            if request.url.path == "/api/events/ingest" and _bridge_token_valid(request, config):
+                return await call_next(request)
             auth = request.headers.get("Authorization", "")
             if not auth.startswith("Bearer ") or not oidc_verifier:
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -507,6 +546,10 @@ def create_app(
         @app.middleware("http")
         async def api_key_middleware(request: Request, call_next):  # type: ignore[no-redef]
             if request.url.path.startswith("/api/"):
+                if request.url.path == "/api/events/ingest" and _bridge_token_valid(
+                    request, config
+                ):
+                    return await call_next(request)
                 _require_api_key(request, config)
             return await call_next(request)
 
@@ -527,6 +570,8 @@ def create_app(
     @app.middleware("http")
     async def security_session_middleware(request: Request, call_next):  # type: ignore[no-redef]
         if security_manager and _needs_unlock(request, protected_prefixes):
+            if request.url.path == "/api/events/ingest" and _bridge_token_valid(request, config):
+                return await call_next(request)
             token = _extract_unlock_token(request)
             if not security_manager.is_unlocked(token):
                 return JSONResponse(status_code=401, content={"detail": "Unlock required"})
@@ -585,6 +630,109 @@ def create_app(
             },
             "gpu": gpu,
         }
+
+    def _storage_usage_bytes() -> int:
+        now = time.monotonic()
+        if now - storage_cache["ts"] > storage_cache_ttl_s:
+            storage_cache["bytes"] = RetentionManager._folder_size_bytes(media_root)
+            storage_cache["ts"] = now
+        return int(storage_cache["bytes"])
+
+    @app.get("/api/storage")
+    def storage_status() -> StorageResponse:
+        return StorageResponse(
+            media_path=str(media_root),
+            media_usage_bytes=_storage_usage_bytes(),
+            screenshot_ttl_days=config.retention.screenshot_ttl_days,
+        )
+
+    @app.post("/api/events/ingest")
+    async def ingest_event(
+        request: Request,
+        metadata: str = Form(...),
+        image: UploadFile = File(...),
+    ) -> IngestResponse:
+        try:
+            parsed = IngestMetadata.model_validate_json(metadata)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid metadata JSON")
+
+        observation_id = parsed.observation_id or str(uuid4())
+        captured_at = parsed.captured_at or dt.datetime.now(dt.timezone.utc)
+        if captured_at.tzinfo is None:
+            captured_at = captured_at.replace(tzinfo=dt.timezone.utc)
+        app_name = parsed.app_name or "unknown"
+        window_title = parsed.window_title or "unknown"
+        monitor_id = parsed.monitor_id or "unknown"
+
+        if _bridge_token_valid(request, config) is False:
+            _require_api_key(request, config)
+
+        if should_skip_capture(
+            paused=config.privacy.paused,
+            monitor_id=monitor_id,
+            process_name=app_name,
+            window_title=window_title,
+            exclude_monitors=config.privacy.exclude_monitors,
+            exclude_processes=config.privacy.exclude_processes,
+            exclude_window_title_regex=config.privacy.exclude_window_title_regex,
+        ):
+            _record_skipped_capture(
+                db,
+                observation_id,
+                captured_at,
+                app_name,
+                window_title,
+                monitor_id,
+                parsed.is_fullscreen,
+                "privacy_filter",
+            )
+            return IngestResponse(observation_id=observation_id, status="skipped")
+
+        with db.session() as session:
+            existing = session.get(CaptureRecord, observation_id)
+            if existing:
+                return IngestResponse(observation_id=observation_id, status="exists")
+
+        payload = await image.read()
+        if not payload:
+            raise HTTPException(status_code=400, detail="Image payload is empty")
+        try:
+            pil = Image.open(io.BytesIO(payload)).convert("RGB")
+            image_array = np.array(pil)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid image payload") from exc
+
+        path = media_store.write_roi(image_array, captured_at, observation_id)
+        if path is None:
+            _record_skipped_capture(
+                db,
+                observation_id,
+                captured_at,
+                app_name,
+                window_title,
+                monitor_id,
+                parsed.is_fullscreen,
+                "disk_quota",
+            )
+            return IngestResponse(observation_id=observation_id, status="skipped")
+
+        def _write(session) -> None:
+            session.add(
+                CaptureRecord(
+                    id=observation_id,
+                    captured_at=captured_at,
+                    image_path=str(path),
+                    foreground_process=app_name,
+                    foreground_window=window_title,
+                    monitor_id=monitor_id,
+                    is_fullscreen=parsed.is_fullscreen,
+                    ocr_status="pending",
+                )
+            )
+
+        db.transaction(_write)
+        return IngestResponse(observation_id=observation_id, status="ok")
 
     @app.post("/api/unlock")
     def unlock_session() -> UnlockResponse:
@@ -664,7 +812,7 @@ def create_app(
     @app.post("/api/retrieve")
     def retrieve(request: RetrieveRequest) -> RetrieveResponse:
         _validate_query(request.query, config)
-        k = _cap_k(request.k, config)
+        offset, limit = _resolve_retrieve_paging(request, config)
         _record_query_history(db, request.query)
         evidence, events = _build_evidence(
             retrieval,
@@ -673,7 +821,8 @@ def create_app(
             request.query,
             request.time_range,
             request.filters,
-            k,
+            limit,
+            offset=offset,
             sanitized=_resolve_bool(request.sanitize, config.privacy.sanitize_default),
         )
         event_map = {event.event_id: event for event in events}
@@ -1057,6 +1206,14 @@ def _extract_unlock_token(request: Request) -> str | None:
     return request.query_params.get("unlock")
 
 
+def _bridge_token_valid(request: Request, config: AppConfig) -> bool:
+    token = request.headers.get("X-Bridge-Token")
+    expected = config.api.bridge_token
+    if not token or not expected:
+        return False
+    return hmac.compare_digest(token, expected)
+
+
 def _require_api_key(request: Request, config: AppConfig) -> None:
     if not config.api.require_api_key:
         return
@@ -1070,6 +1227,34 @@ def _require_api_key(request: Request, config: AppConfig) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _record_skipped_capture(
+    db: DatabaseManager,
+    observation_id: str,
+    captured_at: dt.datetime,
+    app_name: str,
+    window_title: str,
+    monitor_id: str,
+    is_fullscreen: bool,
+    reason: str,
+) -> None:
+    def _write(session) -> None:
+        session.add(
+            CaptureRecord(
+                id=observation_id,
+                captured_at=captured_at,
+                image_path=None,
+                foreground_process=app_name,
+                foreground_window=window_title,
+                monitor_id=monitor_id,
+                is_fullscreen=is_fullscreen,
+                ocr_status="skipped",
+                ocr_last_error=reason,
+            )
+        )
+
+    db.transaction(_write)
+
+
 def _validate_query(query: str, config: AppConfig) -> None:
     if not query or not query.strip():
         raise HTTPException(status_code=422, detail="Query cannot be empty")
@@ -1081,6 +1266,19 @@ def _cap_k(k: int, config: AppConfig) -> int:
     if k > config.api.max_context_k:
         raise HTTPException(status_code=422, detail="k exceeds maximum allowed")
     return k
+
+
+def _resolve_retrieve_paging(request: RetrieveRequest, config: AppConfig) -> tuple[int, int]:
+    fields_set = getattr(request, "model_fields_set", set())
+    page = max(0, request.page)
+    if "page_size" in fields_set:
+        page_size = request.page_size or config.api.default_page_size
+    elif "k" in fields_set:
+        page_size = request.k
+    else:
+        page_size = config.api.default_page_size
+    page_size = max(1, min(page_size, config.api.max_page_size))
+    return page * page_size, page_size
 
 
 def _model_dump(model: Any) -> dict[str, Any]:
@@ -1125,11 +1323,12 @@ def _build_evidence(
     filters: Optional[dict[str, list[str]]],
     k: int,
     sanitized: bool,
+    offset: int = 0,
 ) -> tuple[list[EvidenceItem], list[EventRecord]]:
     retrieve_filters = None
     if filters:
         retrieve_filters = RetrieveFilters(apps=filters.get("app"), domains=filters.get("domain"))
-    results = retrieval.retrieve(query, time_range, retrieve_filters, limit=k)
+    results = retrieval.retrieve(query, time_range, retrieve_filters, limit=k, offset=offset)
     evidence: list[EvidenceItem] = []
     events: list[EventRecord] = []
     for idx, result in enumerate(results, start=1):

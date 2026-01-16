@@ -1,0 +1,53 @@
+# Session Log
+
+## 2026-01-15
+- Baseline: git status shows existing local changes.
+- Baseline: `poetry run python tools/freeze_surfaces.py verify` OK.
+- Baseline: `poetry run pytest -q` timed out after 300s.
+- Scaffolding: added .codex files and tools/codex_status.py.
+- Gates: `poetry run ruff check .` OK.
+- Gates: `poetry run black --check .` OK.
+- Gates: `poetry run pytest -q` timed out after 300s.
+- Gates: doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
+- Gates: `poetry run python tools/freeze_surfaces.py verify` OK.
+- Phase 1: added Cross-Encoder reranker wrapper + retrieval paging support.
+- Phase 1 tests: added reranker/offset coverage and API paging defaults.
+- Gates (Phase 1): `poetry run ruff check .` OK.
+- Gates (Phase 1): `poetry run black --check .` OK.
+- Gates (Phase 1): `poetry run pytest -q` timed out after 300s.
+- Gates (Phase 1): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
+- Gates (Phase 1): `poetry run python tools/freeze_surfaces.py verify` OK.
+- Phase 2: added portable keys export/import CLI and encrypted bundle support.
+- Phase 2 tests: added export/import roundtrip + wrong-password coverage.
+- Phase 2 docs: documented key portability in `docs/SECURITY.md`.
+- Gates (Phase 2): `poetry run ruff check .` OK.
+- Gates (Phase 2): `poetry run black --check .` OK.
+- Gates (Phase 2): `poetry run pytest -q` timed out after 300s.
+- Gates (Phase 2): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
+- Gates (Phase 2): `poetry run python tools/freeze_surfaces.py verify` OK.
+- Phase 3: added query refinement prompt + AnswerGraph prompt-based refinement fallback.
+- Phase 3: added PromptOps Jinja2 sandbox validation + prompt size guard.
+- Phase 3 tests: added refinement tests + PromptOps validation coverage.
+- Gates (Phase 3): `poetry run ruff check .` OK.
+- Gates (Phase 3): `poetry run black --check .` OK.
+- Gates (Phase 3): `poetry run pytest -q` timed out after 300s.
+- Gates (Phase 3): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
+- Gates (Phase 3): `poetry run python tools/freeze_surfaces.py verify` OK.
+- Phase 4: pinned OCR provider selection + removed RapidOCR signature inspection.
+- Phase 4: set default screenshot TTL to 60 days and updated configs/tests.
+- Phase 4 tests: added RapidOCR kwargs/provider selection coverage + retention default test.
+- Gates (Phase 4): `poetry run ruff check .` OK.
+- Gates (Phase 4): `poetry run black --check .` OK.
+- Gates (Phase 4): `poetry run pytest -q` timed out after 300s.
+- Gates (Phase 4): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
+- Gates (Phase 4): `poetry run python tools/freeze_surfaces.py verify` OK.
+- Phase 5: added ingest bridge + storage endpoints and storage dashboard card.
+- Phase 5 docs: added WSL/Windows bridge guide.
+- Phase 5 tests: added ingest/storage API tests and migrated API tests to AsyncClient.
+- Test infra: patched threadpool + asyncio to_thread in tests to avoid blocked threads.
+- Fixes: reduced scrypt maxmem failures, fixed paging config test, ensured python-multipart available.
+- Gates (Phase 5): `poetry run ruff check .` OK.
+- Gates (Phase 5): `poetry run black --check .` OK.
+- Gates (Phase 5): `poetry run pytest -q` OK (144 passed, 1 skipped).
+- Gates (Phase 5): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
+- Gates (Phase 5): `poetry run python tools/freeze_surfaces.py verify` OK.

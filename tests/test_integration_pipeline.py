@@ -1,7 +1,7 @@
 import datetime as dt
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+import pytest
 
 from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
@@ -15,7 +15,10 @@ class MockLLM:
         return "Answer based on evidence [E1]"
 
 
-def test_retrieve_context_pack_answer(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_retrieve_context_pack_answer(
+    monkeypatch, tmp_path: Path, async_client_factory
+) -> None:
     config = AppConfig()
     config.database = DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
     config.capture.data_dir = tmp_path
@@ -70,9 +73,10 @@ def test_retrieve_context_pack_answer(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _mock_select)
 
     app = create_app(config, db_manager=db)
-    client = TestClient(app)
-
-    response = client.post("/api/answer", json={"query": "roadmap", "extractive_only": False})
+    async with async_client_factory(app) as client:
+        response = await client.post(
+            "/api/answer", json={"query": "roadmap", "extractive_only": False}
+        )
     assert response.status_code == 200
     payload = response.json()
     assert "Answer based on evidence" in payload["answer"]

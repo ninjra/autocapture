@@ -43,6 +43,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub.add_parser("api", help="Run the local API + UI server.")
     sub.add_parser("worker", help="Run the OCR ingest worker loop only.")
     sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
+    sub.add_parser("smoke", help="Run minimal smoke checks and exit.")
     sub.add_parser("print-config", help="Load config and print resolved values.")
     export = sub.add_parser("export", help="Export events + media for backup.")
     export.add_argument("--out", required=True, help="Output path for export bundle.")
@@ -64,6 +65,15 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=True,
         help="Write a zip archive (default) or a folder.",
     )
+
+    keys = sub.add_parser("keys", help="Export/import encrypted keys for portability.")
+    keys_sub = keys.add_subparsers(dest="keys_cmd", required=True)
+    keys_export = keys_sub.add_parser("export", help="Export encrypted keys bundle.")
+    keys_export.add_argument("--out", required=True, help="Output path for key bundle.")
+    keys_export.add_argument("--password", required=True, help="Password for encrypting bundle.")
+    keys_import = keys_sub.add_parser("import", help="Import encrypted keys bundle.")
+    keys_import.add_argument("path", help="Input path for key bundle.")
+    keys_import.add_argument("--password", required=True, help="Password for decrypting bundle.")
 
     promptops = sub.add_parser("promptops", help="PromptOps automation utilities.")
     promptops_sub = promptops.add_subparsers(dest="promptops_cmd", required=True)
@@ -126,6 +136,11 @@ def main(argv: list[str] | None = None) -> None:
     if cmd == "doctor":
         raise SystemExit(_doctor(config))
 
+    if cmd == "smoke":
+        from .smoke import run_smoke
+
+        raise SystemExit(run_smoke(config))
+
     if cmd == "promptops":
         from .promptops import PromptOpsRunner
         from .storage.models import PromptOpsRunRecord
@@ -177,6 +192,20 @@ def main(argv: list[str] | None = None) -> None:
         )
         logger.info("Export complete: {}", out_path)
         return
+
+    if cmd == "keys":
+        from .security.portable_keys import export_keys, import_keys
+
+        if args.keys_cmd == "export":
+            out_path = Path(args.out)
+            export_keys(config, out_path, args.password)
+            logger.info("Key export complete: {}", out_path)
+            return
+        if args.keys_cmd == "import":
+            in_path = Path(args.path)
+            import_keys(config, in_path, args.password)
+            logger.info("Key import complete: {}", in_path)
+            return
 
     if cmd == "db":
         if args.db_cmd == "encrypt":

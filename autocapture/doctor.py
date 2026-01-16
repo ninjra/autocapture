@@ -295,18 +295,24 @@ def _check_ocr(config: AppConfig) -> DoctorCheckResult:
         return DoctorCheckResult("ocr", True, "Disabled")
     if importlib.util.find_spec("rapidocr_onnxruntime") is None:
         return DoctorCheckResult("ocr", False, "rapidocr_onnxruntime not installed")
-    from .worker.event_worker import OCRProcessor
+    from .worker.event_worker import OCRProcessor, _select_onnx_provider
 
     try:
         image = _build_ocr_fixture()
         providers = _available_onnx_providers()
+        selected, _use_cuda = _select_onnx_provider(config.ocr, providers)
+        selected_name = selected or "none"
         processor = OCRProcessor(config.ocr)
         spans = processor.run(image)
         text = " ".join(span[0] for span in spans if span)
         if not text.strip():
             return DoctorCheckResult("ocr", False, "Empty OCR output")
-        detail = f"device={config.ocr.device}; providers={providers or 'none'}"
-        if config.ocr.device.lower() == "cuda" and "CUDAExecutionProvider" not in (providers or []):
+        detail = (
+            f"device={config.ocr.device}; "
+            f"selected_provider={selected_name}; "
+            f"available_providers={providers or 'none'}"
+        )
+        if config.ocr.device.lower() == "cuda" and selected_name != "CUDAExecutionProvider":
             detail += " (CUDAExecutionProvider missing; install onnxruntime-gpu + CUDA/cuDNN)"
         return DoctorCheckResult("ocr", True, detail)
     except Exception as exc:

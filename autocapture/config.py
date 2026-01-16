@@ -30,6 +30,12 @@ def _default_security_provider() -> str:
     return "disabled"
 
 
+def is_dev_mode(env: dict[str, str] | None = None) -> bool:
+    env = env or os.environ
+    value = (env.get("APP_ENV") or env.get("AUTOCAPTURE_ENV") or "").strip().lower()
+    return value in {"dev", "development"}
+
+
 class HIDConfig(BaseModel):
     min_interval_ms: int = Field(
         500,
@@ -167,6 +173,10 @@ class OCRConfig(BaseModel):
     max_latency_s: int = Field(900, ge=10)
     engine: str = Field("rapidocr-onnxruntime")
     device: str = Field("cuda", description="cuda|cpu; cuda preferred when available")
+    onnx_providers: list[str] = Field(
+        default_factory=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        description="Preferred ONNX Runtime execution providers (ordered).",
+    )
     languages: list[str] = Field(default_factory=lambda: ["en"])
     output_format: str = Field("json")
 
@@ -188,7 +198,8 @@ class EmbedConfig(BaseModel):
 
 class RerankerConfig(BaseModel):
     enabled: bool = True
-    model: str = Field("BAAI/bge-reranker-v2-m3")
+    model: str = Field("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    device: str = Field("auto", description="auto|cuda|cpu; auto prefers CUDA when available")
     top_k: int = Field(100, ge=1)
 
 
@@ -234,7 +245,7 @@ class RetentionPolicyConfig(BaseModel):
     roi_days: int = Field(14, ge=1)
     max_media_gb: int = Field(200, ge=1)
     screenshot_ttl_days: int = Field(
-        90, ge=1, description="Days to keep raw screenshots before pruning."
+        60, ge=1, description="Days to keep raw screenshots before pruning."
     )
     protect_recent_minutes: int = Field(
         60, ge=1, description="Protect media newer than this window from pruning."
@@ -365,6 +376,9 @@ class APIConfig(BaseModel):
     port: int = Field(8008, ge=1024, le=65535)
     require_api_key: bool = Field(False)
     api_key: Optional[str] = None
+    bridge_token: Optional[str] = Field(
+        None, description="Optional bridge token for ingest-only authorization."
+    )
     rate_limit_rps: float = Field(2.0, gt=0.0)
     rate_limit_burst: int = Field(5, ge=1)
     max_page_size: int = Field(200, ge=1)
@@ -471,6 +485,8 @@ class PromptOpsConfig(BaseModel):
     min_verifier_pass_rate: float = Field(0.60)
     min_citation_coverage: float = Field(0.60)
     max_refusal_rate: float = Field(0.30)
+    max_mean_latency_ms: float = Field(15000.0)
+    max_prompt_chars: int = Field(12000, ge=1)
     max_mean_latency_ms: float | None = Field(15000.0)
     pr_cooldown_hours: float = Field(0.0, ge=0.0)
     max_source_bytes: int = Field(1_048_576, ge=1)
@@ -806,7 +822,7 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
     raw = read_settings(settings_path)
     if not raw:
         apply_preset(config, config.presets.active_preset)
-        return config
+        return apply_dev_overrides(config)
     routing = raw.get("routing")
     if isinstance(routing, dict):
         if hasattr(config.routing, "model_dump"):
@@ -844,6 +860,34 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
     if isinstance(active_preset, str) and active_preset:
         config.presets.active_preset = active_preset
     apply_preset(config, config.presets.active_preset)
+    return apply_dev_overrides(config)
+
+
+def apply_dev_overrides(config: AppConfig) -> AppConfig:
+    if not is_dev_mode():
+        return config
+    logger = logging.getLogger(__name__)
+    if config.qdrant.enabled:
+        logger.info("Dev mode: disabling qdrant backend.")
+        config.qdrant.enabled = False
+    if config.ocr.device.lower() != "cpu":
+        logger.info("Dev mode: forcing OCR device to cpu.")
+        config.ocr.device = "cpu"
+    if config.ocr.engine != "disabled":
+        import importlib.util
+
+        if importlib.util.find_spec("rapidocr_onnxruntime") is None:
+            logger.info("Dev mode: disabling OCR (rapidocr_onnxruntime not installed).")
+            config.ocr.engine = "disabled"
+            config.routing.ocr = "disabled"
+    if (
+        config.encryption.enabled
+        and config.encryption.key_provider == "windows-credential-manager"
+        and sys.platform != "win32"
+    ):
+        key_path = Path(config.capture.data_dir) / "autocapture.key"
+        logger.info("Dev mode: using file-based encryption key at %s.", key_path)
+        config.encryption.key_provider = f"file:{key_path.as_posix()}"
     return config
 
 
