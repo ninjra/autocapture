@@ -147,3 +147,15 @@ def test_arxiv_request_includes_expanded_query(tmp_path: Path) -> None:
         report = run_scout(config, http_client=client, now=now)
 
     assert report["sources"]["arxiv"]["status"] == "ok"
+
+
+def test_scout_report_includes_watchlist(tmp_path: Path) -> None:
+    config = AppConfig()
+    config.capture.data_dir = tmp_path
+    config.offline = True
+    config.privacy.cloud_enabled = False
+    now = dt.datetime(2025, 10, 2, tzinfo=dt.timezone.utc)
+
+    report = run_scout(config, now=now)
+    urls = {item.get("url") for item in report.get("watchlist", [])}
+    assert "https://arxiv.org/abs/2509.26507" in urls

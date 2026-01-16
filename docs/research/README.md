@@ -28,3 +28,9 @@ poetry run autocapture research scout --out "docs/research/scout_report.json"
 ```
 
 The command appends a summary to `docs/research/scout_log.md` by default.
+
+## Automation
+
+The scheduled workflow `.github/workflows/research-scout.yml` runs the scout on a
+cron schedule and opens a PR only if the ranked list changes beyond the configured
+threshold.
