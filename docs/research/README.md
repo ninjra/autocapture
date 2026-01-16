@@ -8,7 +8,8 @@ papers, then writes a ranked report plus an append-only log.
 
 - Hugging Face tags: vision-language, ocr, reranker, embeddings.
 - arXiv keywords: "vision-language", "document understanding", "reranking",
-  "screen understanding", "diffusion transformer".
+  "screen understanding", "diffusion transformer", "prompt repetition",
+  "prompt duplication".
 
 ## Interesting Now
 

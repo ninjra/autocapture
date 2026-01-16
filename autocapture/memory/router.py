@@ -44,6 +44,7 @@ class ProviderRouter:
                     api_key=self._llm_config.openai_compatible_api_key,
                     timeout_s=self._llm_config.timeout_s,
                     retries=self._llm_config.retries,
+                    prompt_repetition=self._llm_config.prompt_repetition,
                 ),
                 RoutingDecision(llm_provider="openai_compatible"),
             )
@@ -54,6 +55,7 @@ class ProviderRouter:
                     self._llm_config.openai_model,
                     timeout_s=self._llm_config.timeout_s,
                     retries=self._llm_config.retries,
+                    prompt_repetition=self._llm_config.prompt_repetition,
                 ),
                 RoutingDecision(llm_provider="openai"),
             )
@@ -63,6 +65,7 @@ class ProviderRouter:
                 self._llm_config.ollama_model,
                 timeout_s=self._llm_config.timeout_s,
                 retries=self._llm_config.retries,
+                prompt_repetition=self._llm_config.prompt_repetition,
             ),
             RoutingDecision(llm_provider="ollama"),
         )

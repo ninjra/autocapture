@@ -139,7 +139,9 @@ class PromptOpsRunner:
                 "baseline_failure_summary": baseline_summary,
                 "attempts": [],
             }
-            self._update_run(run_id, eval_results=eval_results, proposals={}, status="baseline_evaluated")
+            self._update_run(
+                run_id, eval_results=eval_results, proposals={}, status="baseline_evaluated"
+            )
 
             best_proposals: list[PromptProposal] | None = None
             best_metrics: EvalMetrics | None = None
@@ -169,18 +171,18 @@ class PromptOpsRunner:
                     last_attempt_feedback = attempt_entry
                     continue
 
-                proposed_runs = self._run_eval_repeats(overrides=proposals)
-                proposed_aggregated = aggregate_metrics(proposed_runs, promptops.eval_aggregation)
-                gate = gate_decision(promptops, baseline_aggregated, proposed_aggregated)
-                last_gate = gate
-                eval_results["attempts"].append(
-                    {
+                prompt_payload = _build_prompt_payload(proposals)
+                diff_summary = _summarize_attempt_diffs(prompt_payload)
+                if _is_noop_proposals(proposals):
+                    attempt_entry = {
                         "attempt_index": attempt_index,
                         "status": "noop_no_semantic_change",
                         "diff_summary": diff_summary,
                     }
                     eval_results["attempts"].append(attempt_entry)
-                    self._update_run(run_id, eval_results=eval_results, status="noop_no_semantic_change")
+                    self._update_run(
+                        run_id, eval_results=eval_results, status="noop_no_semantic_change"
+                    )
                     last_attempt_feedback = attempt_entry
                     continue
 
@@ -205,7 +207,9 @@ class PromptOpsRunner:
                 self._update_run(run_id, eval_results=eval_results, status="evaluated")
 
                 if gate.passed:
-                    if best_metrics is None or is_candidate_better(proposed_aggregated, best_metrics):
+                    if best_metrics is None or is_candidate_better(
+                        proposed_aggregated, best_metrics
+                    ):
                         best_proposals = proposals
                         best_metrics = proposed_aggregated
                         best_gate = gate_summary
@@ -258,9 +262,7 @@ class PromptOpsRunner:
         promptops = self._config.promptops
         if promptops.pr_cooldown_hours <= 0:
             return None
-        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
-            hours=promptops.pr_cooldown_hours
-        )
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=promptops.pr_cooldown_hours)
         with self._db.session() as session:
             last_pr = (
                 session.query(PromptOpsRunRecord)
@@ -614,13 +616,12 @@ def _summarize_eval_failures(cases: list[object], max_items: int = 5) -> dict[st
     for case in cases:
         if getattr(case, "refused", False) and len(summary["refused"]) < max_items:
             summary["refused"].append(getattr(case, "query", ""))
-        if not getattr(case, "citation_hit", True) and len(
-            summary["missing_citations"]
-        ) < max_items:
+        if (
+            not getattr(case, "citation_hit", True)
+            and len(summary["missing_citations"]) < max_items
+        ):
             summary["missing_citations"].append(getattr(case, "query", ""))
-        if not getattr(case, "verifier_pass", True) and len(
-            summary["verifier_failed"]
-        ) < max_items:
+        if not getattr(case, "verifier_pass", True) and len(summary["verifier_failed"]) < max_items:
             summary["verifier_failed"].append(getattr(case, "query", ""))
     return summary
 
@@ -827,9 +828,7 @@ def _extract_placeholders(template: str) -> set[str]:
     return set(PLACEHOLDER_RE.findall(template))
 
 
-def _validate_placeholders(
-    current: PromptSpec, raw_template: str, derived_template: str
-) -> None:
+def _validate_placeholders(current: PromptSpec, raw_template: str, derived_template: str) -> None:
     required_raw = _extract_placeholders(current.raw_template)
     required_derived = _extract_placeholders(current.derived_template)
     proposed_raw = _extract_placeholders(raw_template)

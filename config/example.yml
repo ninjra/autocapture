@@ -82,6 +82,8 @@ llm:
   openai_compatible_model: "llama3"
   timeout_s: 60.0
   retries: 3
+  # Repeat the user prompt once (higher input tokens; may improve non-reasoning tasks).
+  prompt_repetition: false
 model_stages:
   query_refine:
     provider: null

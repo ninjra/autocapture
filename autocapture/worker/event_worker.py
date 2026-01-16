@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 import numpy as np
 from sqlalchemy import select, update
@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..agents import AGENT_JOB_ENRICH_EVENT
 from ..agents.jobs import AgentJobQueue
-from ..config import AppConfig
+from ..config import AppConfig, OCRConfig
 from ..image_utils import ensure_rgb, hash_rgb_image
 from ..indexing.lexical_index import LexicalIndex
 from ..logging_utils import get_logger
@@ -38,6 +38,18 @@ class CapturePayload:
     foreground_window: str
     monitor_id: str
     is_fullscreen: bool
+
+
+def _build_rapidocr_kwargs(use_cuda: bool) -> dict[str, object]:
+    from ..vision.rapidocr import _build_rapidocr_kwargs as build_kwargs
+
+    return build_kwargs(use_cuda)
+
+
+def _select_onnx_provider(config: OCRConfig, providers: Iterable[str]) -> tuple[str | None, bool]:
+    from ..vision.rapidocr import select_onnx_provider
+
+    return select_onnx_provider(config, providers)
 
 
 class LegacyOCRAdapter:

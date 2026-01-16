@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-_CLASS_DEF_RE = re.compile(r"^\\s*class\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\{([^}]*)\\}\\s*$")
+_CLASS_DEF_RE = re.compile(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{([^}]*)\}\s*$")
 
 _PREFERRED_FIELD_ORDER = {
     "ContextPack": ["version", "query", "generated_at", "evidence", "warnings"],
@@ -182,13 +182,13 @@ class _Tokenizer:
                 break
             escaped = ch == "\\" and not escaped
             self._pos += 1
-        return json.loads(self._text[start:self._pos])
+        return json.loads(self._text[start : self._pos])
 
     def _read_number(self) -> Any:
         start = self._pos
         while self._pos < len(self._text) and self._text[self._pos] in "0123456789+-.eE":
             self._pos += 1
-        return json.loads(self._text[start:self._pos])
+        return json.loads(self._text[start : self._pos])
 
     def _read_ident(self) -> str:
         start = self._pos
@@ -196,7 +196,7 @@ class _Tokenizer:
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
         ):
             self._pos += 1
-        return self._text[start:self._pos]
+        return self._text[start : self._pos]
 
 
 class _TronParser:

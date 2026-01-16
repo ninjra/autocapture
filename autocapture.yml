@@ -70,6 +70,8 @@ llm:
   openai_model: "gpt-4.1-mini"
   timeout_s: 60.0
   retries: 3
+  # Repeat the user prompt once (higher input tokens; may improve non-reasoning tasks).
+  prompt_repetition: false
 promptops:
   enabled: false
   schedule_cron: "0 6 * * 1"

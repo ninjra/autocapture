@@ -9,6 +9,7 @@ from typing import Iterable, Sequence
 import httpx
 
 from ..logging_utils import get_logger
+from .prompt_repetition import apply_prompt_repetition
 from ..resilience import (
     CircuitBreaker,
     RetryPolicy,
@@ -67,13 +68,22 @@ def _is_retryable_http_error(exc: Exception) -> bool:
 class OllamaProvider(LLMProvider):
     """Use a local Ollama instance for answers."""
 
-    def __init__(self, base_url: str, model: str, *, timeout_s: float, retries: int) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        *,
+        timeout_s: float,
+        retries: int,
+        prompt_repetition: bool = False,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._log = get_logger("llm.ollama")
         self._timeout = timeout_s
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
+        self._prompt_repetition = prompt_repetition
 
     async def generate_answer(
         self,
@@ -95,16 +105,17 @@ class OllamaProvider(LLMProvider):
     async def _generate_openai(
         self, system: str, query: str, context_pack_text: str, temperature: float
     ) -> str:
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": query},
+            {
+                "role": "user",
+                "content": _format_evidence_message(context_pack_text),
+            },
+        ]
         payload = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": query},
-                {
-                    "role": "user",
-                    "content": _format_evidence_message(context_pack_text),
-                },
-            ],
+            "messages": apply_prompt_repetition(messages, enabled=self._prompt_repetition),
             "temperature": temperature,
         }
 
@@ -130,16 +141,17 @@ class OllamaProvider(LLMProvider):
     async def _generate_native(
         self, system: str, query: str, context_pack_text: str, temperature: float
     ) -> str:
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": query},
+            {
+                "role": "user",
+                "content": _format_evidence_message(context_pack_text),
+            },
+        ]
         payload = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": query},
-                {
-                    "role": "user",
-                    "content": _format_evidence_message(context_pack_text),
-                },
-            ],
+            "messages": apply_prompt_repetition(messages, enabled=self._prompt_repetition),
             "stream": False,
             "temperature": temperature,
         }
@@ -167,13 +179,22 @@ class OllamaProvider(LLMProvider):
 class OpenAIProvider(LLMProvider):
     """OpenAI Responses API provider."""
 
-    def __init__(self, api_key: str, model: str, *, timeout_s: float, retries: int) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        *,
+        timeout_s: float,
+        retries: int,
+        prompt_repetition: bool = False,
+    ) -> None:
         self._api_key = api_key
         self._model = model
         self._log = get_logger("llm.openai")
         self._timeout = timeout_s
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
+        self._prompt_repetition = prompt_repetition
 
     async def generate_answer(
         self,
@@ -186,27 +207,28 @@ class OpenAIProvider(LLMProvider):
         temperature = 0.2 if temperature is None else temperature
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
+        input_messages = [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": system_prompt}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": query}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": _format_evidence_message(context_pack_text),
+                    }
+                ],
+            },
+        ]
         payload = {
             "model": self._model,
-            "input": [
-                {
-                    "role": "system",
-                    "content": [{"type": "text", "text": system_prompt}],
-                },
-                {
-                    "role": "user",
-                    "content": [{"type": "text", "text": query}],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": _format_evidence_message(context_pack_text),
-                        }
-                    ],
-                },
-            ],
+            "input": apply_prompt_repetition(input_messages, enabled=self._prompt_repetition),
             "temperature": temperature,
         }
         headers = {
@@ -249,6 +271,7 @@ class OpenAICompatibleProvider(LLMProvider):
         api_key: str | None,
         timeout_s: float,
         retries: int,
+        prompt_repetition: bool = False,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -257,6 +280,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._timeout = timeout_s
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
+        self._prompt_repetition = prompt_repetition
 
     async def generate_answer(
         self,
@@ -269,13 +293,14 @@ class OpenAICompatibleProvider(LLMProvider):
         temperature = 0.2 if temperature is None else temperature
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": query},
+            {"role": "user", "content": _format_evidence_message(context_pack_text)},
+        ]
         payload = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
-                {"role": "user", "content": _format_evidence_message(context_pack_text)},
-            ],
+            "messages": apply_prompt_repetition(messages, enabled=self._prompt_repetition),
             "temperature": temperature,
         }
         headers = {"Content-Type": "application/json"}

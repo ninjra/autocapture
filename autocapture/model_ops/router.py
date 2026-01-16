@@ -44,6 +44,7 @@ class StageRouter:
                 model,
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
+                prompt_repetition=self._config.llm.prompt_repetition,
             )
         elif provider == "openai_compatible":
             base_url = base_url or self._config.llm.openai_compatible_base_url
@@ -58,6 +59,7 @@ class StageRouter:
                 api_key=api_key,
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
+                prompt_repetition=self._config.llm.prompt_repetition,
             )
         elif provider == "openai":
             api_key = api_key or self._config.llm.openai_api_key
@@ -70,6 +72,7 @@ class StageRouter:
                 model,
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
+                prompt_repetition=self._config.llm.prompt_repetition,
             )
         else:
             raise RuntimeError(f"Unsupported LLM provider: {provider}")
@@ -150,9 +153,7 @@ def _guard_cloud(
             f"Set model_stages.{stage}.allow_cloud=true to allow."
         )
     if config.offline:
-        raise RuntimeError(
-            f"Cloud provider blocked for stage '{stage}' because offline=true."
-        )
+        raise RuntimeError(f"Cloud provider blocked for stage '{stage}' because offline=true.")
     if not config.privacy.cloud_enabled:
         raise RuntimeError(
             f"Cloud provider blocked for stage '{stage}' because privacy.cloud_enabled=false."

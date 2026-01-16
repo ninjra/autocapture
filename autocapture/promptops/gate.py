@@ -6,7 +6,7 @@ from typing import Any
 
 from ..config import PromptOpsConfig
 from ..evals import EvalMetrics
-from .gates import GateDecision, aggregate_metrics, evaluate_candidate
+from .gates import GateDecision, evaluate_candidate
 
 
 def compute_deltas(baseline: EvalMetrics, proposed: EvalMetrics) -> dict[str, float]:

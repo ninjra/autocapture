@@ -104,12 +104,7 @@ def test_promptops_agentic_selects_best_candidate(tmp_path: Path, monkeypatch) -
     assert run.status == "completed_no_pr"
     assert run.eval_results["selected_attempt"] == 2
     assert len(run.eval_results["attempts"]) == config.promptops.max_attempts
-    patch_path = (
-        config.capture.data_dir
-        / "promptops"
-        / "patches"
-        / f"promptops_{run.run_id}.diff"
-    )
+    patch_path = config.capture.data_dir / "promptops" / "patches" / f"promptops_{run.run_id}.diff"
     assert patch_path.exists()
     assert "attempt-2" in patch_path.read_text(encoding="utf-8")
 

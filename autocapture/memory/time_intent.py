@@ -134,9 +134,7 @@ def _parse_iso(value: str, tzinfo: dt.tzinfo) -> dt.datetime | None:
     return parsed
 
 
-def _to_utc_range(
-    start: dt.datetime, end: dt.datetime
-) -> tuple[dt.datetime, dt.datetime]:
+def _to_utc_range(start: dt.datetime, end: dt.datetime) -> tuple[dt.datetime, dt.datetime]:
     return (
         start.astimezone(dt.timezone.utc),
         end.astimezone(dt.timezone.utc),
