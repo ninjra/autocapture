@@ -856,7 +856,6 @@ def create_app(
             sanitized=sanitized,
         )
         routing_data = _merge_routing(config.routing, request.routing)
-        routing_override = request.routing.get("llm") if request.routing else None
         aggregates = _build_aggregates(db, request.time_range)
         pack = build_context_pack(
             query=request.query,
@@ -922,6 +921,7 @@ def create_app(
             sanitized,
         )
         routing_data = _merge_routing(config.routing, request.routing)
+        routing_override = request.routing.get("llm") if request.routing else None
         aggregates = _build_aggregates(db, resolved_time_range)
         pack = build_context_pack(
             query=query_text,
@@ -1052,7 +1052,11 @@ def create_app(
                         {item.evidence_id for item in evidence},
                         set(),
                     )
-                log.info("LLM stage {} routed to {}", decision.stage, decision.provider)
+                log.info(
+                    "LLM stage {} routed to {}",
+                    decision.stage,
+                    getattr(decision, "provider", "unknown"),
+                )
                 response_json, response_tron = _build_answer_payload(
                     answer_text,
                     citations,

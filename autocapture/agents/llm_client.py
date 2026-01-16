@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import httpx
 
 from ..config import AppConfig
+from ..llm.prompt_repetition import apply_prompt_repetition
 from ..resilience import RetryPolicy, is_retryable_exception, retry_sync
 
 
@@ -19,9 +20,10 @@ class LLMResponse:
 
 
 class AgentLLMClient:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, *, http_client: httpx.Client | None = None) -> None:
         self._config = config
         self._retry = RetryPolicy(max_retries=config.llm.retries)
+        self._http_client = http_client
 
     def generate_text(self, system_prompt: str, user_prompt: str, context: str) -> LLMResponse:
         provider = self._config.llm.provider
@@ -78,13 +80,22 @@ class AgentLLMClient:
         if image_bytes:
             encoded = base64.b64encode(image_bytes).decode("utf-8")
             messages[-1]["images"] = [encoded]
-        payload = {"model": model, "messages": messages, "stream": False}
+        payload = {
+            "model": model,
+            "messages": apply_prompt_repetition(
+                messages, enabled=self._config.llm.prompt_repetition
+            ),
+            "stream": False,
+        }
 
         def _request() -> LLMResponse:
-            with httpx.Client(timeout=self._config.llm.timeout_s) as client:
-                response = client.post(f"{base_url}/api/chat", json=payload)
-                response.raise_for_status()
-                data = response.json()
+            if self._http_client is not None:
+                response = self._http_client.post(f"{base_url}/api/chat", json=payload)
+            else:
+                with httpx.Client(timeout=self._config.llm.timeout_s) as client:
+                    response = client.post(f"{base_url}/api/chat", json=payload)
+            response.raise_for_status()
+            data = response.json()
             return LLMResponse(
                 text=data.get("message", {}).get("content", "").strip(),
                 provider="ollama",
@@ -97,23 +108,31 @@ class AgentLLMClient:
         api_key = self._config.llm.openai_api_key
         if not api_key:
             raise RuntimeError("OpenAI API key not configured")
+        input_messages = [
+            {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+            {"role": "user", "content": [{"type": "text", "text": user_prompt}]},
+            {"role": "user", "content": [{"type": "text", "text": context}]},
+        ]
         payload = {
             "model": self._config.llm.openai_model,
-            "input": [
-                {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
-                {"role": "user", "content": [{"type": "text", "text": user_prompt}]},
-                {"role": "user", "content": [{"type": "text", "text": context}]},
-            ],
+            "input": apply_prompt_repetition(
+                input_messages, enabled=self._config.llm.prompt_repetition
+            ),
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
         def _request() -> LLMResponse:
-            with httpx.Client(timeout=self._config.llm.timeout_s) as client:
-                response = client.post(
+            if self._http_client is not None:
+                response = self._http_client.post(
                     "https://api.openai.com/v1/responses", json=payload, headers=headers
                 )
-                response.raise_for_status()
-                data = response.json()
+            else:
+                with httpx.Client(timeout=self._config.llm.timeout_s) as client:
+                    response = client.post(
+                        "https://api.openai.com/v1/responses", json=payload, headers=headers
+                    )
+            response.raise_for_status()
+            data = response.json()
             text = ""
             for item in data.get("output", []):
                 for content in item.get("content", []):
@@ -160,18 +179,29 @@ class AgentLLMClient:
                     ],
                 }
             )
-        payload = {"model": model, "messages": messages, "temperature": 0.2}
+        payload = {
+            "model": model,
+            "messages": apply_prompt_repetition(
+                messages, enabled=self._config.llm.prompt_repetition
+            ),
+            "temperature": 0.2,
+        }
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
         def _request() -> LLMResponse:
-            with httpx.Client(timeout=self._config.llm.timeout_s) as client:
-                response = client.post(
+            if self._http_client is not None:
+                response = self._http_client.post(
                     f"{base_url}/v1/chat/completions", json=payload, headers=headers
                 )
-                response.raise_for_status()
-                data = response.json()
+            else:
+                with httpx.Client(timeout=self._config.llm.timeout_s) as client:
+                    response = client.post(
+                        f"{base_url}/v1/chat/completions", json=payload, headers=headers
+                    )
+            response.raise_for_status()
+            data = response.json()
             text = data["choices"][0]["message"]["content"]
             return LLMResponse(text=text.strip(), provider="openai_compatible", model=model)
 

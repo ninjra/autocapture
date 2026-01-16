@@ -46,6 +46,6 @@ def test_tron_decode_accepts_json() -> None:
 
 
 def test_structured_output_accepts_tron() -> None:
-    tron = "class Query { refined_query }\n\nQuery(\"hello\")"
+    tron = 'class Query { refined_query }\n\nQuery("hello")'
     parsed = parse_structured_output(tron, _RefinedQuery)
     assert parsed.refined_query == "hello"

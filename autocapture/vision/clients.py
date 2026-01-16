@@ -7,6 +7,7 @@ import base64
 import httpx
 
 from ..logging_utils import get_logger
+from ..llm.prompt_repetition import apply_prompt_repetition
 from ..resilience import RetryPolicy, is_retryable_exception, retry_sync
 
 
@@ -20,6 +21,8 @@ class VisionClient:
         api_key: str | None,
         timeout_s: float,
         retries: int,
+        prompt_repetition: bool = False,
+        http_client: httpx.Client | None = None,
     ) -> None:
         self._provider = provider
         self._model = model
@@ -28,6 +31,8 @@ class VisionClient:
         self._timeout = timeout_s
         self._retry = RetryPolicy(max_retries=retries)
         self._log = get_logger("vision.client")
+        self._prompt_repetition = prompt_repetition
+        self._http_client = http_client
 
     def generate(self, system_prompt: str, user_prompt: str, images: list[bytes]) -> str:
         if self._provider == "ollama":
@@ -47,13 +52,20 @@ class VisionClient:
         if images:
             encoded = [base64.b64encode(image).decode("utf-8") for image in images]
             messages[-1]["images"] = encoded
-        payload = {"model": self._model, "messages": messages, "stream": False}
+        payload = {
+            "model": self._model,
+            "messages": apply_prompt_repetition(messages, enabled=self._prompt_repetition),
+            "stream": False,
+        }
 
         def _request() -> str:
-            with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(f"{base_url}/api/chat", json=payload)
-                response.raise_for_status()
-                data = response.json()
+            if self._http_client is not None:
+                response = self._http_client.post(f"{base_url}/api/chat", json=payload)
+            else:
+                with httpx.Client(timeout=self._timeout) as client:
+                    response = client.post(f"{base_url}/api/chat", json=payload)
+            response.raise_for_status()
+            data = response.json()
             return data.get("message", {}).get("content", "").strip()
 
         return retry_sync(_request, policy=self._retry, is_retryable=is_retryable_exception)
@@ -74,10 +86,13 @@ class VisionClient:
             )
         payload = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": content},
-            ],
+            "messages": apply_prompt_repetition(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
+                enabled=self._prompt_repetition,
+            ),
             "temperature": 0.1,
         }
         headers = {"Content-Type": "application/json"}
@@ -85,14 +100,21 @@ class VisionClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
 
         def _request() -> str:
-            with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(
+            if self._http_client is not None:
+                response = self._http_client.post(
                     f"{self._base_url}/v1/chat/completions",
                     json=payload,
                     headers=headers,
                 )
-                response.raise_for_status()
-                data = response.json()
+            else:
+                with httpx.Client(timeout=self._timeout) as client:
+                    response = client.post(
+                        f"{self._base_url}/v1/chat/completions",
+                        json=payload,
+                        headers=headers,
+                    )
+            response.raise_for_status()
+            data = response.json()
             return data["choices"][0]["message"]["content"].strip()
 
         return retry_sync(_request, policy=self._retry, is_retryable=is_retryable_exception)
@@ -112,23 +134,33 @@ class VisionClient:
             )
         payload = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": content},
-            ],
+            "messages": apply_prompt_repetition(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": content},
+                ],
+                enabled=self._prompt_repetition,
+            ),
             "temperature": 0.1,
         }
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self._api_key}"}
 
         def _request() -> str:
-            with httpx.Client(timeout=self._timeout) as client:
-                response = client.post(
+            if self._http_client is not None:
+                response = self._http_client.post(
                     f"{base_url.rstrip('/')}/v1/chat/completions",
                     json=payload,
                     headers=headers,
                 )
-                response.raise_for_status()
-                data = response.json()
+            else:
+                with httpx.Client(timeout=self._timeout) as client:
+                    response = client.post(
+                        f"{base_url.rstrip('/')}/v1/chat/completions",
+                        json=payload,
+                        headers=headers,
+                    )
+            response.raise_for_status()
+            data = response.json()
             return data["choices"][0]["message"]["content"].strip()
 
         try:

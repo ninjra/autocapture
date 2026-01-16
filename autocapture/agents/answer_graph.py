@@ -361,10 +361,7 @@ def _valid_citations(citations: list[str], evidence: list) -> bool:
 
 
 def _build_draft_query(query: str) -> str:
-    return (
-        f"{query}\n\n"
-        "Draft a short answer using the evidence. Include citations like [E1]."
-    )
+    return f"{query}\n\n" "Draft a short answer using the evidence. Include citations like [E1]."
 
 
 def _build_final_query(query: str, draft_text: str | None, max_chars: int = 2000) -> str:

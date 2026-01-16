@@ -594,6 +594,13 @@ class LLMConfig(BaseModel):
     openai_compatible_model: str = Field("llama3")
     timeout_s: float = Field(60.0, gt=0.0)
     retries: int = Field(3, ge=0, le=10)
+    prompt_repetition: bool = Field(
+        False,
+        description=(
+            "Repeat non-system prompt content once to improve non-reasoning tasks; "
+            "increases input tokens."
+        ),
+    )
 
 
 class ModelStageConfig(BaseModel):

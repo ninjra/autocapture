@@ -250,6 +250,7 @@ class VLMExtractor:
             api_key=api_key,
             timeout_s=config.llm.timeout_s,
             retries=config.llm.retries,
+            prompt_repetition=config.llm.prompt_repetition,
         )
 
     def extract(self, image: np.ndarray) -> ExtractionResult:
@@ -300,6 +301,7 @@ class DeepSeekOCRExtractor:
             api_key=api_key,
             timeout_s=config.llm.timeout_s,
             retries=config.llm.retries,
+            prompt_repetition=config.llm.prompt_repetition,
         )
 
     def extract(self, image: np.ndarray) -> ExtractionResult:

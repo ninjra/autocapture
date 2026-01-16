@@ -36,7 +36,7 @@ BANNED_PATTERN_STRINGS = [
     r"AKIA[0-9A-Z]{16}",
     r"ASIA[0-9A-Z]{16}",
     r"ghp_[A-Za-z0-9]{36,}",
-    r"sk-[A-Za-z0-9]{20,}",
+    r"sk-[A-Za-z0-9-]{10,}",
     r"eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+",
     r"(?i)password\\s*[:=]\\s*\\S+",
     r"(?i)token\\s*[:=]\\s*\\S+",
@@ -135,9 +135,7 @@ def _validate_entry(entry: dict, *, allow_pii: bool) -> list[str]:
             errors.append("Field 'tags' must be a list of strings.")
     if "supersedes" in entry:
         supersedes = entry["supersedes"]
-        if not isinstance(supersedes, list) or not all(
-            isinstance(tag, str) for tag in supersedes
-        ):
+        if not isinstance(supersedes, list) or not all(isinstance(tag, str) for tag in supersedes):
             errors.append("Field 'supersedes' must be a list of strings.")
     if "evidence" in entry and not isinstance(entry["evidence"], str):
         errors.append("Field 'evidence' must be a string.")

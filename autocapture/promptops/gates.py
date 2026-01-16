@@ -147,4 +147,3 @@ def is_candidate_better(a: EvalMetrics, b: EvalMetrics) -> bool:
         -b.refusal_rate,
         -b.mean_latency_ms,
     )
-

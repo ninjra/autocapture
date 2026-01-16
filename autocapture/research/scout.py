@@ -21,6 +21,8 @@ ARXIV_KEYWORDS = [
     "reranking",
     "screen understanding",
     "diffusion transformer",
+    "prompt repetition",
+    "prompt duplication",
 ]
 _CACHE_VERSION = 1
 
@@ -47,9 +49,7 @@ def run_scout(
         close_client = True
 
     try:
-        hf_items, hf_status = _resolve_hf_items(
-            client, offline, cache, warnings, log=log
-        )
+        hf_items, hf_status = _resolve_hf_items(client, offline, cache, warnings, log=log)
         arxiv_items, arxiv_status = _resolve_arxiv_items(
             client, offline, cache, warnings, now=now, log=log
         )
@@ -230,7 +230,7 @@ def _fetch_hf_items(client: httpx.Client) -> list[dict[str, Any]]:
 
 
 def _fetch_arxiv_items(client: httpx.Client, *, now: dt.datetime) -> list[dict[str, Any]]:
-    query = " OR ".join([f'all:\"{keyword}\"' for keyword in ARXIV_KEYWORDS])
+    query = " OR ".join([f'all:"{keyword}"' for keyword in ARXIV_KEYWORDS])
     url = (
         "https://export.arxiv.org/api/query"
         f"?search_query={quote_plus(query)}&sortBy=submittedDate&sortOrder=descending"
