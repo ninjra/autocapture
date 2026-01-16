@@ -12,6 +12,7 @@ from typing import Iterable
 from ..config import AppConfig
 from ..evals import EvalMetrics, _build_evidence, _extract_citations, _load_prompt_registry
 from ..llm.providers import LLMProvider
+from ..llm.prompt_strategy import PromptStrategySettings
 from ..logging_utils import get_logger
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import build_context_pack
@@ -66,7 +67,13 @@ def run_eval_detailed(
     provider = llm_provider
     if provider is None:
         provider = ProviderRouter(
-            config.routing, config.llm, offline=config.offline, privacy=config.privacy
+            config.routing,
+            config.llm,
+            offline=config.offline,
+            privacy=config.privacy,
+            prompt_strategy=PromptStrategySettings.from_llm_config(
+                config.llm, data_dir=config.capture.data_dir
+            ),
         ).select_llm()[0]
 
     for item in items:

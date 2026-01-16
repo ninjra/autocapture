@@ -38,6 +38,7 @@ const modelSelect = document.getElementById('modelSelect');
 const sanitizeToggle = document.getElementById('sanitizeToggle');
 const extractiveToggle = document.getElementById('extractiveToggle');
 const timeRange = document.getElementById('timeRange');
+const safeModeIndicator = document.getElementById('safeModeIndicator');
 
 function appendMessage(author, text) {
   const div = document.createElement('div');
@@ -121,6 +122,19 @@ chatForm.addEventListener('submit', async (event) => {
     return;
   }
   appendAssistantMessage(data.answer || '', data.citations || []);
+  if (safeModeIndicator) {
+    const strategy = data.prompt_strategy;
+    if (!strategy) {
+      safeModeIndicator.textContent = '--';
+      safeModeIndicator.classList.remove('safe');
+    } else if (strategy.safe_mode_degraded) {
+      safeModeIndicator.textContent = 'On';
+      safeModeIndicator.classList.add('safe');
+    } else {
+      safeModeIndicator.textContent = 'Off';
+      safeModeIndicator.classList.remove('safe');
+    }
+  }
 });
 
 const searchForm = document.getElementById('searchForm');
@@ -190,8 +204,14 @@ const storageTtl = document.getElementById('storageTtl');
 const storageUsage = document.getElementById('storageUsage');
 const storagePath = document.getElementById('storagePath');
 const refreshStorage = document.getElementById('refreshStorage');
+const promptRepeatSelect = document.getElementById('promptRepeatSelect');
+const stepByStepToggle = document.getElementById('stepByStepToggle');
+const stepByStepPhrase = document.getElementById('stepByStepPhrase');
 
 saveSettings.addEventListener('click', async () => {
+  const repeatStrategy = promptRepeatSelect ? promptRepeatSelect.value : 'off';
+  const promptStrategyDefault = repeatStrategy === 'off' ? 'baseline' : repeatStrategy;
+  const stepPhrase = stepByStepPhrase ? stepByStepPhrase.value.trim() : '';
   const payload = {
     active_preset: presetToggle.checked ? 'privacy_first' : 'high_fidelity',
     routing: {
@@ -200,6 +220,12 @@ saveSettings.addEventListener('click', async () => {
       retrieval: document.getElementById('routingRetrieval').value,
       compressor: document.getElementById('routingCompressor').value,
       verifier: document.getElementById('routingVerifier').value
+    },
+    llm: {
+      prompt_strategy_default: promptStrategyDefault,
+      strategy_auto_mode: false,
+      enable_step_by_step: stepByStepToggle ? stepByStepToggle.checked : false,
+      step_by_step_phrase: stepPhrase || "Let's think step by step."
     }
   };
   await apiFetch('/api/settings', {
@@ -310,6 +336,17 @@ async function loadSettings() {
     }
     if (data.settings && data.settings.active_preset) {
       presetToggle.checked = data.settings.active_preset === 'privacy_first';
+    }
+    const llm = (data.settings && data.settings.llm) || {};
+    if (promptRepeatSelect) {
+      const strategy = llm.prompt_strategy_default || 'repeat_2x';
+      promptRepeatSelect.value = strategy === 'baseline' ? 'off' : strategy;
+    }
+    if (stepByStepToggle) {
+      stepByStepToggle.checked = Boolean(llm.enable_step_by_step);
+    }
+    if (stepByStepPhrase) {
+      stepByStepPhrase.value = llm.step_by_step_phrase || "Let's think step by step.";
     }
   } catch (err) {
     return;

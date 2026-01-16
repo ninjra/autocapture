@@ -34,6 +34,7 @@ class AnswerGraphResult:
     response_json: dict | None = None
     response_tron: str | None = None
     context_pack_tron: str | None = None
+    prompt_strategy: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,7 @@ class AnswerGraph:
                 used_llm=False,
                 output_format=output_format,
                 context_pack_tron=context_pack_tron,
+                prompt_strategy=None,
             )
 
         system_prompt = self._prompt_registry.get("ANSWER_WITH_CONTEXT_PACK").system_prompt
@@ -164,6 +166,7 @@ class AnswerGraph:
         citations: list[str] = []
         used_llm = False
         final_valid = False
+        prompt_strategy_payload: dict | None = None
         try:
             final_provider, final_decision = self._stage_router.select_llm(
                 "final_answer", routing_override=routing_override
@@ -175,6 +178,7 @@ class AnswerGraph:
                 context_pack_text,
                 temperature=final_decision.temperature,
             )
+            prompt_strategy_payload = _prompt_strategy_payload(final_provider)
             citations = _extract_citations(answer_text)
             final_valid = _valid_citations(citations, evidence)
         except Exception as exc:
@@ -214,6 +218,7 @@ class AnswerGraph:
             used_llm=used_llm,
             output_format=output_format,
             context_pack_tron=context_pack_tron,
+            prompt_strategy=prompt_strategy_payload,
         )
 
     def _build_evidence(
@@ -426,6 +431,15 @@ def _dedupe(values: list[str]) -> list[str]:
     return output
 
 
+def _prompt_strategy_payload(provider: object) -> dict | None:
+    metadata = getattr(provider, "last_prompt_metadata", None)
+    if metadata is None:
+        return None
+    if hasattr(metadata, "to_dict"):
+        return metadata.to_dict()
+    return None
+
+
 def _build_graph_result(
     answer: str,
     citations: list[str],
@@ -435,6 +449,7 @@ def _build_graph_result(
     used_llm: bool,
     output_format: str,
     context_pack_tron: str | None,
+    prompt_strategy: dict | None = None,
 ) -> AnswerGraphResult:
     response_json = None
     response_tron = None
@@ -459,4 +474,5 @@ def _build_graph_result(
         response_json=response_json,
         response_tron=response_tron,
         context_pack_tron=context_pack_tron,
+        prompt_strategy=prompt_strategy,
     )

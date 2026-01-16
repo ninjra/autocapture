@@ -8,7 +8,11 @@ from dataclasses import dataclass
 import httpx
 
 from ..config import AppConfig
-from ..llm.prompt_repetition import apply_prompt_repetition
+import json
+import time
+
+from ..llm.prompt_strategy import PromptStrategySettings, apply_prompt_strategy
+from ..logging_utils import get_logger
 from ..resilience import RetryPolicy, is_retryable_exception, retry_sync
 
 
@@ -24,6 +28,10 @@ class AgentLLMClient:
         self._config = config
         self._retry = RetryPolicy(max_retries=config.llm.retries)
         self._http_client = http_client
+        self._prompt_strategy = PromptStrategySettings.from_llm_config(
+            config.llm, data_dir=config.capture.data_dir
+        )
+        self._log = get_logger("agent.llm_client")
 
     def generate_text(self, system_prompt: str, user_prompt: str, context: str) -> LLMResponse:
         provider = self._config.llm.provider
@@ -71,22 +79,19 @@ class AgentLLMClient:
     ) -> LLMResponse:
         model = model or self._config.llm.ollama_model
         base_url = (base_url or self._config.llm.ollama_url).rstrip("/")
+        combined_prompt = user_prompt
+        if context:
+            combined_prompt = f"{user_prompt}\n\n{context}"
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": combined_prompt},
         ]
-        if context:
-            messages.append({"role": "user", "content": context})
         if image_bytes:
             encoded = base64.b64encode(image_bytes).decode("utf-8")
             messages[-1]["images"] = [encoded]
-        payload = {
-            "model": model,
-            "messages": apply_prompt_repetition(
-                messages, enabled=self._config.llm.prompt_repetition
-            ),
-            "stream": False,
-        }
+        strategy_result = apply_prompt_strategy(messages, self._prompt_strategy, task_type="agent")
+        payload = {"model": model, "messages": strategy_result.messages, "stream": False}
+        start = time.monotonic()
 
         def _request() -> LLMResponse:
             if self._http_client is not None:
@@ -96,11 +101,13 @@ class AgentLLMClient:
                     response = client.post(f"{base_url}/api/chat", json=payload)
             response.raise_for_status()
             data = response.json()
-            return LLMResponse(
+            response = LLMResponse(
                 text=data.get("message", {}).get("content", "").strip(),
                 provider="ollama",
                 model=model,
             )
+            _log_agent_response(self._log, strategy_result.metadata, response.text, start)
+            return response
 
         return retry_sync(_request, policy=self._retry, is_retryable=is_retryable_exception)
 
@@ -108,18 +115,19 @@ class AgentLLMClient:
         api_key = self._config.llm.openai_api_key
         if not api_key:
             raise RuntimeError("OpenAI API key not configured")
+        combined_prompt = user_prompt
+        if context:
+            combined_prompt = f"{user_prompt}\n\n{context}"
         input_messages = [
             {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
-            {"role": "user", "content": [{"type": "text", "text": user_prompt}]},
-            {"role": "user", "content": [{"type": "text", "text": context}]},
+            {"role": "user", "content": [{"type": "text", "text": combined_prompt}]},
         ]
-        payload = {
-            "model": self._config.llm.openai_model,
-            "input": apply_prompt_repetition(
-                input_messages, enabled=self._config.llm.prompt_repetition
-            ),
-        }
+        strategy_result = apply_prompt_strategy(
+            input_messages, self._prompt_strategy, task_type="agent"
+        )
+        payload = {"model": self._config.llm.openai_model, "input": strategy_result.messages}
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        start = time.monotonic()
 
         def _request() -> LLMResponse:
             if self._http_client is not None:
@@ -138,9 +146,11 @@ class AgentLLMClient:
                 for content in item.get("content", []):
                     if content.get("type") == "output_text":
                         text += content.get("text", "")
-            return LLMResponse(
+            response = LLMResponse(
                 text=text.strip(), provider="openai", model=self._config.llm.openai_model
             )
+            _log_agent_response(self._log, strategy_result.metadata, response.text, start)
+            return response
 
         return retry_sync(_request, policy=self._retry, is_retryable=is_retryable_exception)
 
@@ -159,12 +169,13 @@ class AgentLLMClient:
         if not base_url:
             raise RuntimeError("openai_compatible_base_url is not set")
         model = model or self._config.llm.openai_compatible_model
+        combined_prompt = user_prompt
+        if context:
+            combined_prompt = f"{user_prompt}\n\n{context}"
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
+            {"role": "user", "content": combined_prompt},
         ]
-        if context:
-            messages.append({"role": "user", "content": context})
         if image_bytes:
             encoded = base64.b64encode(image_bytes).decode("utf-8")
             messages.append(
@@ -179,16 +190,12 @@ class AgentLLMClient:
                     ],
                 }
             )
-        payload = {
-            "model": model,
-            "messages": apply_prompt_repetition(
-                messages, enabled=self._config.llm.prompt_repetition
-            ),
-            "temperature": 0.2,
-        }
+        strategy_result = apply_prompt_strategy(messages, self._prompt_strategy, task_type="agent")
+        payload = {"model": model, "messages": strategy_result.messages, "temperature": 0.2}
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
+        start = time.monotonic()
 
         def _request() -> LLMResponse:
             if self._http_client is not None:
@@ -203,6 +210,24 @@ class AgentLLMClient:
             response.raise_for_status()
             data = response.json()
             text = data["choices"][0]["message"]["content"]
-            return LLMResponse(text=text.strip(), provider="openai_compatible", model=model)
+            response = LLMResponse(text=text.strip(), provider="openai_compatible", model=model)
+            _log_agent_response(self._log, strategy_result.metadata, response.text, start)
+            return response
 
         return retry_sync(_request, policy=self._retry, is_retryable=is_retryable_exception)
+
+
+def _log_agent_response(log, metadata, text: str, start: float) -> None:
+    response_tokens_estimate = max(1, len(text) // 4) if text else 0
+    payload = {
+        "event": "prompt_strategy.response",
+        "strategy": metadata.strategy.value,
+        "repeat_factor": metadata.repeat_factor,
+        "step_by_step_used": metadata.step_by_step_used,
+        "prompt_tokens_estimate": metadata.prompt_tokens_estimate,
+        "response_tokens_estimate": response_tokens_estimate,
+        "prompt_hash": metadata.prompt_hash_after,
+        "task_type": metadata.task_type,
+        "latency_ms": (time.monotonic() - start) * 1000,
+    }
+    log.info(json.dumps(payload))

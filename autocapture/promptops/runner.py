@@ -23,6 +23,7 @@ from ..config import AppConfig, PromptOpsConfig
 from ..evals import EvalMetrics
 from ..logging_utils import get_logger
 from ..memory.router import ProviderRouter
+from ..llm.prompt_strategy import PromptStrategySettings
 from ..promptops.evals import EvalRunResult, run_eval_detailed
 from ..promptops.gates import aggregate_metrics, evaluate_candidate, is_candidate_better
 from ..resilience import (
@@ -418,6 +419,9 @@ class PromptOpsRunner:
                 self._config.llm,
                 offline=self._config.offline,
                 privacy=self._config.privacy,
+                prompt_strategy=PromptStrategySettings.from_llm_config(
+                    self._config.llm, data_dir=self._config.capture.data_dir
+                ),
             ).select_llm()[0]
         repair_message = ""
         last_error: str | None = None

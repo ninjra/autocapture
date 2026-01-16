@@ -1,31 +1,43 @@
-import copy
 import json
 
 import httpx
 
 from autocapture.agents.llm_client import AgentLLMClient
 from autocapture.config import AppConfig
-from autocapture.llm.prompt_repetition import apply_prompt_repetition
+from autocapture.llm.prompt_strategy import (
+    PromptStrategy,
+    PromptStrategySettings,
+    apply_prompt_strategy,
+)
 
 
-def test_prompt_repetition_text_only_keeps_system_once() -> None:
+def _settings() -> PromptStrategySettings:
+    config = AppConfig()
+    config.llm.strategy_auto_mode = False
+    config.llm.prompt_strategy_default = "repeat_2x"
+    return PromptStrategySettings.from_llm_config(config.llm, data_dir=None)
+
+
+def test_prompt_strategy_repeats_last_user_only() -> None:
     messages = [
         {"role": "system", "content": "sys-1"},
         {"role": "system", "content": "sys-2"},
         {"role": "user", "content": "question"},
         {"role": "user", "content": "context"},
     ]
-    original = copy.deepcopy(messages)
+    result = apply_prompt_strategy(
+        messages,
+        _settings(),
+        override_strategy=PromptStrategy.REPEAT_2X,
+        task_type="test",
+    )
 
-    repeated = apply_prompt_repetition(messages, enabled=True)
-
-    assert messages == original
-    assert repeated[:2] == original[:2]
-    assert repeated[2:] == original[2:] + original[2:]
-    assert len(repeated) == 6
+    assert [msg["role"] for msg in result.messages] == ["system", "system", "user", "user"]
+    assert result.messages[-1]["content"] == "context\n\n---\n\ncontext"
+    assert result.messages[2]["content"] == "question"
 
 
-def test_prompt_repetition_openai_segments_drops_images() -> None:
+def test_prompt_strategy_appends_text_only_for_images() -> None:
     messages = [
         {"role": "system", "content": "sys"},
         {
@@ -37,38 +49,57 @@ def test_prompt_repetition_openai_segments_drops_images() -> None:
             ],
         },
     ]
-    original = copy.deepcopy(messages)
+    result = apply_prompt_strategy(
+        messages,
+        _settings(),
+        override_strategy=PromptStrategy.REPEAT_2X,
+        task_type="test",
+    )
 
-    repeated = apply_prompt_repetition(messages, enabled=True)
-
-    assert messages == original
-    assert len(repeated) == 3
-    assert any(segment.get("type") == "image_url" for segment in repeated[1]["content"])
-    assert all(segment.get("type") != "image_url" for segment in repeated[2]["content"])
-    assert [segment["text"] for segment in repeated[2]["content"]] == ["look", "more"]
-
-
-def test_prompt_repetition_ollama_drops_images_in_repeat() -> None:
-    messages = [
-        {"role": "system", "content": "sys"},
-        {"role": "user", "content": "describe", "images": ["img1"]},
-    ]
-    original = copy.deepcopy(messages)
-
-    repeated = apply_prompt_repetition(messages, enabled=True)
-
-    assert messages == original
-    assert len(repeated) == 3
-    assert "images" in repeated[1]
-    assert "images" not in repeated[2]
-    assert repeated[2]["content"] == "describe"
+    repeated = result.messages[-1]["content"]
+    assert any(segment.get("type") == "image_url" for segment in repeated)
+    assert repeated[-1]["text"] == "\n\n---\n\nlookmore"
 
 
-def test_agent_llm_client_applies_prompt_repetition_openai_compatible() -> None:
+def test_prompt_strategy_inserts_step_by_step_phrase() -> None:
+    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "Q"}]
+    config = AppConfig()
+    config.llm.enable_step_by_step = True
+    config.llm.strategy_auto_mode = False
+    settings = PromptStrategySettings.from_llm_config(config.llm, data_dir=None)
+    result = apply_prompt_strategy(
+        messages,
+        settings,
+        override_strategy=PromptStrategy.STEP_BY_STEP,
+        step_by_step_requested=True,
+        task_type="test",
+    )
+    assert result.messages[-1]["content"].endswith("Let's think step by step.")
+
+
+def test_prompt_strategy_degrades_when_prompt_too_large() -> None:
+    config = AppConfig()
+    config.llm.strategy_auto_mode = False
+    config.llm.prompt_strategy_default = "repeat_3x"
+    config.llm.max_prompt_chars_for_repetition = 10
+    settings = PromptStrategySettings.from_llm_config(config.llm, data_dir=None)
+    messages = [{"role": "system", "content": "sys"}, {"role": "user", "content": "long text"}]
+    result = apply_prompt_strategy(
+        messages,
+        settings,
+        override_strategy=PromptStrategy.REPEAT_3X,
+        task_type="test",
+    )
+    assert result.metadata.safe_mode_degraded is True
+    assert result.metadata.strategy == PromptStrategy.BASELINE
+
+
+def test_agent_llm_client_applies_prompt_strategy_openai_compatible() -> None:
     config = AppConfig()
     config.llm.provider = "openai_compatible"
     config.llm.openai_compatible_base_url = "http://testserver"
-    config.llm.prompt_repetition = True
+    config.llm.strategy_auto_mode = False
+    config.llm.prompt_strategy_default = "repeat_2x"
 
     captured: dict[str, list[dict[str, str]]] = {}
 
@@ -84,16 +115,6 @@ def test_agent_llm_client_applies_prompt_repetition_openai_compatible() -> None:
 
     messages = captured["messages"]
     assert response.text == "ok"
-    assert [message["role"] for message in messages] == [
-        "system",
-        "user",
-        "user",
-        "user",
-        "user",
-    ]
-    assert [message["content"] for message in messages[1:]] == [
-        "user",
-        "ctx",
-        "user",
-        "ctx",
-    ]
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert messages[-1]["content"].startswith("user\n\nctx")
+    assert messages[-1]["content"].endswith("\n\n---\n\nuser\n\nctx")

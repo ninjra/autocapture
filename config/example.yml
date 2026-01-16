@@ -82,7 +82,22 @@ llm:
   openai_compatible_model: "llama3"
   timeout_s: 60.0
   retries: 3
-  # Repeat the user prompt once (higher input tokens; may improve non-reasoning tasks).
+  # Prompt strategy defaults (baseline|repeat_2x|repeat_3x|step_by_step|step_by_step_plus_repeat_2x).
+  prompt_strategy_default: "repeat_2x"
+  # Repeat factor for prompt repetition strategies (2 or 3).
+  prompt_repeat_factor: 2
+  enable_step_by_step: false
+  step_by_step_phrase: "Let's think step by step."
+  step_by_step_two_stage: false
+  max_prompt_chars_for_repetition: 12000
+  max_tokens_headroom: 512
+  max_context_tokens: 8192
+  force_no_reasoning: false
+  strategy_auto_mode: true
+  prompt_repetition_delimiter: "\n\n---\n\n"
+  store_prompt_transforms: false
+  prompt_store_redaction: true
+  # Legacy compatibility flag (prefer prompt_strategy_default).
   prompt_repetition: false
 model_stages:
   query_refine:

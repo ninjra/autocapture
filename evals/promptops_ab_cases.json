@@ -1,0 +1,35 @@
+[
+  {
+    "case_id": "name_index",
+    "task_type": "non_reasoning",
+    "prompt": "Names: Ada, Ben, Cora, Dina. Question: What is the 2nd name?",
+    "expected": "Ben",
+    "requires_repeat": true
+  },
+  {
+    "case_id": "middle_match",
+    "task_type": "non_reasoning",
+    "prompt": "Find the middle character in: AUTOCAPTURE.",
+    "expected": "C",
+    "requires_repeat": true
+  },
+  {
+    "case_id": "snippet_select",
+    "task_type": "qa_with_context",
+    "prompt": "Context: [A] Cats are mammals. [B] Autocapture stores screenshots locally. Question: Which snippet mentions storage?",
+    "expected": "B"
+  },
+  {
+    "case_id": "multiple_choice_adversarial",
+    "task_type": "multiple_choice",
+    "prompt": "Options: (A) 7 (B) 8 (C) 9. Question: What is 3+4? Answer with the option letter only.",
+    "expected": "A"
+  },
+  {
+    "case_id": "step_by_step_math",
+    "task_type": "reasoning",
+    "prompt": "Compute 12 * 7 and return the result.",
+    "expected": "84",
+    "requires_step_by_step": true
+  }
+]
