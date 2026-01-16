@@ -55,6 +55,11 @@ privacy:
     - "(?i)user account control"
     - "(?i)credential(s)?"
   exclude_regions: []
+output:
+  format: "text"
+  context_pack_format: "json"
+time:
+  timezone: null
 presets:
   active_preset: "privacy_first"
 routing:
@@ -77,6 +82,39 @@ llm:
   openai_compatible_model: "llama3"
   timeout_s: 60.0
   retries: 3
+model_stages:
+  query_refine:
+    provider: null
+    model: null
+    base_url: null
+    api_key: null
+    allow_cloud: false
+    enabled: true
+    temperature: 0.2
+  draft_generate:
+    provider: null
+    model: null
+    base_url: null
+    api_key: null
+    allow_cloud: false
+    enabled: false
+    temperature: 0.2
+  final_answer:
+    provider: null
+    model: null
+    base_url: null
+    api_key: null
+    allow_cloud: false
+    enabled: true
+    temperature: 0.2
+  tool_transform:
+    provider: null
+    model: null
+    base_url: null
+    api_key: null
+    allow_cloud: false
+    enabled: false
+    temperature: 0.2
 promptops:
   enabled: false
   schedule_cron: "0 6 * * 1"
@@ -160,6 +198,25 @@ ocr:
     - "CPUExecutionProvider"
   languages: ["en"]
   output_format: "json"
+vision_extract:
+  engine: "vlm"
+  fallback_engine: "rapidocr-onnxruntime"
+  tiles_x: 3
+  tiles_y: 2
+  max_tile_px: 1280
+  include_downscaled_full_frame: true
+  vlm:
+    provider: "ollama"
+    model: "qwen2.5-vl:7b-instruct"
+    base_url: "http://127.0.0.1:11434"
+    api_key: null
+    allow_cloud: false
+  deepseek_ocr:
+    provider: "openai_compatible"
+    model: "deepseek-ocr"
+    base_url: null
+    api_key: null
+    allow_cloud: false
 embed:
   text_model: "BAAI/bge-base-en-v1.5"
   image_model: "google/siglip2-so400m-patch14-384"

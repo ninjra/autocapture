@@ -13,8 +13,13 @@ from ..config import AppConfig
 from ..logging_utils import get_logger
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import EvidenceItem, build_context_pack
+from ..memory.time_intent import (
+    resolve_time_intent,
+    resolve_time_range_for_query,
+    resolve_timezone,
+)
 from ..memory.retrieval import RetrieveFilters, RetrievalService, RetrievedEvent
-from ..memory.router import ProviderRouter
+from ..model_ops import StageRouter
 from ..storage.models import EventRecord
 from ..memory.verification import Claim, RulesVerifier
 
@@ -26,6 +31,16 @@ class AnswerGraphResult:
     context_pack: dict
     warnings: list[str]
     used_llm: bool
+    response_json: dict | None = None
+    response_tron: str | None = None
+    context_pack_tron: str | None = None
+
+
+@dataclass(frozen=True)
+class RefinedQueryIntent:
+    refined_query: str | None
+    time_expression: str | None
+    time_range_payload: dict[str, str] | None
 
 
 class AnswerGraph:
@@ -42,6 +57,7 @@ class AnswerGraph:
         self._prompt_registry = prompt_registry
         self._entities = entities
         self._log = get_logger("answer_graph")
+        self._stage_router = StageRouter(config)
 
     async def run(
         self,
@@ -53,59 +69,131 @@ class AnswerGraph:
         sanitized: bool,
         extractive_only: bool,
         routing: dict[str, str],
+        routing_override: str | None = None,
         aggregates: dict | None = None,
+        output_format: str = "text",
+        context_pack_format: str = "json",
     ) -> AnswerGraphResult:
         warnings: list[str] = []
         normalized_query = self._normalize_query(query)
-        evidence, events = self._build_evidence(normalized_query, time_range, filters, k, sanitized)
+        tzinfo = resolve_timezone(self._config.time.timezone)
+        now = dt.datetime.now(tzinfo)
+        resolved_time_range = resolve_time_range_for_query(
+            query=normalized_query,
+            time_range=time_range,
+            now=now,
+            tzinfo=tzinfo,
+        )
+        evidence, events = self._build_evidence(
+            normalized_query, resolved_time_range, filters, k, sanitized
+        )
         if not evidence:
             warnings.append("no_evidence")
-        if self._should_refine(evidence):
-            refined = await self._refine_query(normalized_query, evidence)
-            if refined and refined != normalized_query:
-                evidence, events = self._build_evidence(refined, time_range, filters, k, sanitized)
+        if self._should_refine(evidence) and self._config.model_stages.query_refine.enabled:
+            refined = await self._refine_query(
+                normalized_query, evidence, routing_override=routing_override
+            )
+            refined_query = self._normalize_query(refined.refined_query or "")
+            if len(refined_query) < 2:
+                refined_query = ""
+            if resolved_time_range is None:
+                intent = resolve_time_intent(
+                    time_expression=refined.time_expression,
+                    time_range_payload=refined.time_range_payload,
+                    now=now,
+                    tzinfo=tzinfo,
+                )
+                resolved_time_range = intent.time_range
+            if refined_query != normalized_query or (
+                not refined_query and resolved_time_range is not None
+            ):
+                evidence, events = self._build_evidence(
+                    refined_query, resolved_time_range, filters, k, sanitized
+                )
         pack = build_context_pack(
             query=query,
             evidence=evidence,
             entity_tokens=self._entities.tokens_for_events(events),
             routing=routing,
             filters={
-                "time_range": time_range,
+                "time_range": resolved_time_range,
                 "apps": filters.get("app") if filters else None,
                 "domains": filters.get("domain") if filters else None,
             },
             sanitized=sanitized,
             aggregates=aggregates,
         )
+        context_pack_json = pack.to_json()
+        context_pack_text = pack.to_text(extractive_only=False, format=context_pack_format)
+        context_pack_tron = context_pack_text if context_pack_format == "tron" else None
         if extractive_only:
             compressed = extractive_answer(evidence)
-            return AnswerGraphResult(
-                answer=compressed.answer,
-                citations=compressed.citations,
-                context_pack=pack.to_json(),
-                warnings=warnings,
+            return _build_graph_result(
+                compressed.answer,
+                compressed.citations,
+                context_pack_json,
+                warnings,
                 used_llm=False,
+                output_format=output_format,
+                context_pack_tron=context_pack_tron,
             )
-        provider, _decision = ProviderRouter(
-            self._merge_routing(routing),
-            self._config.llm,
-            offline=self._config.offline,
-            privacy=self._config.privacy,
-        ).select_llm()
+
         system_prompt = self._prompt_registry.get("ANSWER_WITH_CONTEXT_PACK").system_prompt
-        answer_text = await provider.generate_answer(
-            system_prompt,
-            query,
-            pack.to_text(extractive_only=False),
-        )
-        citations = _extract_citations(answer_text)
+        draft_text: str | None = None
+        draft_citations: list[str] = []
+        draft_valid = False
+        if self._config.model_stages.draft_generate.enabled:
+            try:
+                draft_provider, draft_decision = self._stage_router.select_llm(
+                    "draft_generate", routing_override=routing_override
+                )
+                draft_query = _build_draft_query(query)
+                draft_text = await draft_provider.generate_answer(
+                    system_prompt,
+                    draft_query,
+                    context_pack_text,
+                    temperature=draft_decision.temperature,
+                )
+                draft_citations = _extract_citations(draft_text)
+                draft_valid = _valid_citations(draft_citations, evidence)
+            except Exception as exc:
+                warnings.append("draft_failed")
+                self._log.warning("Draft generation failed; skipping: {}", exc)
+
+        answer_text = ""
+        citations: list[str] = []
         used_llm = False
-        if not _valid_citations(citations, evidence):
+        final_valid = False
+        try:
+            final_provider, final_decision = self._stage_router.select_llm(
+                "final_answer", routing_override=routing_override
+            )
+            final_query = _build_final_query(query, draft_text)
+            answer_text = await final_provider.generate_answer(
+                system_prompt,
+                final_query,
+                context_pack_text,
+                temperature=final_decision.temperature,
+            )
+            citations = _extract_citations(answer_text)
+            final_valid = _valid_citations(citations, evidence)
+        except Exception as exc:
+            warnings.append("final_failed")
+            self._log.warning("Final answer failed; falling back: {}", exc)
+
+        if final_valid and (not draft_valid or len(citations) >= len(draft_citations)):
+            used_llm = True
+        elif draft_valid and draft_text is not None:
+            answer_text = draft_text
+            citations = draft_citations
+            used_llm = True
+        else:
             compressed = extractive_answer(evidence)
             answer_text = compressed.answer
             citations = compressed.citations
             used_llm = False
-        else:
+
+        if used_llm:
             verifier = RulesVerifier()
             verifier.verify(
                 [
@@ -118,13 +206,14 @@ class AnswerGraph:
                 {item.evidence_id for item in evidence},
                 set(),
             )
-            used_llm = True
-        return AnswerGraphResult(
-            answer=answer_text,
-            citations=citations,
-            context_pack=pack.to_json(),
-            warnings=warnings,
+        return _build_graph_result(
+            answer_text,
+            citations,
+            context_pack_json,
+            warnings,
             used_llm=used_llm,
+            output_format=output_format,
+            context_pack_tron=context_pack_tron,
         )
 
     def _build_evidence(
@@ -187,25 +276,39 @@ class AnswerGraph:
     def _should_refine(self, evidence: list) -> bool:
         return len(evidence) < 3
 
-    async def _refine_query(self, query: str, evidence: list) -> str:
-        fallback = self._heuristic_refine_query(query, evidence)
+    async def _refine_query(
+        self, query: str, evidence: list, *, routing_override: str | None
+    ) -> RefinedQueryIntent:
+        fallback_query = self._heuristic_refine_query(query, evidence)
+        fallback = RefinedQueryIntent(
+            refined_query=fallback_query,
+            time_expression=None,
+            time_range_payload=None,
+        )
         try:
             prompt = self._prompt_registry.get("QUERY_REFINEMENT")
         except Exception as exc:
             self._log.warning("Query refinement prompt unavailable: {}", exc)
             return fallback
         try:
-            provider, _decision = ProviderRouter(
-                self._config.routing,
-                self._config.llm,
-                offline=self._config.offline,
-                privacy=self._config.privacy,
-            ).select_llm()
+            provider, decision = self._stage_router.select_llm(
+                "query_refine", routing_override=routing_override
+            )
             context = self._build_refinement_context(evidence)
-            response = await provider.generate_answer(prompt.system_prompt, query, context)
+            response = await provider.generate_answer(
+                prompt.system_prompt,
+                query,
+                context,
+                temperature=decision.temperature,
+            )
             refined = _parse_refined_query(response)
             if refined:
-                return refined
+                refined_query = refined.refined_query or fallback_query
+                return RefinedQueryIntent(
+                    refined_query=refined_query,
+                    time_expression=refined.time_expression,
+                    time_range_payload=refined.time_range_payload,
+                )
         except Exception as exc:
             self._log.warning("Query refinement failed; using fallback: {}", exc)
         return fallback
@@ -257,7 +360,28 @@ def _valid_citations(citations: list[str], evidence: list) -> bool:
     return all(citation in evidence_ids for citation in citations)
 
 
-def _parse_refined_query(response: str) -> str | None:
+def _build_draft_query(query: str) -> str:
+    return (
+        f"{query}\n\n"
+        "Draft a short answer using the evidence. Include citations like [E1]."
+    )
+
+
+def _build_final_query(query: str, draft_text: str | None, max_chars: int = 2000) -> str:
+    if not draft_text:
+        return query
+    trimmed = " ".join(draft_text.split())
+    if len(trimmed) > max_chars:
+        trimmed = trimmed[:max_chars] + "..."
+    return (
+        f"{query}\n\n"
+        "Draft answer to revise:\n"
+        f"{trimmed}\n\n"
+        "Revise for accuracy and make sure citations are included."
+    )
+
+
+def _parse_refined_query(response: str) -> RefinedQueryIntent | None:
     if not response:
         return None
     try:
@@ -267,10 +391,30 @@ def _parse_refined_query(response: str) -> str | None:
     if not isinstance(data, dict):
         return None
     refined = data.get("refined_query")
-    if not isinstance(refined, str):
+    if isinstance(refined, str):
+        refined = " ".join(refined.strip().split()) or None
+    else:
+        refined = None
+    time_expression = data.get("time_expression")
+    if isinstance(time_expression, str):
+        time_expression = " ".join(time_expression.strip().split()) or None
+    else:
+        time_expression = None
+    time_range_payload = data.get("time_range")
+    if isinstance(time_range_payload, dict):
+        start_iso = time_range_payload.get("start_iso")
+        end_iso = time_range_payload.get("end_iso")
+        if not (isinstance(start_iso, str) and isinstance(end_iso, str)):
+            time_range_payload = None
+    else:
+        time_range_payload = None
+    if not refined and not time_expression and not time_range_payload:
         return None
-    refined = " ".join(refined.strip().split())
-    return refined or None
+    return RefinedQueryIntent(
+        refined_query=refined,
+        time_expression=time_expression,
+        time_range_payload=time_range_payload,
+    )
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -283,3 +427,39 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(cleaned)
         output.append(cleaned)
     return output
+
+
+def _build_graph_result(
+    answer: str,
+    citations: list[str],
+    context_pack: dict,
+    warnings: list[str],
+    *,
+    used_llm: bool,
+    output_format: str,
+    context_pack_tron: str | None,
+) -> AnswerGraphResult:
+    response_json = None
+    response_tron = None
+    if output_format in {"json", "tron"}:
+        response_json = {
+            "answer": answer,
+            "citations": citations,
+            "warnings": warnings,
+            "used_llm": used_llm,
+            "context_pack": context_pack,
+        }
+        if output_format == "tron":
+            from ..format.tron import encode_tron
+
+            response_tron = encode_tron(response_json)
+    return AnswerGraphResult(
+        answer=answer,
+        citations=citations,
+        context_pack=context_pack,
+        warnings=warnings,
+        used_llm=used_llm,
+        response_json=response_json,
+        response_tron=response_tron,
+        context_pack_tron=context_pack_tron,
+    )

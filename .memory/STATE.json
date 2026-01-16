@@ -1,0 +1,105 @@
+{
+  "banned_patterns": [
+    "BEGIN PRIVATE KEY",
+    "BEGIN RSA PRIVATE KEY",
+    "AKIA[0-9A-Z]{16}",
+    "ASIA[0-9A-Z]{16}",
+    "ghp_[A-Za-z0-9]{36,}",
+    "sk-[A-Za-z0-9]{20,}",
+    "eyJ[A-Za-z0-9_-]+\\\\.[A-Za-z0-9_-]+\\\\.[A-Za-z0-9_-]+",
+    "(?i)password\\\\s*[:=]\\\\s*\\\\S+",
+    "(?i)token\\\\s*[:=]\\\\s*\\\\S+",
+    "(?i)secret\\\\s*[:=]\\\\s*\\\\S+",
+    "[A-Za-z0-9+/]{80,}={0,2}"
+  ],
+  "decisions": [
+    {
+      "id": "ADR-0001",
+      "title": "Adopt event-sourced repo memory"
+    }
+  ],
+  "keys": {
+    "environment.target-machine": {
+      "source": "user",
+      "ts": "2026-01-15T05:03:00Z",
+      "type": "fact",
+      "value": "Windows 11 host with WSL2 backend and RTX 4090; single-monitor 7680x2160 capture.",
+      "why": "Optimize defaults for the target machine."
+    },
+    "format.tron-support": {
+      "source": "agent",
+      "ts": "2026-01-16T12:49:28Z",
+      "type": "fact",
+      "value": "TRON encode/decode available for context packs and structured answers; output.format/context_pack_format control JSON vs TRON.",
+      "why": "Reduce token overhead for structured payloads."
+    },
+    "global.local-first-default": {
+      "source": "user",
+      "ts": "2026-01-15T05:00:00Z",
+      "type": "constraint",
+      "value": "Default to local-only providers; cloud use requires explicit opt-in per stage.",
+      "why": "Privacy-first, offline-friendly operation."
+    },
+    "global.patch-only": {
+      "source": "user",
+      "ts": "2026-01-15T05:01:00Z",
+      "type": "constraint",
+      "value": "Edits are patch/append-only; do not replace files unless new.",
+      "why": "Keep changes reviewable and stable."
+    },
+    "memory.event-sourced-ledger": {
+      "source": "user",
+      "ts": "2026-01-15T05:05:00Z",
+      "type": "decision",
+      "value": {
+        "status": "accepted",
+        "title": "Adopt event-sourced repo memory"
+      },
+      "why": "Persist high-signal decisions across runs."
+    },
+    "research.scout-cli": {
+      "source": "agent",
+      "ts": "2026-01-16T12:49:28Z",
+      "type": "fact",
+      "value": "Research scout CLI writes ranked model/paper report, caches results, and appends docs/research/scout_log.md.",
+      "why": "Surface new models/papers without auto-merge."
+    },
+    "research.scout-gha-scheduler": {
+      "source": "agent",
+      "ts": "2026-01-16T12:49:28Z",
+      "type": "todo",
+      "value": "Optional scheduled GitHub Actions workflow to run research scout and open an issue/PR when changes exceed threshold.",
+      "why": "Automate scouting when CI is available."
+    },
+    "routing.stage-llm-router": {
+      "source": "agent",
+      "ts": "2026-01-16T12:49:28Z",
+      "type": "fact",
+      "value": "StageRouter selects LLMs per stage (query_refine, draft_generate, final_answer, tool_transform) with per-stage cloud opt-in.",
+      "why": "Enforce local-first defaults with explicit cloud overrides."
+    },
+    "security.no-secrets-or-pii": {
+      "source": "user",
+      "ts": "2026-01-15T05:02:00Z",
+      "type": "constraint",
+      "value": "Never store secrets, tokens, PII, or medical data in repo memory/logs.",
+      "why": "Security and privacy policy."
+    },
+    "stability.frozen-surfaces": {
+      "source": "user",
+      "ts": "2026-01-15T05:04:00Z",
+      "type": "constraint",
+      "value": "Unfreeze files in frozen_manifest.json before edits and refreeze after with reasons.",
+      "why": "Protect stability surfaces from churn."
+    },
+    "vision.vlm-first-extraction": {
+      "source": "agent",
+      "ts": "2026-01-16T12:49:28Z",
+      "type": "fact",
+      "value": "VLM-first extraction with full-screen tiling; RapidOCR fallback; vision_extract tags + transcript stored in ocr_text.",
+      "why": "Capture full-screen context with structured layout."
+    }
+  },
+  "updated_at": "2026-01-16T12:49:28Z",
+  "version": 1
+}

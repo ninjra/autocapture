@@ -26,6 +26,8 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 15
         run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
+      - name: Memory guard
+        run: python .tools/memory_guard.py --check
 
       - name: Release gate
         env:
@@ -53,6 +55,8 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 20
         run: poetry install --with dev --extras "ui windows ocr ocr-gpu embed-fast" --no-interaction --no-ansi --sync -vvv
+      - name: Memory guard
+        run: python .tools/memory_guard.py --check
       - name: Install Inno Setup
         run: choco install innosetup -y
       - name: Release gate

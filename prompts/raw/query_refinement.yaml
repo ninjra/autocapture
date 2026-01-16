@@ -2,27 +2,39 @@ name: "QUERY_REFINEMENT"
 version: "v1"
 system_prompt: |
   You refine user queries for local recall search.
-  Return JSON only: {"refined_query": "..."}.
+  Return JSON only with keys:
+  {"refined_query": "...", "time_expression": null, "time_range": null}.
   Rules:
   - Keep it short, specific, and single-line.
   - Preserve the user's intent and key entities.
   - Use only the provided hints (apps, titles, domains, snippets). Do not speculate.
+  - If the user asks about a time window, move the time phrase into time_expression.
+  - If the user provides explicit timestamps, populate time_range with start_iso/end_iso.
+  - Remove time phrases from refined_query when possible.
   - Do not include any extra keys or commentary.
 raw_template: |
   You refine user queries for local recall search.
-  Return JSON only: {"refined_query": "..."}.
+  Return JSON only with keys:
+  {"refined_query": "...", "time_expression": null, "time_range": null}.
   Rules:
   - Keep it short, specific, and single-line.
   - Preserve the user's intent and key entities.
   - Use only the provided hints (apps, titles, domains, snippets). Do not speculate.
+  - If the user asks about a time window, move the time phrase into time_expression.
+  - If the user provides explicit timestamps, populate time_range with start_iso/end_iso.
+  - Remove time phrases from refined_query when possible.
   - Do not include any extra keys or commentary.
 derived_template: |
   You refine user queries for local recall search.
-  Return JSON only: {"refined_query": "..."}.
+  Return JSON only with keys:
+  {"refined_query": "...", "time_expression": null, "time_range": null}.
   Rules:
   - Keep it short, specific, and single-line.
   - Preserve the user's intent and key entities.
   - Use only the provided hints (apps, titles, domains, snippets). Do not speculate.
+  - If the user asks about a time window, move the time phrase into time_expression.
+  - If the user provides explicit timestamps, populate time_range with start_iso/end_iso.
+  - Remove time phrases from refined_query when possible.
   - Do not include any extra keys or commentary.
 tags:
   - query_refinement

@@ -65,7 +65,10 @@ class RetrievalService:
         limit: int = 12,
         offset: int = 0,
     ) -> list[RetrievedEvent]:
-        if not query.strip():
+        query = query.strip()
+        if len(query) < 2:
+            if time_range:
+                return self._retrieve_time_range(time_range, filters, limit, offset)
             return []
         limit = max(1, limit)
         offset = max(0, offset)
@@ -152,6 +155,23 @@ class RetrievalService:
         with self._db.session() as session:
             stmt = select(EventRecord).order_by(EventRecord.ts_start.desc()).limit(limit)
             return list(session.execute(stmt).scalars().all())
+
+    def _retrieve_time_range(
+        self,
+        time_range: tuple[dt.datetime, dt.datetime],
+        filters: RetrieveFilters | None,
+        limit: int,
+        offset: int,
+    ) -> list[RetrievedEvent]:
+        with self._db.session() as session:
+            stmt = select(EventRecord).where(EventRecord.ts_start.between(*time_range))
+            if filters and filters.apps:
+                stmt = stmt.where(EventRecord.app_name.in_(filters.apps))
+            if filters and filters.domains:
+                stmt = stmt.where(EventRecord.domain.in_(filters.domains))
+            stmt = stmt.order_by(EventRecord.ts_start.desc()).offset(offset).limit(limit)
+            rows = session.execute(stmt).scalars().all()
+        return [RetrievedEvent(event=row, score=0.4) for row in rows]
 
     def _rerank_results(self, query: str, results: list[RetrievedEvent]) -> list[RetrievedEvent]:
         if not results:

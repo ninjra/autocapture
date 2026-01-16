@@ -7,7 +7,12 @@ Autocapture is a local-first Personal Activity Memory Engine. It captures activi
 
 ### Capture
 - `autocapture/capture/` handles screenshot capture, metadata, and OCR staging.
-- Events are persisted in `events` with OCR text and spans.
+- Events are persisted in `events` with screen-text transcripts and spans.
+
+### Vision Extraction
+- `autocapture/vision/` runs VLM-first extraction with full-screen tiling.
+- Structured layout output is stored under `EventRecord.tags["vision_extract"]` and the
+  consolidated transcript is stored in `EventRecord.ocr_text` for retrieval compatibility.
 
 ### Agents + Enrichment
 - `autocapture/agents/` orchestrates enrichment, vision captioning, and nightly highlights.
@@ -18,10 +23,23 @@ Autocapture is a local-first Personal Activity Memory Engine. It captures activi
 - `autocapture/memory/retrieval.py` fetches event evidence from SQLite.
 - `autocapture/memory/context_pack.py` formats JSON + canonical text context packs.
   - Daily highlight snippets are attached under `aggregates`.
+- `autocapture/format/tron.py` adds TRON encode/decode for compact structured payloads.
 
 ### Providers + Routing
 - `autocapture/memory/router.py` selects providers per layer.
 - Layers: OCR, embeddings, retrieval, reranking, compression, verification, LLM.
+- `autocapture/model_ops/router.py` selects LLMs per stage (query_refine, draft_generate,
+  final_answer, tool_transform) with per-stage cloud opt-ins.
+- Vision extractors use `vision_extract` backend configuration with explicit cloud-image
+  gating.
+
+### Time Intent
+- `autocapture/memory/time_intent.py` deterministically parses time expressions for
+  time-range retrieval and timeline answers.
+
+### Research Scout
+- `autocapture/research/scout.py` discovers recent models/papers, caches results, and
+  writes ranked proposal reports.
 
 ### Privacy + Entity Resolution
 - `autocapture/memory/entities.py` manages stable pseudonyms and alias mapping.

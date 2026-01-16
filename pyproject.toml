@@ -11,6 +11,8 @@ exclude = ["autocapture/_legacy/**"]
 
 [tool.poetry.scripts]
 autocapture = "autocapture.main:main"
+memory-check = ".tools.memory_guard:main"
+memory-rebuild = ".tools.memory_guard:main"
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"

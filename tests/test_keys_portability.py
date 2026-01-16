@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+import types
 
 import pytest
 
 from autocapture.config import AppConfig, DatabaseConfig
-from autocapture.security.portable_keys import export_keys, import_keys
+from autocapture.security.portable_keys import (
+    _read_dpapi_file,
+    _write_dpapi_file,
+    export_keys,
+    import_keys,
+)
 
 
 def _write_key(path: Path, value: bytes) -> None:
@@ -88,3 +95,15 @@ def test_import_rejects_wrong_password(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="Invalid password"):
         import_keys(config, bundle_path, "wrong-password")
+
+
+def test_dpapi_helpers_use_win32crypt(monkeypatch, tmp_path: Path) -> None:
+    stub = types.SimpleNamespace(
+        CryptProtectData=lambda data, *_args: b"protected:" + data,
+        CryptUnprotectData=lambda data, *_args: (None, data.replace(b"protected:", b"", 1)),
+    )
+    monkeypatch.setitem(sys.modules, "win32crypt", stub)
+    path = tmp_path / "dpapi.key"
+    _write_dpapi_file(path, b"secret", use_dpapi=True)
+    assert path.read_bytes() == b"protected:secret"
+    assert _read_dpapi_file(path, use_dpapi=True) == b"secret"

@@ -181,6 +181,32 @@ class OCRConfig(BaseModel):
     output_format: str = Field("json")
 
 
+class VisionBackendConfig(BaseModel):
+    provider: str = Field("ollama", description="ollama|openai_compatible|openai")
+    model: str = Field("qwen2.5-vl:7b-instruct")
+    base_url: Optional[str] = Field(None)
+    api_key: Optional[str] = None
+    allow_cloud: bool = Field(False, description="Allow cloud vision calls for this backend.")
+
+
+class VisionExtractConfig(BaseModel):
+    engine: str = Field("vlm", description="vlm|rapidocr|deepseek-ocr|disabled")
+    fallback_engine: str = Field("rapidocr-onnxruntime")
+    tiles_x: int = Field(3, ge=1)
+    tiles_y: int = Field(2, ge=1)
+    max_tile_px: int = Field(1280, ge=256)
+    include_downscaled_full_frame: bool = Field(True)
+    vlm: VisionBackendConfig = VisionBackendConfig()
+    deepseek_ocr: VisionBackendConfig = Field(
+        default_factory=lambda: VisionBackendConfig(
+            provider="openai_compatible",
+            model="deepseek-ocr",
+            base_url=None,
+            api_key=None,
+        )
+    )
+
+
 class EmbedConfig(BaseModel):
     text_model: str = Field("BAAI/bge-base-en-v1.5")
     image_model: str = Field("google/siglip2-so400m-patch14-384")
@@ -439,6 +465,33 @@ class PrivacyConfig(BaseModel):
     exclude_regions: list[dict] = Field(default_factory=list)
 
 
+class OutputConfig(BaseModel):
+    format: str = Field("text", description="text|json|tron")
+    context_pack_format: str = Field("json", description="json|tron")
+
+    @field_validator("format")
+    @classmethod
+    def validate_format(cls, value: str) -> str:
+        allowed = {"text", "json", "tron"}
+        if value not in allowed:
+            raise ValueError(f"output.format must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("context_pack_format")
+    @classmethod
+    def validate_context_pack_format(cls, value: str) -> str:
+        allowed = {"json", "tron"}
+        if value not in allowed:
+            raise ValueError(f"output.context_pack_format must be one of {sorted(allowed)}")
+        return value
+
+
+class TimeConfig(BaseModel):
+    timezone: Optional[str] = Field(
+        None, description="IANA timezone override (e.g., America/Denver)."
+    )
+
+
 class SecurityConfig(BaseModel):
     local_unlock_enabled: bool = Field(
         True, description="Require local unlock session for sensitive endpoints."
@@ -543,6 +596,29 @@ class LLMConfig(BaseModel):
     retries: int = Field(3, ge=0, le=10)
 
 
+class ModelStageConfig(BaseModel):
+    provider: Optional[str] = Field(
+        None, description="ollama|openai_compatible|openai (defaults to llm.provider)"
+    )
+    model: Optional[str] = Field(None, description="Stage-specific model override.")
+    base_url: Optional[str] = Field(None, description="Stage-specific base URL override.")
+    api_key: Optional[str] = Field(None, description="Stage-specific API key override.")
+    allow_cloud: bool = Field(False, description="Allow cloud usage for this stage.")
+    enabled: bool = Field(True)
+    temperature: float = Field(0.2, ge=0.0, le=1.0)
+
+
+class ModelStagesConfig(BaseModel):
+    query_refine: ModelStageConfig = ModelStageConfig()
+    draft_generate: ModelStageConfig = Field(
+        default_factory=lambda: ModelStageConfig(enabled=False)
+    )
+    final_answer: ModelStageConfig = ModelStageConfig()
+    tool_transform: ModelStageConfig = Field(
+        default_factory=lambda: ModelStageConfig(enabled=False)
+    )
+
+
 class AgentAnswerConfig(BaseModel):
     enabled: bool = Field(True)
 
@@ -574,6 +650,7 @@ class AppConfig(BaseModel):
     capture: CaptureConfig = CaptureConfig()
     tracking: TrackingConfig = TrackingConfig()
     ocr: OCRConfig = OCRConfig()
+    vision_extract: VisionExtractConfig = VisionExtractConfig()
     embed: EmbedConfig = EmbedConfig()
     reranker: RerankerConfig = RerankerConfig()
     worker: WorkerConfig = WorkerConfig()
@@ -586,9 +663,12 @@ class AppConfig(BaseModel):
     observability: ObservabilityConfig = ObservabilityConfig()
     api: APIConfig = APIConfig()
     llm: LLMConfig = LLMConfig()
+    model_stages: ModelStagesConfig = ModelStagesConfig()
     mode: ModeConfig = ModeConfig()
     routing: ProviderRoutingConfig = ProviderRoutingConfig()
     privacy: PrivacyConfig = PrivacyConfig()
+    output: OutputConfig = OutputConfig()
+    time: TimeConfig = TimeConfig()
     security: SecurityConfig = SecurityConfig()
     presets: PresetConfig = PresetConfig()
     promptops: PromptOpsConfig = PromptOpsConfig()
@@ -879,7 +959,8 @@ def apply_dev_overrides(config: AppConfig) -> AppConfig:
         if importlib.util.find_spec("rapidocr_onnxruntime") is None:
             logger.info("Dev mode: disabling OCR (rapidocr_onnxruntime not installed).")
             config.ocr.engine = "disabled"
-            config.routing.ocr = "disabled"
+            if config.vision_extract.engine in {"rapidocr", "rapidocr-onnxruntime"}:
+                config.routing.ocr = "disabled"
     if (
         config.encryption.enabled
         and config.encryption.key_provider == "windows-credential-manager"

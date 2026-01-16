@@ -111,9 +111,17 @@ class ContextPack:
             "warnings": warnings,
         }
 
-    def to_text(self, extractive_only: bool) -> str:
+    def to_text(self, extractive_only: bool, *, format: str = "json") -> str:
         _ = extractive_only
-        return json.dumps(self.to_json(), ensure_ascii=False, indent=2)
+        payload = self.to_json()
+        if format == "tron":
+            from ..format.tron import encode_tron
+
+            return encode_tron(payload)
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    def to_tron(self) -> str:
+        return self.to_text(extractive_only=False, format="tron")
 
 
 def build_context_pack(

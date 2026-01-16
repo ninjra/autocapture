@@ -39,16 +39,27 @@ def parse_structured_output(
     repair_fn: Callable[[str], str] | None = None,
 ) -> T:
     try:
-        payload = extract_json_payload(raw_text)
-        data = json.loads(payload)
+        data = _decode_structured_payload(raw_text)
         return model.model_validate(data)
     except (StructuredOutputError, json.JSONDecodeError, ValidationError) as exc:
         if not repair_fn:
             raise StructuredOutputError(f"Failed to parse structured output: {exc}") from exc
         repaired = repair_fn(raw_text)
         try:
-            payload = extract_json_payload(repaired)
-            data = json.loads(payload)
+            data = _decode_structured_payload(repaired)
             return model.model_validate(data)
         except (StructuredOutputError, json.JSONDecodeError, ValidationError) as exc2:
             raise StructuredOutputError(f"Repair attempt failed: {exc2}") from exc2
+
+
+def _decode_structured_payload(raw_text: str) -> dict:
+    try:
+        payload = extract_json_payload(raw_text)
+        return json.loads(payload)
+    except (StructuredOutputError, json.JSONDecodeError):
+        from ..format.tron import decode_tron
+
+        decoded = decode_tron(raw_text)
+        if not isinstance(decoded, dict):
+            raise StructuredOutputError("TRON payload was not an object.")
+        return decoded

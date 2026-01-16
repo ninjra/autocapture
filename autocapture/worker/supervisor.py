@@ -77,7 +77,12 @@ class WorkerSupervisor:
             self._agent_workers = list(agent_workers)
 
     def _ocr_enabled(self) -> bool:
-        if self._config.routing.ocr == "disabled" or self._config.ocr.engine == "disabled":
+        engine = (self._config.vision_extract.engine or "").lower()
+        if self._config.routing.ocr == "disabled" or engine in {"disabled", "off"}:
+            return False
+        if engine not in {"rapidocr", "rapidocr-onnxruntime"}:
+            return True
+        if self._config.ocr.engine == "disabled":
             return False
         if not is_dev_mode():
             return True

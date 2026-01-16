@@ -97,10 +97,12 @@ def test_answer_graph_extractive_only(monkeypatch) -> None:
 def test_answer_graph_llm_path(monkeypatch) -> None:
     graph, _retrieval, _db = _setup_graph()
 
-    def _select_llm(self):
-        return _StubProvider(), type("Decision", (), {"llm_provider": "stub"})()
+    def _select_llm(self, stage: str, *, routing_override=None):
+        if stage == "query_refine":
+            return _RefineProvider(), type("Decision", (), {"temperature": 0.2})()
+        return _StubProvider(), type("Decision", (), {"temperature": 0.2})()
 
-    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _select_llm)
+    monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _select_llm)
     result = asyncio.run(
         graph.run(
             "hello",
@@ -120,22 +122,22 @@ def test_answer_graph_llm_path(monkeypatch) -> None:
 def test_refine_query_uses_prompt_output(monkeypatch) -> None:
     graph, _retrieval, _db = _setup_graph()
 
-    def _select_llm(self):
-        return _RefineProvider(), type("Decision", (), {"llm_provider": "stub"})()
+    def _select_llm(self, stage: str, *, routing_override=None):
+        return _RefineProvider(), type("Decision", (), {"temperature": 0.2})()
 
-    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _select_llm)
+    monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _select_llm)
     evidence, _events = graph._build_evidence("hello", None, None, 2, sanitized=False)
-    refined = asyncio.run(graph._refine_query("hello", evidence))
-    assert refined == "hello notes"
+    refined = asyncio.run(graph._refine_query("hello", evidence, routing_override=None))
+    assert refined.refined_query == "hello notes"
 
 
 def test_refine_query_falls_back_on_invalid_output(monkeypatch) -> None:
     graph, _retrieval, _db = _setup_graph()
 
-    def _select_llm(self):
-        return _BadRefineProvider(), type("Decision", (), {"llm_provider": "stub"})()
+    def _select_llm(self, stage: str, *, routing_override=None):
+        return _BadRefineProvider(), type("Decision", (), {"temperature": 0.2})()
 
-    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _select_llm)
+    monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _select_llm)
     evidence, _events = graph._build_evidence("hello", None, None, 2, sanitized=False)
-    refined = asyncio.run(graph._refine_query("hello", evidence))
-    assert refined == "hello Editor"
+    refined = asyncio.run(graph._refine_query("hello", evidence, routing_override=None))
+    assert refined.refined_query == "hello Editor"

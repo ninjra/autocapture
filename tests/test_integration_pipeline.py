@@ -5,13 +5,19 @@ import pytest
 
 from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
-from autocapture.memory.router import RoutingDecision
 from autocapture.storage.database import DatabaseManager
 from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 
 
 class MockLLM:
-    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
+    async def generate_answer(
+        self,
+        system_prompt: str,
+        query: str,
+        context_pack_text: str,
+        *,
+        temperature: float | None = None,
+    ) -> str:
         return "Answer based on evidence [E1]"
 
 
@@ -23,6 +29,7 @@ async def test_retrieve_context_pack_answer(
     config.database = DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
     config.capture.data_dir = tmp_path
     config.embed.text_model = "local-test"
+    config.model_stages.query_refine.enabled = False
     db = DatabaseManager(config.database)
 
     with db.session() as session:
@@ -67,10 +74,10 @@ async def test_retrieve_context_pack_answer(
             )
         )
 
-    def _mock_select(self):
-        return MockLLM(), RoutingDecision(llm_provider="mock")
+    def _mock_select(self, stage: str, *, routing_override=None):
+        return MockLLM(), type("Decision", (), {"temperature": 0.2, "stage": stage})()
 
-    monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _mock_select)
+    monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _mock_select)
 
     app = create_app(config, db_manager=db)
     async with async_client_factory(app) as client:
