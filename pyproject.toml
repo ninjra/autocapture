@@ -11,6 +11,8 @@ exclude = ["autocapture/_legacy/**"]
 
 [tool.poetry.scripts]
 autocapture = "autocapture.main:main"
+memory-check = ".tools.memory_guard:main"
+memory-rebuild = ".tools.memory_guard:main"
 
 [tool.poetry.dependencies]
 python = ">=3.12,<3.13"
@@ -44,6 +46,7 @@ PyJWT = "^2.8.0"
 alembic = "^1.13.1"
 apscheduler = "^3.10.4"
 jinja2 = "^3.1.6"
+python-multipart = "^0.0.21"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.3.0"

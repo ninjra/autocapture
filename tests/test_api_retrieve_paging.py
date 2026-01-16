@@ -21,7 +21,7 @@ def test_retrieve_paging_uses_k_when_set() -> None:
 
 
 def test_retrieve_paging_clamps_page_size_and_offsets() -> None:
-    config = AppConfig(api=APIConfig(default_page_size=33, max_page_size=10))
+    config = AppConfig(api=APIConfig(default_page_size=10, max_page_size=10))
     request = RetrieveRequest(query="hello", page=2, page_size=99)
     offset, limit = _resolve_retrieve_paging(request, config)
     assert limit == 10

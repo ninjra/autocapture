@@ -1,5 +1,53 @@
 # Operations Guide
 
+## Local Model Serving (Vision + LLM)
+
+Autocapture defaults to local-only model endpoints. Recommended local options:
+
+- **Ollama (local)** for Qwen2.5-VL VLM extraction and fast drafts. Configure
+  `vision_extract.vlm.provider: ollama` and `model: qwen2.5-vl:7b-instruct`.
+- **OpenAI-compatible local servers** (vLLM, llama.cpp, Open WebUI) for larger
+  Qwen2.5-VL or DiffusionVL variants. Configure `vision_extract.vlm.provider:
+  openai_compatible`, `base_url: http://127.0.0.1:PORT`, and the model name.
+- **DiffusionVL-Qwen2.5VL-7B** is supported as a selectable model (use an
+  OpenAI-compatible server if available): https://huggingface.co/hustvl/DiffusionVL-Qwen2.5VL-7B
+- **DeepSeek-OCR** is an optional backend (`vision_extract.engine: deepseek-ocr`):
+  https://huggingface.co/deepseek-ai/DeepSeek-OCR and
+  https://github.com/deepseek-ai/DeepSeek-OCR
+
+Cloud vision is blocked by default. To enable (explicit opt-in):
+
+1. `privacy.cloud_enabled: true`
+2. `privacy.allow_cloud_images: true`
+3. `vision_extract.vlm.allow_cloud: true` (or `vision_extract.deepseek_ocr.allow_cloud: true`)
+
+Acceleration references:
+
+- NVIDIA RTX local acceleration: https://developer.nvidia.com/blog/open-source-ai-tool-upgrades-speed-up-llm-and-diffusion-models-on-nvidia-rtx-pcs/
+- Tiny diffusion experiments: https://github.com/nathan-barry/tiny-diffusion
+
+## Model Stages (Routing)
+
+Use `model_stages` to route query refinement, draft generation, final answer, and tool
+transform stages. Each stage can override provider/model/base_url and requires
+`allow_cloud: true` for any non-local endpoint.
+
+## Output Formats (JSON/TRON)
+
+`output.format` controls answer serialization (`text`, `json`, or `tron`). The context
+pack payload sent to LLMs is controlled by `output.context_pack_format` (`json` or
+`tron`).
+
+## Research Scout
+
+Generate a cached model/paper report (local-first, offline-aware):
+
+```powershell
+poetry run autocapture research scout --out "docs/research/scout_report.json"
+```
+
+The scout appends a short summary to `docs/research/scout_log.md` by default.
+
 ## TNAS Service Hosting (Optional)
 
 Autocapture local mode on Windows does **not** require Docker. Qdrant and FFmpeg

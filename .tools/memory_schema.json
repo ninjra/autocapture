@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Autocapture memory ledger entry",
+  "type": "object",
+  "required": ["ts", "type", "scope", "key", "value", "why", "source"],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "description": "ISO8601 timestamp with timezone",
+      "minLength": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": ["constraint", "lesson", "decision", "fact", "failure", "fix", "todo", "note"]
+    },
+    "scope": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,63}$"
+    },
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_.-]{0,127}$"
+    },
+    "value": {
+      "description": "JSON-serializable value"
+    },
+    "why": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "source": {
+      "type": "string",
+      "enum": ["agent", "user", "ci", "test", "manual"]
+    },
+    "evidence": {
+      "type": "string",
+      "maxLength": 500
+    },
+    "id": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "tags": {
+      "type": "array",
+      "items": {"type": "string"},
+      "maxItems": 16
+    },
+    "supersedes": {
+      "type": "array",
+      "items": {"type": "string"},
+      "maxItems": 16
+    }
+  },
+  "additionalProperties": false
+}

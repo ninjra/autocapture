@@ -15,7 +15,8 @@ from typing import Iterable, Optional
 from urllib.parse import urlparse
 
 import httpx
-from jinja2 import Environment, nodes
+from jinja2 import nodes
+from jinja2.sandbox import SandboxedEnvironment
 import yaml
 
 from ..config import AppConfig, PromptOpsConfig
@@ -653,7 +654,7 @@ def _validate_prompt_template(template: str, max_chars: int, *, label: str) -> N
         raise ValueError(f"PromptOps {label} exceeds max length ({max_chars} chars)")
     if "__" in template:
         raise ValueError(f"PromptOps {label} contains disallowed dunder sequence")
-    parsed = Environment().parse(template)
+    parsed = SandboxedEnvironment().parse(template)
     forbidden_nodes = (
         nodes.Import,
         nodes.FromImport,
@@ -661,12 +662,16 @@ def _validate_prompt_template(template: str, max_chars: int, *, label: str) -> N
         nodes.Extends,
         nodes.Macro,
         nodes.CallBlock,
+        nodes.Call,
     )
     for node_type in forbidden_nodes:
         if any(parsed.find_all(node_type)):
             raise ValueError(
                 f"PromptOps {label} contains forbidden Jinja2 construct: {node_type.__name__}"
             )
+    for node in parsed.find_all(nodes.For):
+        if getattr(node, "recursive", False):
+            raise ValueError(f"PromptOps {label} contains recursive Jinja2 loop")
 
 
 def _extract_yaml(response: str) -> str:

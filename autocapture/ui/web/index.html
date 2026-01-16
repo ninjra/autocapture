@@ -90,6 +90,26 @@
           </div>
           <button id="saveSettings">Save Settings</button>
           <p class="hint">Remote mode status: <span id="remoteStatus">local-only</span></p>
+          <div class="storage-card">
+            <div class="storage-header">
+              <h3>Storage &amp; Retention</h3>
+              <button id="refreshStorage" type="button">Refresh</button>
+            </div>
+            <div class="storage-grid">
+              <div>
+                <span class="label">TTL (days)</span>
+                <span id="storageTtl">--</span>
+              </div>
+              <div>
+                <span class="label">Media usage</span>
+                <span id="storageUsage">--</span>
+              </div>
+              <div class="storage-path">
+                <span class="label">Media path</span>
+                <span id="storagePath">--</span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
       <section id="highlights" class="tab">

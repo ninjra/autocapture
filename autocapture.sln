@@ -1,0 +1,101 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31912.275
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{66A26720-8FB5-11D2-AA7E-00C04F688DDE}") = "src", "src", "{B5B48CFD-0D0F-4B39-BF1F-9A9B4A1E0E8F}"
+\tProjectSection(SolutionItems) = preProject
+\t\tsrc\README.md = src\README.md
+\tEndProjectSection
+EndProject
+Project("{66A26720-8FB5-11D2-AA7E-00C04F688DDE}") = "tests", "tests", "{ECA8D4E1-7B64-4F5B-9E91-9A39F4A2E7E8}"
+\tProjectSection(SolutionItems) = preProject
+		tests\\test_media_store.py = tests\\test_media_store.py
+		tests\\test_logging_utils.py = tests\\test_logging_utils.py
+		tests\\test_lexical_index_bulk_upsert.py = tests\\test_lexical_index_bulk_upsert.py
+		tests\\test_lexical_index.py = tests\\test_lexical_index.py
+		tests\\test_integration_pipeline.py = tests\\test_integration_pipeline.py
+		tests\\test_host_tracker_aggregation.py = tests\\test_host_tracker_aggregation.py
+		tests\\test_host_event_store.py = tests\\test_host_event_store.py
+		tests\\test_fs_utils.py = tests\\test_fs_utils.py
+		tests\\test_frozen_surfaces.py = tests\\test_frozen_surfaces.py
+		tests\\test_freeze_utils.py = tests\\test_freeze_utils.py
+		tests\\test_ffmpeg_recorder.py = tests\\test_ffmpeg_recorder.py
+		tests\\test_export.py = tests\\test_export.py
+		tests\\test_event_worker_leases.py = tests\\test_event_worker_leases.py
+		tests\\test_event_ingest_worker.py = tests\\test_event_ingest_worker.py
+		tests\\test_event_ingest_idempotency.py = tests\\test_event_ingest_idempotency.py
+		tests\\test_event_enrichment_agent.py = tests\\test_event_enrichment_agent.py
+		tests\\test_encryption_providers.py = tests\\test_encryption_providers.py
+		tests\\test_embedding_worker_indexing.py = tests\\test_embedding_worker_indexing.py
+		tests\\test_duplicate_detector.py = tests\\test_duplicate_detector.py
+		tests\\test_doctor.py = tests\\test_doctor.py
+		tests\\test_delete_range.py = tests\\test_delete_range.py
+		tests\\test_db_tls_validation.py = tests\\test_db_tls_validation.py
+		tests\\test_daily_highlights.py = tests\\test_daily_highlights.py
+		tests\\test_context_pack.py = tests\\test_context_pack.py
+		tests\\test_api_supervisor.py = tests\\test_api_supervisor.py
+		tests\\test_api_suggest_dashboard.py = tests\\test_api_suggest_dashboard.py
+		tests\\test_api_health_deep.py = tests\\test_api_health_deep.py
+		tests\\test_answer_graph.py = tests\\test_answer_graph.py
+		tests\\test_answer_citations.py = tests\\test_answer_citations.py
+		tests\\test_alias_resolution.py = tests\\test_alias_resolution.py
+		tests\\test_agent_jobs.py = tests\\test_agent_jobs.py
+		tests\\conftest.py = tests\\conftest.py
+		tests\\test_raw_input_fallback.py = tests\\test_raw_input_fallback.py
+		tests\\test_qdrant_sidecar.py = tests\\test_qdrant_sidecar.py
+		tests\\test_pseudonymization.py = tests\\test_pseudonymization.py
+		tests\\test_promptops_parse.py = tests\\test_promptops_parse.py
+		tests\\test_promptops_github.py = tests\\test_promptops_github.py
+		tests\\test_promptops_gate.py = tests\\test_promptops_gate.py
+		tests\\test_privacy_policy.py = tests\\test_privacy_policy.py
+		tests\\test_privacy_filters.py = tests\\test_privacy_filters.py
+		tests\\test_presets.py = tests\\test_presets.py
+		tests\\test_popup_signals.py = tests\\test_popup_signals.py
+		tests\\test_paths.py = tests\\test_paths.py
+		tests\\test_orchestrator_video_queue.py = tests\\test_orchestrator_video_queue.py
+		tests\\test_orchestrator_throttle.py = tests\\test_orchestrator_throttle.py
+		tests\\test_orchestrator_fullscreen.py = tests\\test_orchestrator_fullscreen.py
+		tests\\test_orchestrator_duplicates.py = tests\\test_orchestrator_duplicates.py
+		tests\\test_orchestrator_diesafe.py = tests\\test_orchestrator_diesafe.py
+		tests\\test_orchestrator_backpressure.py = tests\\test_orchestrator_backpressure.py
+		tests\\test_oidc_verifier.py = tests\\test_oidc_verifier.py
+		tests\\test_offline_guard.py = tests\\test_offline_guard.py
+		tests\\test_mss_backend.py = tests\\test_mss_backend.py
+		tests\\test_settings_api.py = tests\\test_settings_api.py
+		tests\\test_security_session.py = tests\\test_security_session.py
+		tests\\test_screenshot_hash.py = tests\\test_screenshot_hash.py
+		tests\\test_runtime_pause.py = tests\\test_runtime_pause.py
+		tests\\test_runtime_hotkey.py = tests\\test_runtime_hotkey.py
+		tests\\test_router_cloud_guard.py = tests\\test_router_cloud_guard.py
+		tests\\test_retrieval_hybrid.py = tests\\test_retrieval_hybrid.py
+		tests\\test_retention_policy.py = tests\\test_retention_policy.py
+		tests\\test_retention_pending_safe.py = tests\\test_retention_pending_safe.py
+		tests\\test_raw_input_hotkey.py = tests\\test_raw_input_hotkey.py
+		tests\\test_vector_index_sharing.py = tests\\test_vector_index_sharing.py
+		tests\\test_token_vault.py = tests\\test_token_vault.py
+		tests\\test_structured_output.py = tests\\test_structured_output.py
+		tests\\test_startup_registration.py = tests\\test_startup_registration.py
+		tests\\test_snippet_offsets.py = tests\\test_snippet_offsets.py
+		tests\\test_vision_caption_agent.py = tests\\test_vision_caption_agent.py
+		tests\\test_verifier.py = tests\\test_verifier.py
+		tests\\test_worker_resilience.py = tests\\test_worker_resilience.py
+		tests\\test_worker_supervisor.py = tests\\test_worker_supervisor.py
+\tEndProjectSection
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Autocapture.Shell", "src\\Autocapture.Shell\\Autocapture.Shell.csproj", "{D4DFA4F2-2C53-4CC8-9B1C-A4E2B4F2C8D6}"
+EndProject
+Global
+\tGlobalSection(SolutionConfigurationPlatforms) = preSolution
+\t\tDebug|Any CPU = Debug|Any CPU
+\t\tRelease|Any CPU = Release|Any CPU
+\tEndGlobalSection
+\tGlobalSection(ProjectConfigurationPlatforms) = postSolution
+\t\t{D4DFA4F2-2C53-4CC8-9B1C-A4E2B4F2C8D6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+\t\t{D4DFA4F2-2C53-4CC8-9B1C-A4E2B4F2C8D6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+\t\t{D4DFA4F2-2C53-4CC8-9B1C-A4E2B4F2C8D6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+\t\t{D4DFA4F2-2C53-4CC8-9B1C-A4E2B4F2C8D6}.Release|Any CPU.Build.0 = Release|Any CPU
+\tEndGlobalSection
+\tGlobalSection(SolutionProperties) = preSolution
+\t\tHideSolutionNode = FALSE
+\tEndGlobalSection
+EndGlobal

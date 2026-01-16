@@ -5,9 +5,11 @@ A local-first desktop recall app for Windows 11 that runs as a single binary: tr
 ## Features
 
 - **Tray + local web UI** with a lightweight search popup and dashboard.
-- **Local capture + OCR** using DXCam (with MSS fallback) and on-device OCR.
+- **VLM-first screen understanding** using DXCam (with MSS fallback), full-screen tiling, and a RapidOCR fallback.
 - **Embedded search** with Qdrant-backed vector indexes and fast embeddings (falls back to lexical-only retrieval if Qdrant is unavailable). Windows release builds bundle a local Qdrant sidecar.
 - **Private by default** with local storage and optional cloud LLM fallback.
+- **Time-aware Q&A** with deterministic time parsing, citations, and optional TRON/JSON outputs.
+- **Stage-routed LLM pipeline** with query refinement, draft generation, and final answer stages (local-first defaults).
 
 ## Repository Layout
 
@@ -67,6 +69,12 @@ poetry run black --check .
 poetry run pytest -q
 ```
 
+PowerShell helper:
+```powershell
+.\dev.ps1 check
+.\dev.ps1 smoke
+```
+
 ### Daily Use
 
 - `Ctrl+Shift+Space` opens the search popup.
@@ -120,6 +128,14 @@ poetry run autocapture export --out "D:/autocapture/export.zip"
 
 Use `--no-zip` to write a folder instead of a zip archive, and `--days N` to change the
 date window.
+
+## Research scout
+
+Generate a local model/paper discovery report:
+
+```powershell
+poetry run autocapture research scout --out "docs/research/scout_report.json"
+```
 
 ## License
 

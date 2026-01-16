@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..agents import AGENT_JOB_ENRICH_EVENT
 from ..agents.jobs import AgentJobQueue
-from ..config import AppConfig, OCRConfig
+from ..config import AppConfig
 from ..image_utils import ensure_rgb, hash_rgb_image
 from ..indexing.lexical_index import LexicalIndex
 from ..logging_utils import get_logger
@@ -25,35 +25,8 @@ from ..media.store import MediaStore
 from ..observability.metrics import ocr_backlog, ocr_latency_ms, worker_errors_total
 from ..storage.database import DatabaseManager
 from ..storage.models import CaptureRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
-
-
-def _available_onnx_providers() -> list[str]:
-    import importlib.util
-
-    if importlib.util.find_spec("onnxruntime") is None:
-        return []
-    import onnxruntime as ort  # type: ignore
-
-    return list(ort.get_available_providers())
-
-
-def _select_onnx_provider(config: OCRConfig, providers: list[str]) -> tuple[str | None, bool]:
-    preferred = list(config.onnx_providers or [])
-    device = config.device.lower()
-    if device == "cpu":
-        preferred = ["CPUExecutionProvider"]
-    elif device == "cuda" and not preferred:
-        preferred = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    if not preferred:
-        preferred = ["CPUExecutionProvider"]
-    for provider in preferred:
-        if provider in providers:
-            return provider, provider == "CUDAExecutionProvider"
-    return None, False
-
-
-def _build_rapidocr_kwargs(use_cuda: bool) -> dict[str, object]:
-    return {"use_cuda": use_cuda}
+from ..vision.extractors import ScreenExtractorRouter
+from ..vision.types import ExtractionResult, build_ocr_payload
 
 
 @dataclass(frozen=True)
@@ -67,42 +40,28 @@ class CapturePayload:
     is_fullscreen: bool
 
 
-class OCRProcessor:
-    def __init__(self, config: OCRConfig) -> None:
-        from rapidocr_onnxruntime import RapidOCR
+class LegacyOCRAdapter:
+    def __init__(self, ocr_processor: object) -> None:
+        self._processor = ocr_processor
 
-        self._config = config
-        self._log = get_logger("ocr")
-        providers = _available_onnx_providers()
-        self._log.info("ONNX Runtime providers available: {}", providers or "none")
-        selected, use_cuda = _select_onnx_provider(config, providers)
-        if config.device.lower() == "cuda" and selected != "CUDAExecutionProvider":
-            self._log.warning(
-                "OCR device=cuda but CUDAExecutionProvider unavailable; falling back to CPU. "
-                "Install onnxruntime-gpu and CUDA/cuDNN."
-            )
-        selected_name = selected or "none"
-        self._log.info("OCR execution provider selected: {}", selected_name)
-
-        kwargs = _build_rapidocr_kwargs(use_cuda)
-        if kwargs:
-            self._log.info("RapidOCR init kwargs: {}", kwargs)
-        self._engine = RapidOCR(**kwargs)
-        self._warmup()
-
-    def _warmup(self) -> None:
-        sample = np.zeros((16, 16, 3), dtype=np.uint8)
-        self._engine(sample)
-
-    def run(self, image: np.ndarray) -> list[tuple[str, float, list[int]]]:
-        bgr = image[:, :, ::-1]
-        results, _ = self._engine(bgr)
-        spans = []
-        for result in results or []:
-            box, text, confidence = result
-            flattened = [int(coord) for point in box for coord in point]
-            spans.append((text, float(confidence), flattened))
-        return spans
+    def extract(self, image: np.ndarray) -> ExtractionResult:
+        spans = self._processor.run(image)
+        text, ocr_spans = build_ocr_payload(spans)
+        tags = {
+            "vision_extract": {
+                "schema_version": "v1",
+                "engine": "legacy-ocr",
+                "screen_summary": "",
+                "regions": [],
+                "visible_text": text,
+                "tables_detected": None,
+                "spreadsheets_detected": None,
+                "parse_failed": False,
+                "parse_format": "legacy",
+                "tiles": [],
+            }
+        }
+        return ExtractionResult(text=text, spans=ocr_spans, tags=tags)
 
 
 class EventIngestWorker:
@@ -122,9 +81,14 @@ class EventIngestWorker:
         self._max_attempts = config.worker.ocr_max_attempts
         self._max_task_runtime_s = config.worker.max_task_runtime_s
         if ocr_processor is None:
-            self._ocr = OCRProcessor(config.ocr)
+            self._extractor = ScreenExtractorRouter(config)
         else:
-            self._ocr = ocr_processor
+            if hasattr(ocr_processor, "extract"):
+                self._extractor = ocr_processor
+            elif hasattr(ocr_processor, "run"):
+                self._extractor = LegacyOCRAdapter(ocr_processor)
+            else:
+                raise ValueError("ocr_processor must implement extract() or run()")
 
     def process_batch(self, limit: Optional[int] = None) -> int:
         processed = 0
@@ -250,14 +214,16 @@ class EventIngestWorker:
         heartbeat_thread.start()
         try:
             image = self._load_image(path)
-            spans = self._ocr.run(image)
-            ocr_text, ocr_spans = _build_ocr_payload(spans)
+            result = self._extractor.extract(image)
+            ocr_text = result.text
+            ocr_spans = result.spans
             self._persist_ocr_results(
                 capture,
                 ocr_text,
                 ocr_spans,
                 event_existing=bool(existing_event),
                 screenshot_hash=hash_rgb_image(image),
+                tags=result.tags,
             )
             event = self._load_event(capture_id)
             if event:
@@ -368,6 +334,7 @@ class EventIngestWorker:
         *,
         event_existing: bool,
         screenshot_hash: str | None = None,
+        tags: dict | None = None,
     ) -> None:
         def _write(session) -> None:
             if not event_existing:
@@ -385,7 +352,7 @@ class EventIngestWorker:
                     embedding_vector=None,
                     embedding_status="pending",
                     embedding_model=self._config.embed.text_model,
-                    tags={},
+                    tags=_merge_tags({}, tags or {}),
                 )
                 session.add(event)
                 if session.bind and session.bind.dialect.name == "sqlite":
@@ -396,6 +363,8 @@ class EventIngestWorker:
                     event.ocr_text = ocr_text
                     if screenshot_hash and not event.screenshot_hash:
                         event.screenshot_hash = screenshot_hash
+                if event and tags:
+                    event.tags = _merge_tags(event.tags or {}, tags)
             if ocr_spans:
                 self._upsert_spans(session, capture.capture_id, ocr_spans)
                 span_map = {
@@ -542,30 +511,14 @@ def _ensure_aware(timestamp: dt.datetime | None) -> dt.datetime | None:
     return timestamp
 
 
-def _build_ocr_payload(
-    spans: list[tuple[str, float, list[int]]],
-) -> tuple[str, list[dict]]:
-    text_parts: list[str] = []
-    ocr_spans: list[dict] = []
-    offset = 0
-    for idx, (text, conf, bbox) in enumerate(spans, start=1):
-        text = text or ""
-        start = offset
-        end = start + len(text)
-        text_parts.append(text)
-        ocr_spans.append(
-            {
-                "span_id": f"S{idx}",
-                "span_key": f"S{idx}",
-                "start": start,
-                "end": end,
-                "conf": float(conf),
-                "bbox": bbox,
-                "text": text,
-            }
-        )
-        offset = end + 1
-    return "\n".join(text_parts), ocr_spans
+def _merge_tags(existing: dict, incoming: dict) -> dict:
+    merged = dict(existing or {})
+    for key, value in (incoming or {}).items():
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
+            merged[key] = _merge_tags(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 def _extract_domain(window_title: str, ocr_text: str) -> str | None:

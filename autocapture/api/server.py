@@ -5,15 +5,20 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import hmac
+import io
 import tempfile
 import threading
 import time
+from uuid import uuid4
+
+import numpy as np
+from PIL import Image
 from collections import OrderedDict
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -34,15 +39,18 @@ from ..logging_utils import get_logger
 from ..observability.metrics import get_gpu_snapshot, get_metrics_port
 from ..paths import resource_root
 from ..settings_store import read_settings, update_settings
+from ..media.store import MediaStore
+from ..capture.privacy_filter import should_skip_capture
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
 from ..memory.entities import EntityResolver, SecretStore
 from ..security.token_vault import TokenVaultStore
 from ..memory.prompts import PromptLibraryService, PromptRegistry
 from ..memory.retrieval import RetrieveFilters, RetrievalService
+from ..memory.time_intent import resolve_time_range_for_query, resolve_timezone
 from ..embeddings.service import EmbeddingService
 from ..indexing.vector_index import VectorIndex
-from ..memory.router import ProviderRouter
+from ..model_ops import StageRouter
 from ..memory.verification import Claim, RulesVerifier
 from ..security.oidc import GoogleOIDCVerifier
 from ..security.session import SecuritySessionManager, is_test_mode
@@ -75,6 +83,28 @@ class RetrieveResponse(BaseModel):
     evidence: list[dict[str, Any]]
 
 
+class IngestMetadata(BaseModel):
+    observation_id: Optional[str] = None
+    captured_at: Optional[dt.datetime] = None
+    app_name: Optional[str] = None
+    window_title: Optional[str] = None
+    url: Optional[str] = None
+    domain: Optional[str] = None
+    monitor_id: Optional[str] = None
+    is_fullscreen: bool = False
+
+
+class IngestResponse(BaseModel):
+    observation_id: str
+    status: str
+
+
+class StorageResponse(BaseModel):
+    media_path: str
+    media_usage_bytes: int
+    screenshot_ttl_days: int
+
+
 class ContextPackRequest(BaseModel):
     query: str
     time_range: Optional[tuple[dt.datetime, dt.datetime]] = None
@@ -82,7 +112,7 @@ class ContextPackRequest(BaseModel):
     k: int = Field(8, ge=1, le=100)
     sanitize: Optional[bool] = None
     extractive_only: Optional[bool] = None
-    pack_format: str = Field("json", description="json or text")
+    pack_format: str = Field("json", description="json|text|tron")
     routing: Optional[dict[str, str]] = None
 
 
@@ -109,6 +139,7 @@ class ResolveTokensRequest(BaseModel):
 class ContextPackResponse(BaseModel):
     pack: dict[str, Any]
     text: Optional[str] = None
+    tron: Optional[str] = None
 
 
 class AnswerRequest(BaseModel):
@@ -122,6 +153,8 @@ class AnswerRequest(BaseModel):
     time_range: Optional[tuple[dt.datetime, dt.datetime]] = None
     filters: Optional[dict[str, list[str]]] = None
     top_k: Optional[int] = Field(None, ge=1)
+    output_format: Optional[str] = None
+    context_pack_format: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -137,6 +170,9 @@ class AnswerResponse(BaseModel):
     citations: list[str]
     used_context_pack: dict[str, Any]
     latency_ms: float
+    response_json: Optional[dict[str, Any]] = None
+    response_tron: Optional[str] = None
+    context_pack_tron: Optional[str] = None
 
 
 class EventResponse(BaseModel):
@@ -268,7 +304,11 @@ def create_app(
     retention = RetentionManager(
         config.storage, config.retention, db, Path(config.capture.data_dir)
     )
+    media_store = MediaStore(config.capture, config.encryption)
     log = get_logger("api")
+    storage_cache = {"ts": 0.0, "bytes": 0}
+    storage_cache_ttl_s = 30.0
+    media_root = Path(config.capture.data_dir) / "media"
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -322,6 +362,8 @@ def create_app(
         "/api/privacy/resolve_tokens",
         "/api/delete_range",
         "/api/delete_all",
+        "/api/events/ingest",
+        "/api/storage",
     )
 
     security_manager: SecuritySessionManager | None = None
@@ -493,6 +535,8 @@ def create_app(
 
         @app.middleware("http")
         async def auth_middleware(request: Request, call_next):  # type: ignore[no-redef]
+            if request.url.path == "/api/events/ingest" and _bridge_token_valid(request, config):
+                return await call_next(request)
             auth = request.headers.get("Authorization", "")
             if not auth.startswith("Bearer ") or not oidc_verifier:
                 return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -509,6 +553,10 @@ def create_app(
         @app.middleware("http")
         async def api_key_middleware(request: Request, call_next):  # type: ignore[no-redef]
             if request.url.path.startswith("/api/"):
+                if request.url.path == "/api/events/ingest" and _bridge_token_valid(
+                    request, config
+                ):
+                    return await call_next(request)
                 _require_api_key(request, config)
             return await call_next(request)
 
@@ -529,6 +577,8 @@ def create_app(
     @app.middleware("http")
     async def security_session_middleware(request: Request, call_next):  # type: ignore[no-redef]
         if security_manager and _needs_unlock(request, protected_prefixes):
+            if request.url.path == "/api/events/ingest" and _bridge_token_valid(request, config):
+                return await call_next(request)
             token = _extract_unlock_token(request)
             if not security_manager.is_unlocked(token):
                 return JSONResponse(status_code=401, content={"detail": "Unlock required"})
@@ -587,6 +637,109 @@ def create_app(
             },
             "gpu": gpu,
         }
+
+    def _storage_usage_bytes() -> int:
+        now = time.monotonic()
+        if now - storage_cache["ts"] > storage_cache_ttl_s:
+            storage_cache["bytes"] = RetentionManager._folder_size_bytes(media_root)
+            storage_cache["ts"] = now
+        return int(storage_cache["bytes"])
+
+    @app.get("/api/storage")
+    def storage_status() -> StorageResponse:
+        return StorageResponse(
+            media_path=str(media_root),
+            media_usage_bytes=_storage_usage_bytes(),
+            screenshot_ttl_days=config.retention.screenshot_ttl_days,
+        )
+
+    @app.post("/api/events/ingest")
+    async def ingest_event(
+        request: Request,
+        metadata: str = Form(...),
+        image: UploadFile = File(...),
+    ) -> IngestResponse:
+        try:
+            parsed = IngestMetadata.model_validate_json(metadata)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Invalid metadata JSON")
+
+        observation_id = parsed.observation_id or str(uuid4())
+        captured_at = parsed.captured_at or dt.datetime.now(dt.timezone.utc)
+        if captured_at.tzinfo is None:
+            captured_at = captured_at.replace(tzinfo=dt.timezone.utc)
+        app_name = parsed.app_name or "unknown"
+        window_title = parsed.window_title or "unknown"
+        monitor_id = parsed.monitor_id or "unknown"
+
+        if _bridge_token_valid(request, config) is False:
+            _require_api_key(request, config)
+
+        if should_skip_capture(
+            paused=config.privacy.paused,
+            monitor_id=monitor_id,
+            process_name=app_name,
+            window_title=window_title,
+            exclude_monitors=config.privacy.exclude_monitors,
+            exclude_processes=config.privacy.exclude_processes,
+            exclude_window_title_regex=config.privacy.exclude_window_title_regex,
+        ):
+            _record_skipped_capture(
+                db,
+                observation_id,
+                captured_at,
+                app_name,
+                window_title,
+                monitor_id,
+                parsed.is_fullscreen,
+                "privacy_filter",
+            )
+            return IngestResponse(observation_id=observation_id, status="skipped")
+
+        with db.session() as session:
+            existing = session.get(CaptureRecord, observation_id)
+            if existing:
+                return IngestResponse(observation_id=observation_id, status="exists")
+
+        payload = await image.read()
+        if not payload:
+            raise HTTPException(status_code=400, detail="Image payload is empty")
+        try:
+            pil = Image.open(io.BytesIO(payload)).convert("RGB")
+            image_array = np.array(pil)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid image payload") from exc
+
+        path = media_store.write_roi(image_array, captured_at, observation_id)
+        if path is None:
+            _record_skipped_capture(
+                db,
+                observation_id,
+                captured_at,
+                app_name,
+                window_title,
+                monitor_id,
+                parsed.is_fullscreen,
+                "disk_quota",
+            )
+            return IngestResponse(observation_id=observation_id, status="skipped")
+
+        def _write(session) -> None:
+            session.add(
+                CaptureRecord(
+                    id=observation_id,
+                    captured_at=captured_at,
+                    image_path=str(path),
+                    foreground_process=app_name,
+                    foreground_window=window_title,
+                    monitor_id=monitor_id,
+                    is_fullscreen=parsed.is_fullscreen,
+                    ocr_status="pending",
+                )
+            )
+
+        db.transaction(_write)
+        return IngestResponse(observation_id=observation_id, status="ok")
 
     @app.post("/api/unlock")
     def unlock_session() -> UnlockResponse:
@@ -703,6 +856,7 @@ def create_app(
             sanitized=sanitized,
         )
         routing_data = _merge_routing(config.routing, request.routing)
+        routing_override = request.routing.get("llm") if request.routing else None
         aggregates = _build_aggregates(db, request.time_range)
         pack = build_context_pack(
             query=request.query,
@@ -718,13 +872,22 @@ def create_app(
             aggregates=aggregates,
         )
         text_pack = None
+        tron_pack = None
         if request.pack_format == "text":
             text_pack = pack.to_text(
                 extractive_only=_resolve_bool(
                     request.extractive_only, config.privacy.extractive_only_default
-                )
+                ),
+                format="json",
             )
-        return ContextPackResponse(pack=pack.to_json(), text=text_pack)
+        elif request.pack_format == "tron":
+            tron_pack = pack.to_text(
+                extractive_only=_resolve_bool(
+                    request.extractive_only, config.privacy.extractive_only_default
+                ),
+                format="tron",
+            )
+        return ContextPackResponse(pack=pack.to_json(), text=text_pack, tron=tron_pack)
 
     @app.post("/api/answer")
     async def answer(request: AnswerRequest) -> AnswerResponse:
@@ -732,35 +895,52 @@ def create_app(
         extractive_only = _resolve_bool(
             request.extractive_only, config.privacy.extractive_only_default
         )
+        output_format = _resolve_output_format(request.output_format, config.output.format)
+        context_pack_format = _resolve_context_pack_format(
+            request.context_pack_format, config.output.context_pack_format
+        )
         query_text = request.query or ""
         _validate_query(query_text, config)
         k = _cap_k(request.top_k or 12, config)
         _record_query_history(db, query_text)
+        tzinfo = resolve_timezone(config.time.timezone)
+        resolved_time_range = resolve_time_range_for_query(
+            query=query_text,
+            time_range=request.time_range,
+            now=dt.datetime.now(tzinfo),
+            tzinfo=tzinfo,
+        )
         evidence, events = await asyncio.to_thread(
             _build_evidence,
             retrieval,
             entities,
             db,
             query_text,
-            request.time_range,
+            resolved_time_range,
             request.filters,
             k,
             sanitized,
         )
         routing_data = _merge_routing(config.routing, request.routing)
-        aggregates = _build_aggregates(db, request.time_range)
+        aggregates = _build_aggregates(db, resolved_time_range)
         pack = build_context_pack(
             query=query_text,
             evidence=evidence,
             entity_tokens=entities.tokens_for_events(events),
             routing=_model_dump(routing_data),
             filters={
-                "time_range": request.time_range,
+                "time_range": resolved_time_range,
                 "apps": request.filters.get("app") if request.filters else None,
                 "domains": request.filters.get("domain") if request.filters else None,
             },
             sanitized=sanitized,
             aggregates=aggregates,
+        )
+        pack_text = pack.to_text(extractive_only=False, format=context_pack_format)
+        context_pack_tron = (
+            pack.to_text(extractive_only=False, format="tron")
+            if context_pack_format == "tron"
+            else None
         )
         start = dt.datetime.now(dt.timezone.utc)
         graph_attempted = False
@@ -770,13 +950,16 @@ def create_app(
                 graph_attempted = True
                 result = await answer_graph.run(
                     query_text,
-                    time_range=request.time_range,
+                    time_range=resolved_time_range,
                     filters=request.filters,
                     k=k,
                     sanitized=sanitized,
                     extractive_only=extractive_only,
                     routing=_model_dump(routing_data),
+                    routing_override=routing_override,
                     aggregates=aggregates,
+                    output_format=output_format,
+                    context_pack_format=context_pack_format,
                 )
                 answer_text = result.answer
                 citations = result.citations
@@ -787,38 +970,56 @@ def create_app(
                     entity_tokens=entities.tokens_for_events(events),
                     routing=_model_dump(routing_data),
                     filters={
-                        "time_range": request.time_range,
+                        "time_range": resolved_time_range,
                         "apps": request.filters.get("app") if request.filters else None,
                         "domains": request.filters.get("domain") if request.filters else None,
                     },
                     sanitized=sanitized,
                     aggregates=aggregates,
                 )
+                pack_text = pack.to_text(extractive_only=False, format=context_pack_format)
+                context_pack_tron = result.context_pack_tron
+                response_json = result.response_json
+                response_tron = result.response_tron
             except Exception as exc:
                 log.warning("Agentic answer failed; falling back to baseline: {}", exc)
                 answer_text = ""
                 citations = []
                 graph_attempted = False
+                response_json = None
+                response_tron = None
         else:
             answer_text = ""
             citations = []
+            response_json = None
+            response_tron = None
 
         if extractive_only:
             compressed = extractive_answer(evidence)
             answer_text = compressed.answer
             citations = compressed.citations
+            response_json, response_tron = _build_answer_payload(
+                answer_text,
+                citations,
+                warnings=[],
+                used_llm=False,
+                context_pack=pack.to_json(),
+                output_format=output_format,
+            )
         elif graph_attempted and graph_used_llm:
             pass
         else:
-            provider, decision = ProviderRouter(
-                routing_data, config.llm, offline=config.offline, privacy=config.privacy
-            ).select_llm()
+            stage_router = StageRouter(config)
+            provider, decision = stage_router.select_llm(
+                "final_answer", routing_override=routing_override
+            )
             system_prompt = prompt_registry.get("ANSWER_WITH_CONTEXT_PACK").system_prompt
             try:
                 answer_text = await provider.generate_answer(
                     system_prompt,
                     query_text,
-                    pack.to_text(extractive_only=False),
+                    pack_text,
+                    temperature=decision.temperature,
                 )
                 citations = _extract_citations(answer_text)
                 if not _valid_citations(citations, evidence):
@@ -830,7 +1031,8 @@ def create_app(
                     answer_text = await provider.generate_answer(
                         retry_prompt,
                         query_text,
-                        pack.to_text(extractive_only=False),
+                        pack_text,
+                        temperature=decision.temperature,
                     )
                     citations = _extract_citations(answer_text)
                 if not _valid_citations(citations, evidence):
@@ -850,18 +1052,37 @@ def create_app(
                         {item.evidence_id for item in evidence},
                         set(),
                     )
-                log.info("LLM routed to {}", decision.llm_provider)
+                log.info("LLM stage {} routed to {}", decision.stage, decision.provider)
+                response_json, response_tron = _build_answer_payload(
+                    answer_text,
+                    citations,
+                    warnings=[],
+                    used_llm=True,
+                    context_pack=pack.to_json(),
+                    output_format=output_format,
+                )
             except Exception as exc:
                 log.warning("LLM unavailable; falling back to extractive answer: {}", exc)
                 compressed = extractive_answer(evidence)
                 answer_text = compressed.answer
                 citations = compressed.citations
+                response_json, response_tron = _build_answer_payload(
+                    answer_text,
+                    citations,
+                    warnings=[],
+                    used_llm=False,
+                    context_pack=pack.to_json(),
+                    output_format=output_format,
+                )
         latency = (dt.datetime.now(dt.timezone.utc) - start).total_seconds() * 1000
         return AnswerResponse(
             answer=answer_text,
             citations=citations,
             used_context_pack=pack.to_json(),
             latency_ms=latency,
+            response_json=response_json,
+            response_tron=response_tron,
+            context_pack_tron=context_pack_tron,
         )
 
     @app.get("/api/highlights")
@@ -1060,6 +1281,14 @@ def _extract_unlock_token(request: Request) -> str | None:
     return request.query_params.get("unlock")
 
 
+def _bridge_token_valid(request: Request, config: AppConfig) -> bool:
+    token = request.headers.get("X-Bridge-Token")
+    expected = config.api.bridge_token
+    if not token or not expected:
+        return False
+    return hmac.compare_digest(token, expected)
+
+
 def _require_api_key(request: Request, config: AppConfig) -> None:
     if not config.api.require_api_key:
         return
@@ -1071,6 +1300,34 @@ def _require_api_key(request: Request, config: AppConfig) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
     if not hmac.compare_digest(key, config.api.api_key):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _record_skipped_capture(
+    db: DatabaseManager,
+    observation_id: str,
+    captured_at: dt.datetime,
+    app_name: str,
+    window_title: str,
+    monitor_id: str,
+    is_fullscreen: bool,
+    reason: str,
+) -> None:
+    def _write(session) -> None:
+        session.add(
+            CaptureRecord(
+                id=observation_id,
+                captured_at=captured_at,
+                image_path=None,
+                foreground_process=app_name,
+                foreground_window=window_title,
+                monitor_id=monitor_id,
+                is_fullscreen=is_fullscreen,
+                ocr_status="skipped",
+                ocr_last_error=reason,
+            )
+        )
+
+    db.transaction(_write)
 
 
 def _validate_query(query: str, config: AppConfig) -> None:
@@ -1103,6 +1360,22 @@ def _model_dump(model: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+def _resolve_output_format(requested: str | None, default: str) -> str:
+    value = (requested or default or "text").strip().lower()
+    allowed = {"text", "json", "tron"}
+    if value not in allowed:
+        raise HTTPException(status_code=422, detail="output_format must be text, json, or tron")
+    return value
+
+
+def _resolve_context_pack_format(requested: str | None, default: str) -> str:
+    value = (requested or default or "json").strip().lower()
+    allowed = {"json", "tron"}
+    if value not in allowed:
+        raise HTTPException(status_code=422, detail="context_pack_format must be json or tron")
+    return value
 
 
 def _merge_routing(
@@ -1224,6 +1497,31 @@ def _build_aggregates(
         for row in rows
     ]
     return aggregates
+
+
+def _build_answer_payload(
+    answer: str,
+    citations: list[str],
+    *,
+    warnings: list[str],
+    used_llm: bool,
+    context_pack: dict[str, Any],
+    output_format: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if output_format not in {"json", "tron"}:
+        return None, None
+    payload = {
+        "answer": answer,
+        "citations": citations,
+        "warnings": warnings,
+        "used_llm": used_llm,
+        "context_pack": context_pack,
+    }
+    if output_format == "tron":
+        from ..format.tron import encode_tron
+
+        return payload, encode_tron(payload)
+    return payload, None
 
 
 def _fetch_spans(

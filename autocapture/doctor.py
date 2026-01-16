@@ -291,19 +291,22 @@ def _check_ffmpeg(config: AppConfig) -> DoctorCheckResult:
 def _check_ocr(config: AppConfig) -> DoctorCheckResult:
     import importlib.util
 
-    if config.routing.ocr == "disabled" or config.ocr.engine == "disabled":
+    engine = (config.vision_extract.engine or "").lower()
+    if config.routing.ocr == "disabled" or engine in {"disabled", "off"}:
         return DoctorCheckResult("ocr", True, "Disabled")
+    if engine not in {"rapidocr", "rapidocr-onnxruntime"}:
+        return DoctorCheckResult("ocr", True, f"Skipped (engine={engine})")
     if importlib.util.find_spec("rapidocr_onnxruntime") is None:
         return DoctorCheckResult("ocr", False, "rapidocr_onnxruntime not installed")
-    from .worker.event_worker import OCRProcessor, _select_onnx_provider
+    from .vision.rapidocr import RapidOCRExtractor, available_onnx_providers, select_onnx_provider
 
     try:
         image = _build_ocr_fixture()
-        providers = _available_onnx_providers()
-        selected, _use_cuda = _select_onnx_provider(config.ocr, providers)
+        providers = available_onnx_providers()
+        selected, _use_cuda = select_onnx_provider(config.ocr, providers)
         selected_name = selected or "none"
-        processor = OCRProcessor(config.ocr)
-        spans = processor.run(image)
+        processor = RapidOCRExtractor(config.ocr)
+        spans = processor.extract(image)
         text = " ".join(span[0] for span in spans if span)
         if not text.strip():
             return DoctorCheckResult("ocr", False, "Empty OCR output")

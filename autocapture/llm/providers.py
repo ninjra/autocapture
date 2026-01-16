@@ -43,7 +43,14 @@ class LLMProvider(ABC):
     """Base interface for answer generation."""
 
     @abstractmethod
-    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
+    async def generate_answer(
+        self,
+        system_prompt: str,
+        query: str,
+        context_pack_text: str,
+        *,
+        temperature: float | None = None,
+    ) -> str:
         """Generate an answer string for the provided prompt and context."""
 
 
@@ -68,16 +75,26 @@ class OllamaProvider(LLMProvider):
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
 
-    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
+    async def generate_answer(
+        self,
+        system_prompt: str,
+        query: str,
+        context_pack_text: str,
+        *,
+        temperature: float | None = None,
+    ) -> str:
+        temperature = 0.2 if temperature is None else temperature
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         try:
-            return await self._generate_openai(system_prompt, query, context_pack_text)
+            return await self._generate_openai(system_prompt, query, context_pack_text, temperature)
         except Exception as exc:
             self._log.warning("Ollama OpenAI endpoint failed: {}", exc)
-        return await self._generate_native(system_prompt, query, context_pack_text)
+        return await self._generate_native(system_prompt, query, context_pack_text, temperature)
 
-    async def _generate_openai(self, system: str, query: str, context_pack_text: str) -> str:
+    async def _generate_openai(
+        self, system: str, query: str, context_pack_text: str, temperature: float
+    ) -> str:
         payload = {
             "model": self._model,
             "messages": [
@@ -88,7 +105,7 @@ class OllamaProvider(LLMProvider):
                     "content": _format_evidence_message(context_pack_text),
                 },
             ],
-            "temperature": 0.2,
+            "temperature": temperature,
         }
 
         async def _request() -> str:
@@ -110,7 +127,9 @@ class OllamaProvider(LLMProvider):
             self._breaker.record_failure(exc)
             raise
 
-    async def _generate_native(self, system: str, query: str, context_pack_text: str) -> str:
+    async def _generate_native(
+        self, system: str, query: str, context_pack_text: str, temperature: float
+    ) -> str:
         payload = {
             "model": self._model,
             "messages": [
@@ -122,6 +141,7 @@ class OllamaProvider(LLMProvider):
                 },
             ],
             "stream": False,
+            "temperature": temperature,
         }
 
         async def _request() -> str:
@@ -155,7 +175,15 @@ class OpenAIProvider(LLMProvider):
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
 
-    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
+    async def generate_answer(
+        self,
+        system_prompt: str,
+        query: str,
+        context_pack_text: str,
+        *,
+        temperature: float | None = None,
+    ) -> str:
+        temperature = 0.2 if temperature is None else temperature
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         payload = {
@@ -179,7 +207,7 @@ class OpenAIProvider(LLMProvider):
                     ],
                 },
             ],
-            "temperature": 0.2,
+            "temperature": temperature,
         }
         headers = {
             "Authorization": f"Bearer {self._api_key}",
@@ -230,7 +258,15 @@ class OpenAICompatibleProvider(LLMProvider):
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
 
-    async def generate_answer(self, system_prompt: str, query: str, context_pack_text: str) -> str:
+    async def generate_answer(
+        self,
+        system_prompt: str,
+        query: str,
+        context_pack_text: str,
+        *,
+        temperature: float | None = None,
+    ) -> str:
+        temperature = 0.2 if temperature is None else temperature
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         payload = {
@@ -240,7 +276,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 {"role": "user", "content": query},
                 {"role": "user", "content": _format_evidence_message(context_pack_text)},
             ],
-            "temperature": 0.2,
+            "temperature": temperature,
         }
         headers = {"Content-Type": "application/json"}
         if self._api_key:

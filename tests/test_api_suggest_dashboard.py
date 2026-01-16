@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+import pytest
 
 from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
@@ -16,25 +16,28 @@ from autocapture.storage.models import (
 )
 
 
-def _make_app(tmp_path: Path) -> tuple[TestClient, DatabaseManager]:
+def _make_app(tmp_path: Path) -> tuple[object, DatabaseManager]:
     config = AppConfig()
     config.database = DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}")
     config.capture.data_dir = tmp_path
     config.embed.text_model = "local-test"
     db = DatabaseManager(config.database)
     app = create_app(config, db_manager=db)
-    return TestClient(app), db
+    return app, db
 
 
-def test_dashboard_redirect(tmp_path: Path) -> None:
-    client, _ = _make_app(tmp_path)
-    response = client.get("/dashboard", follow_redirects=False)
+@pytest.mark.anyio
+async def test_dashboard_redirect(tmp_path: Path, async_client_factory) -> None:
+    app, _ = _make_app(tmp_path)
+    async with async_client_factory(app) as client:
+        response = await client.get("/dashboard", follow_redirects=False)
     assert response.status_code in (302, 307)
     assert response.headers["location"] == "/"
 
 
-def test_api_suggest_returns_snippets(tmp_path: Path) -> None:
-    client, db = _make_app(tmp_path)
+@pytest.mark.anyio
+async def test_api_suggest_returns_snippets(tmp_path: Path, async_client_factory) -> None:
+    app, db = _make_app(tmp_path)
     with db.session() as session:
         session.add(
             CaptureRecord(
@@ -85,7 +88,8 @@ def test_api_suggest_returns_snippets(tmp_path: Path) -> None:
             )
         )
 
-    response = client.post("/api/suggest", json={"q": "hello"})
+    async with async_client_factory(app) as client:
+        response = await client.post("/api/suggest", json={"q": "hello"})
     assert response.status_code == 200
     payload = response.json()
     assert isinstance(payload, list)

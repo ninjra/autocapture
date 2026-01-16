@@ -81,6 +81,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     promptops_sub.add_parser("status", help="Show latest PromptOps run.")
     promptops_sub.add_parser("list", help="List recent PromptOps runs.")
 
+    research = sub.add_parser("research", help="Research/model discovery utilities.")
+    research_sub = research.add_subparsers(dest="research_cmd", required=True)
+    scout = research_sub.add_parser("scout", help="Fetch model/paper updates and write report.")
+    scout.add_argument("--out", required=True, help="Output path for scout report JSON.")
+    scout.add_argument(
+        "--append",
+        default="docs/research/scout_log.md",
+        help="Append a summary markdown log (set to empty string to disable).",
+    )
+
     db_cmd = sub.add_parser("db", help="Database utilities.")
     db_sub = db_cmd.add_subparsers(dest="db_cmd", required=True)
     db_sub.add_parser("encrypt", help="Encrypt the SQLite database with SQLCipher.")
@@ -174,6 +184,17 @@ def main(argv: list[str] | None = None) -> None:
             for run in runs:
                 logger.info("{} {} {}", run.run_id, run.status, run.pr_url or "")
             raise SystemExit(0)
+
+    if cmd == "research":
+        from .research.scout import append_report_log, run_scout, write_report
+
+        out_path = Path(args.out)
+        report = run_scout(config)
+        write_report(report, out_path)
+        if args.append:
+            append_report_log(report, Path(args.append))
+        logger.info("Research scout report written: {}", out_path)
+        return
 
     if cmd == "export":
         from .export import export_capture
