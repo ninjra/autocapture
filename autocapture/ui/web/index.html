@@ -36,6 +36,10 @@
                 <option value="30d">Last 30 days</option>
               </select>
             </label>
+            <div class="prompt-status">
+              <span>Safe mode</span>
+              <span id="safeModeIndicator" class="pill">--</span>
+            </div>
           </div>
           <div id="thread" class="thread"></div>
           <form id="chatForm">
@@ -88,6 +92,24 @@
               </select>
             </label>
           </div>
+          <h2>Prompt Strategy</h2>
+          <div class="grid">
+            <label>Accuracy boost (repeat prompt)
+              <select id="promptRepeatSelect">
+                <option value="off">Off</option>
+                <option value="repeat_2x">2×</option>
+                <option value="repeat_3x">3×</option>
+              </select>
+            </label>
+            <label class="toggle">
+              <input type="checkbox" id="stepByStepToggle" />
+              Reasoning mode (step-by-step)
+            </label>
+            <label>Step-by-step phrase
+              <input id="stepByStepPhrase" placeholder="Let's think step by step." />
+            </label>
+          </div>
+          <p class="hint">Safe mode automatically reduces repetition when prompts exceed context limits.</p>
           <button id="saveSettings">Save Settings</button>
           <p class="hint">Remote mode status: <span id="remoteStatus">local-only</span></p>
           <div class="storage-card">

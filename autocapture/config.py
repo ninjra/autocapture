@@ -594,13 +594,90 @@ class LLMConfig(BaseModel):
     openai_compatible_model: str = Field("llama3")
     timeout_s: float = Field(60.0, gt=0.0)
     retries: int = Field(3, ge=0, le=10)
+    prompt_strategy_default: str = Field(
+        "repeat_2x",
+        description=(
+            "Prompt strategy default: baseline|repeat_2x|repeat_3x|step_by_step|"
+            "step_by_step_plus_repeat_2x."
+        ),
+    )
+    prompt_repeat_factor: int = Field(
+        2, ge=2, le=3, description="Repeat factor for prompt repetition strategies."
+    )
+    enable_step_by_step: bool = Field(
+        False, description="Enable optional step-by-step prompting."
+    )
+    step_by_step_phrase: str = Field(
+        "Let's think step by step.",
+        description="Zero-shot-CoT trigger phrase for step-by-step mode.",
+    )
+    step_by_step_two_stage: bool = Field(
+        False, description="Enable two-stage prompting for step-by-step mode."
+    )
+    max_prompt_chars_for_repetition: int = Field(
+        12000, ge=1, description="Max prompt chars allowed before repetition is disabled."
+    )
+    max_tokens_headroom: int = Field(
+        512, ge=0, description="Reserved response tokens when checking context limits."
+    )
+    max_context_tokens: int | None = Field(
+        8192, ge=256, description="Approximate model context window for safety checks."
+    )
+    force_no_reasoning: bool = Field(
+        False, description="Force non-reasoning pathway (disables step-by-step)."
+    )
+    strategy_auto_mode: bool = Field(
+        True,
+        description=(
+            "Automatically choose repeat strategy when reasoning is disabled, "
+            "baseline otherwise."
+        ),
+    )
+    prompt_repetition_delimiter: str = Field(
+        "\n\n---\n\n", description="Delimiter inserted between repeated prompts."
+    )
+    store_prompt_transforms: bool = Field(
+        False, description="Persist transformed prompts to disk for local debugging."
+    )
+    prompt_store_redaction: bool = Field(
+        True, description="Redact stored prompts when store_prompt_transforms is enabled."
+    )
     prompt_repetition: bool = Field(
         False,
         description=(
-            "Repeat non-system prompt content once to improve non-reasoning tasks; "
-            "increases input tokens."
+            "Legacy: repeat non-system prompt content once; use prompt_strategy_default "
+            "instead."
         ),
     )
+
+    @field_validator("prompt_strategy_default")
+    @classmethod
+    def validate_prompt_strategy_default(cls, value: str) -> str:
+        allowed = {
+            "baseline",
+            "repeat_2x",
+            "repeat_3x",
+            "step_by_step",
+            "step_by_step_plus_repeat_2x",
+        }
+        if value not in allowed:
+            raise ValueError(f"llm.prompt_strategy_default must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("prompt_repeat_factor")
+    @classmethod
+    def validate_prompt_repeat_factor(cls, value: int) -> int:
+        if value not in {2, 3}:
+            raise ValueError("llm.prompt_repeat_factor must be 2 or 3")
+        return value
+
+    @model_validator(mode="after")
+    def apply_prompt_strategy_compat(self) -> "LLMConfig":
+        if self.prompt_repetition and self.prompt_strategy_default == "repeat_2x":
+            return self
+        if self.prompt_repetition and self.prompt_strategy_default == "baseline":
+            self.prompt_strategy_default = "repeat_2x"
+        return self
 
 
 class ModelStageConfig(BaseModel):
@@ -920,6 +997,16 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
             if value and key in merged:
                 merged[key] = value
         config.routing = ProviderRoutingConfig(**merged)
+    llm = raw.get("llm")
+    if isinstance(llm, dict):
+        if hasattr(config.llm, "model_dump"):
+            merged = config.llm.model_dump()
+        else:
+            merged = config.llm.dict()
+        for key, value in llm.items():
+            if key in merged and value is not None:
+                merged[key] = value
+        config.llm = LLMConfig(**merged)
     privacy = raw.get("privacy")
     if isinstance(privacy, dict):
         paused = privacy.get("paused")

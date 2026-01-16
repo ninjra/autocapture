@@ -14,6 +14,7 @@ from ..agents.structured_output import extract_json_payload
 from ..config import AppConfig, VisionBackendConfig, is_loopback_host
 from ..image_utils import ensure_rgb
 from ..logging_utils import get_logger
+from ..llm.prompt_strategy import PromptStrategySettings
 from .clients import VisionClient
 from .rapidocr import RapidOCRExtractor
 from .tiling import VisionTile, build_tiles
@@ -250,7 +251,9 @@ class VLMExtractor:
             api_key=api_key,
             timeout_s=config.llm.timeout_s,
             retries=config.llm.retries,
-            prompt_repetition=config.llm.prompt_repetition,
+            prompt_strategy=PromptStrategySettings.from_llm_config(
+                config.llm, data_dir=config.capture.data_dir
+            ),
         )
 
     def extract(self, image: np.ndarray) -> ExtractionResult:
@@ -301,7 +304,9 @@ class DeepSeekOCRExtractor:
             api_key=api_key,
             timeout_s=config.llm.timeout_s,
             retries=config.llm.retries,
-            prompt_repetition=config.llm.prompt_repetition,
+            prompt_strategy=PromptStrategySettings.from_llm_config(
+                config.llm, data_dir=config.capture.data_dir
+            ),
         )
 
     def extract(self, image: np.ndarray) -> ExtractionResult:

@@ -43,6 +43,17 @@ poetry run autocapture promptops status
 poetry run autocapture promptops list
 ```
 
+## A/B prompt strategy evals
+
+Run offline A/B evals to compare prompt strategies without calling external APIs:
+
+```bash
+python -m promptops.eval --strategies baseline,repeat2,repeat3,step,step+repeat2
+```
+
+Reports are saved as JSONL with per-case outcomes and prompt strategy metadata.
+For live-provider evals, set `RUN_LIVE_EVALS=1` and add `--live`.
+
 ## GitHub setup
 
 Set the following in your config:

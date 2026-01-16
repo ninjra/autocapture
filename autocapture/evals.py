@@ -14,6 +14,7 @@ import yaml
 
 from .config import AppConfig
 from .llm.providers import LLMProvider
+from .llm.prompt_strategy import PromptStrategySettings
 from .logging_utils import get_logger
 from .memory.compression import extractive_answer
 from .memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
@@ -67,7 +68,13 @@ def run_eval(
     provider = llm_provider
     if provider is None:
         provider = ProviderRouter(
-            config.routing, config.llm, offline=config.offline, privacy=config.privacy
+            config.routing,
+            config.llm,
+            offline=config.offline,
+            privacy=config.privacy,
+            prompt_strategy=PromptStrategySettings.from_llm_config(
+                config.llm, data_dir=config.capture.data_dir
+            ),
         ).select_llm()[0]
 
     for item in items:

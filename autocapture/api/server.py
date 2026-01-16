@@ -165,6 +165,14 @@ class AnswerRequest(BaseModel):
         return values
 
 
+class PromptStrategyInfo(BaseModel):
+    strategy: str
+    repeat_factor: int
+    step_by_step_used: bool
+    safe_mode_degraded: bool
+    degraded_reason: Optional[str] = None
+
+
 class AnswerResponse(BaseModel):
     answer: str
     citations: list[str]
@@ -173,6 +181,7 @@ class AnswerResponse(BaseModel):
     response_json: Optional[dict[str, Any]] = None
     response_tron: Optional[str] = None
     context_pack_tron: Optional[str] = None
+    prompt_strategy: Optional[PromptStrategyInfo] = None
 
 
 class EventResponse(BaseModel):
@@ -945,6 +954,7 @@ def create_app(
         start = dt.datetime.now(dt.timezone.utc)
         graph_attempted = False
         graph_used_llm = False
+        prompt_strategy_info: PromptStrategyInfo | None = None
         if config.agents.answer_agent.enabled:
             try:
                 graph_attempted = True
@@ -964,6 +974,8 @@ def create_app(
                 answer_text = result.answer
                 citations = result.citations
                 graph_used_llm = result.used_llm
+                if result.prompt_strategy:
+                    prompt_strategy_info = _prompt_strategy_info(result.prompt_strategy)
                 pack = build_context_pack(
                     query=query_text,
                     evidence=evidence,
@@ -998,6 +1010,7 @@ def create_app(
             compressed = extractive_answer(evidence)
             answer_text = compressed.answer
             citations = compressed.citations
+            prompt_strategy_info = None
             response_json, response_tron = _build_answer_payload(
                 answer_text,
                 citations,
@@ -1020,6 +1033,9 @@ def create_app(
                     query_text,
                     pack_text,
                     temperature=decision.temperature,
+                )
+                prompt_strategy_info = _prompt_strategy_info(
+                    getattr(provider, "last_prompt_metadata", None)
                 )
                 citations = _extract_citations(answer_text)
                 if not _valid_citations(citations, evidence):
@@ -1070,6 +1086,7 @@ def create_app(
                 compressed = extractive_answer(evidence)
                 answer_text = compressed.answer
                 citations = compressed.citations
+                prompt_strategy_info = None
                 response_json, response_tron = _build_answer_payload(
                     answer_text,
                     citations,
@@ -1087,6 +1104,7 @@ def create_app(
             response_json=response_json,
             response_tron=response_tron,
             context_pack_tron=context_pack_tron,
+            prompt_strategy=prompt_strategy_info,
         )
 
     @app.get("/api/highlights")
@@ -1262,6 +1280,8 @@ def create_app(
             settings["active_preset"] = config.presets.active_preset
         if "backup" not in settings:
             settings["backup"] = {"last_export_at_utc": None}
+        if "llm" not in settings:
+            settings["llm"] = _model_dump(config.llm)
         return SettingsSnapshot(settings=settings)
 
     return app
@@ -1526,6 +1546,22 @@ def _build_answer_payload(
 
         return payload, encode_tron(payload)
     return payload, None
+
+
+def _prompt_strategy_info(payload: object | None) -> PromptStrategyInfo | None:
+    if payload is None:
+        return None
+    if hasattr(payload, "to_dict"):
+        payload = payload.to_dict()
+    if not isinstance(payload, dict):
+        return None
+    return PromptStrategyInfo(
+        strategy=str(payload.get("strategy", "baseline")),
+        repeat_factor=int(payload.get("repeat_factor", 1)),
+        step_by_step_used=bool(payload.get("step_by_step_used", False)),
+        safe_mode_degraded=bool(payload.get("safe_mode_degraded", False)),
+        degraded_reason=payload.get("degraded_reason"),
+    )
 
 
 def _fetch_spans(

@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from ..config import AppConfig, LLMConfig, ModelStageConfig, is_loopback_host
 from ..llm.providers import LLMProvider, OllamaProvider, OpenAICompatibleProvider, OpenAIProvider
+from ..llm.prompt_strategy import PromptStrategySettings
 from ..logging_utils import get_logger
 
 
@@ -24,6 +25,9 @@ class StageRouter:
     def __init__(self, config: AppConfig) -> None:
         self._config = config
         self._log = get_logger("model_router")
+        self._prompt_strategy = PromptStrategySettings.from_llm_config(
+            config.llm, data_dir=config.capture.data_dir
+        )
 
     def select_llm(
         self, stage: str, *, routing_override: str | None = None
@@ -44,7 +48,7 @@ class StageRouter:
                 model,
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
-                prompt_repetition=self._config.llm.prompt_repetition,
+                prompt_strategy=self._prompt_strategy,
             )
         elif provider == "openai_compatible":
             base_url = base_url or self._config.llm.openai_compatible_base_url
@@ -59,7 +63,7 @@ class StageRouter:
                 api_key=api_key,
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
-                prompt_repetition=self._config.llm.prompt_repetition,
+                prompt_strategy=self._prompt_strategy,
             )
         elif provider == "openai":
             api_key = api_key or self._config.llm.openai_api_key
@@ -72,7 +76,7 @@ class StageRouter:
                 model,
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
-                prompt_repetition=self._config.llm.prompt_repetition,
+                prompt_strategy=self._prompt_strategy,
             )
         else:
             raise RuntimeError(f"Unsupported LLM provider: {provider}")
