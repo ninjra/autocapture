@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from autocapture.config import AppConfig, DatabaseConfig
+from autocapture import doctor
 from autocapture.doctor import DoctorCheckResult, run_doctor
 
 
@@ -17,3 +18,14 @@ def test_doctor_reports_failure_and_nonzero() -> None:
     code, report = run_doctor(config, checks=[failing_check])
     assert code == 2
     assert report.ok is False
+
+
+def test_check_port_permission_error_is_skipped(monkeypatch) -> None:
+    def _raise(*_args, **_kwargs):
+        raise PermissionError("blocked")
+
+    monkeypatch.setattr(doctor.socket, "socket", _raise)
+
+    result = doctor._check_port("api_port", "127.0.0.1", 1234)
+    assert result.ok is True
+    assert "permission denied" in result.detail.lower()

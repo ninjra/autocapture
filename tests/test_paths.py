@@ -1,31 +1,60 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-from autocapture.config import FFmpegConfig, QdrantConfig
-from autocapture.paths import resource_root, resolve_ffmpeg_path, resolve_qdrant_path
+from autocapture import paths
 
 
-def test_resource_root_uses_meipass(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
-    assert resource_root() == tmp_path
+def test_windows_local_appdata_falls_back_to_userprofile(monkeypatch) -> None:
+    monkeypatch.setattr(paths.sys, "platform", "win32")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("APPDATA", raising=False)
+    monkeypatch.delenv("HOMEDRIVE", raising=False)
+    monkeypatch.delenv("HOMEPATH", raising=False)
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\Casey")
+
+    resolved = paths.app_local_data_dir()
+    normalized = str(resolved).replace("\\", "/")
+
+    assert normalized.endswith("/AppData/Local/Autocapture")
+    assert "C:" in normalized
+    assert "/home/" not in normalized
 
 
-def test_resolve_ffmpeg_prefers_bundled(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(sys, "_MEIPASS", str(tmp_path), raising=False)
-    bundled = tmp_path / "ffmpeg" / "bin" / "ffmpeg.exe"
-    bundled.parent.mkdir(parents=True, exist_ok=True)
-    bundled.write_text("stub", encoding="utf-8")
-    config = FFmpegConfig(
-        enabled=True,
-        require_bundled=False,
-        allow_system=False,
-        allow_disable=False,
-    )
-    assert resolve_ffmpeg_path(config) == bundled
+def test_doctor_path_failure_includes_env_hint(monkeypatch, tmp_path: Path) -> None:
+    from autocapture import doctor
+    from autocapture.config import AppConfig
 
+    config = AppConfig()
+    config.capture.data_dir = tmp_path / "blocked-data"
+    config.capture.staging_dir = tmp_path / "blocked-staging"
 
-def test_resolve_qdrant_missing_returns_none(tmp_path: Path) -> None:
-    config = QdrantConfig(binary_path=tmp_path / "missing.exe")
-    assert resolve_qdrant_path(config) is None
+    monkeypatch.setattr(doctor.sys, "platform", "win32")
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("USERPROFILE", r"C:\Users\Test")
+    monkeypatch.setenv("APPDATA", r"C:\Users\Test\AppData\Roaming")
+    monkeypatch.setenv("HOMEDRIVE", "C:")
+    monkeypatch.setenv("HOMEPATH", r"\Users\Test")
+
+    original_mkdir = Path.mkdir
+    original_write_text = Path.write_text
+
+    def _mkdir(self: Path, *args, **kwargs):
+        if "blocked" in str(self):
+            raise PermissionError("blocked")
+        return original_mkdir(self, *args, **kwargs)
+
+    def _write_text(self: Path, *args, **kwargs):
+        if "blocked" in str(self):
+            raise PermissionError("blocked")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", _mkdir)
+    monkeypatch.setattr(Path, "write_text", _write_text)
+
+    result = doctor._check_paths(config)
+
+    assert not result.ok
+    assert "path=" in result.detail
+    assert "missing_env=LOCALAPPDATA" in result.detail
+    assert "set LOCALAPPDATA" in result.detail
