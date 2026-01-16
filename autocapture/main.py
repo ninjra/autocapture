@@ -159,8 +159,11 @@ def main(argv: list[str] | None = None) -> None:
         runner = PromptOpsRunner(config, db)
         if args.promptops_cmd == "run":
             run = runner.run_once()
+            if run is None:
+                logger.info("PromptOps disabled; no run executed.")
+                raise SystemExit(0)
             logger.info("PromptOps run {} status={}", run.run_id, run.status)
-            raise SystemExit(0 if run.status in {"pr_opened", "completed_no_pr"} else 2)
+            raise SystemExit(0 if run.status != "failed" else 2)
         if args.promptops_cmd == "status":
             with db.session() as session:
                 run = (
