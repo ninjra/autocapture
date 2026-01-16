@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+import pytest
 
 from autocapture.api.server import create_app
 from autocapture.config import AppConfig, DatabaseConfig
@@ -17,7 +17,8 @@ class BadCitationLLM:
         return "Answer with invalid citation [E999]"
 
 
-def test_answer_citations_subset(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.anyio
+async def test_answer_citations_subset(tmp_path: Path, monkeypatch, async_client_factory) -> None:
     config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
     config.capture.data_dir = tmp_path
     config.embed.text_model = "local-test"
@@ -71,9 +72,10 @@ def test_answer_citations_subset(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr("autocapture.memory.router.ProviderRouter.select_llm", _mock_select)
 
     app = create_app(config, db_manager=db)
-    client = TestClient(app)
-
-    response = client.post("/api/answer", json={"query": "roadmap", "extractive_only": False})
+    async with async_client_factory(app) as client:
+        response = await client.post(
+            "/api/answer", json={"query": "roadmap", "extractive_only": False}
+        )
     assert response.status_code == 200
     payload = response.json()
     assert payload["citations"]

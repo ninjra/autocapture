@@ -231,8 +231,12 @@ class VectorIndex:
         self._log = get_logger("index.vector")
         self._backend: Optional[VectorBackend] = backend
         if self._backend is None:
-            self._backend = QdrantBackend(config, dim)
-            self._log.info("Vector index: Qdrant")
+            if config.qdrant.enabled:
+                self._backend = QdrantBackend(config, dim)
+                self._log.info("Vector index: Qdrant")
+            else:
+                self._backend = None
+                self._log.info("Vector index: disabled")
 
     def _backend_allows(self) -> bool:
         backend = self._backend

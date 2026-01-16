@@ -24,6 +24,7 @@ _KDF_N = 2**15
 _KDF_R = 8
 _KDF_P = 1
 _KDF_LEN = 32
+_KDF_MAXMEM = 64 * 1024 * 1024
 
 _KEY_PSEUDONYM = "pseudonym_key"
 _KEY_TOKEN_VAULT = "token_vault_key"
@@ -51,6 +52,7 @@ def export_keys(config: AppConfig, out_path: Path, password: str) -> None:
             "r": _KDF_R,
             "p": _KDF_P,
             "salt": _b64encode(salt),
+            "maxmem": _KDF_MAXMEM,
         },
         "aead": {
             "name": "aes-256-gcm",
@@ -148,6 +150,7 @@ def _derive_key(password: str, salt: bytes) -> bytes:
         r=_KDF_R,
         p=_KDF_P,
         dklen=_KDF_LEN,
+        maxmem=_KDF_MAXMEM,
     )
 
 

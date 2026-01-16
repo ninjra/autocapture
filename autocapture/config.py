@@ -376,6 +376,9 @@ class APIConfig(BaseModel):
     port: int = Field(8008, ge=1024, le=65535)
     require_api_key: bool = Field(False)
     api_key: Optional[str] = None
+    bridge_token: Optional[str] = Field(
+        None, description="Optional bridge token for ingest-only authorization."
+    )
     rate_limit_rps: float = Field(2.0, gt=0.0)
     rate_limit_burst: int = Field(5, ge=1)
     max_page_size: int = Field(200, ge=1)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
-from ..config import AppConfig
+from ..config import AppConfig, is_dev_mode
 from ..logging_utils import get_logger
 from ..observability.metrics import worker_restarts_total
 from ..storage.database import DatabaseManager
@@ -43,10 +43,14 @@ class WorkerSupervisor:
         self._agent_threads: list[_WorkerSlot] = []
         self._watchdog_thread: threading.Thread | None = None
         if ocr_workers is None:
-            self._ocr_workers = [
-                EventIngestWorker(config, db_manager=self._db)
-                for _ in range(config.worker.ocr_workers)
-            ]
+            if self._ocr_enabled():
+                self._ocr_workers = [
+                    EventIngestWorker(config, db_manager=self._db)
+                    for _ in range(config.worker.ocr_workers)
+                ]
+            else:
+                self._ocr_workers = []
+                self._log.info("OCR workers disabled.")
         else:
             self._ocr_workers = list(ocr_workers)
         if embed_workers is None:
@@ -71,6 +75,18 @@ class WorkerSupervisor:
             ]
         else:
             self._agent_workers = list(agent_workers)
+
+    def _ocr_enabled(self) -> bool:
+        if self._config.routing.ocr == "disabled" or self._config.ocr.engine == "disabled":
+            return False
+        if not is_dev_mode():
+            return True
+        import importlib.util
+
+        if importlib.util.find_spec("rapidocr_onnxruntime") is None:
+            self._log.warning("Dev mode: rapidocr_onnxruntime missing; skipping OCR workers.")
+            return False
+        return True
 
     def start(self) -> None:
         if any(

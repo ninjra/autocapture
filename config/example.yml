@@ -16,6 +16,7 @@ api:
   port: 8008
   require_api_key: false
   api_key: null
+  bridge_token: null
   rate_limit_rps: 2.0
   rate_limit_burst: 5
   max_page_size: 200

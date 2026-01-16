@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+import pytest
 
 from autocapture.api.server import create_app
 import datetime as dt
@@ -10,7 +10,8 @@ import datetime as dt
 from autocapture.config import AppConfig, DatabaseConfig, apply_settings_overrides
 
 
-def test_settings_persist_and_apply(tmp_path: Path) -> None:
+@pytest.mark.anyio
+async def test_settings_persist_and_apply(tmp_path: Path, async_client_factory) -> None:
     config = AppConfig(
         capture={"data_dir": tmp_path, "staging_dir": tmp_path / "staging"},
         database=DatabaseConfig(url="sqlite:///:memory:"),
@@ -18,7 +19,6 @@ def test_settings_persist_and_apply(tmp_path: Path) -> None:
         embed={"text_model": "local-test"},
     )
     app = create_app(config)
-    client = TestClient(app)
     snooze_until = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
     payload = {
         "settings": {
@@ -36,7 +36,8 @@ def test_settings_persist_and_apply(tmp_path: Path) -> None:
             },
         }
     }
-    response = client.post("/api/settings", json=payload)
+    async with async_client_factory(app) as client:
+        response = await client.post("/api/settings", json=payload)
     assert response.status_code == 200
     assert config.routing.llm == "openai"
     assert config.privacy.paused is True
