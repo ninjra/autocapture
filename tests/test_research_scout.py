@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 
 from autocapture.config import AppConfig
+from autocapture.research import scout
 from autocapture.research.scout import run_scout
 
 
@@ -96,3 +97,53 @@ def test_scout_report_offline_without_cache(tmp_path: Path) -> None:
     assert report["sources"]["huggingface"]["status"] == "offline"
     assert report["sources"]["arxiv"]["status"] == "offline"
     assert report["ranked_items"] == []
+
+
+def test_arxiv_query_expands_phrase_and_tokens() -> None:
+    query = scout._build_arxiv_query(["prompt repetition"])
+
+    assert 'all:"prompt repetition"' in query
+    assert '(all:"prompt" AND all:"repetition")' in query
+    assert 'all:"and"' not in query
+
+
+def test_arxiv_query_hyphen_variants_without_token_clause() -> None:
+    query = scout._build_arxiv_query(["vision-language"])
+
+    assert 'all:"vision-language"' in query
+    assert 'all:"vision language"' in query
+    assert '(all:"vision" AND all:"language")' not in query
+
+
+def test_match_keyword_multiword_tokens(monkeypatch) -> None:
+    monkeypatch.setattr(scout, "ARXIV_KEYWORDS", ["prompt repetition"])
+
+    matched = scout._match_keyword(
+        title="Prompting strategies",
+        summary="We study repetition effects on outputs.",
+    )
+
+    assert matched == "prompt repetition"
+
+
+def test_arxiv_request_includes_expanded_query(tmp_path: Path) -> None:
+    def _transport(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "export.arxiv.org":
+            query = request.url.params.get("search_query", "")
+            assert 'all:"screen understanding"' in query
+            assert '(all:"screen" AND all:"understanding")' in query
+            return httpx.Response(200, text=_ARXIV_FEED)
+        if request.url.host == "huggingface.co":
+            return httpx.Response(200, json=[])
+        return httpx.Response(404)
+
+    config = AppConfig()
+    config.capture.data_dir = tmp_path
+    config.offline = False
+    config.privacy.cloud_enabled = True
+    now = dt.datetime(2025, 10, 2, tzinfo=dt.timezone.utc)
+
+    with httpx.Client(transport=httpx.MockTransport(_transport)) as client:
+        report = run_scout(config, http_client=client, now=now)
+
+    assert report["sources"]["arxiv"]["status"] == "ok"
