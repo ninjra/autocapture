@@ -1,16 +1,16 @@
 # Codex State
 
-Objective: Phase 4 - RapidOCR hardening + default retention TTL.
+Objective: Phase 5 - WSL bridge ingest/storage endpoints + dashboard widget.
 
 Checklist:
-- [x] Locate RapidOCR kwargs builder and remove signature inspection
-- [x] Pin ONNX provider settings in config (CUDA then CPU) and update doctor output
-- [x] Add RapidOCR kwargs/provider selection tests
-- [x] Update screenshot TTL default to 60 days + config/example/docs
-- [x] Add tests for retention default
+- [x] Ensure ingest endpoint supports bridge token, privacy filter, idempotency
+- [x] Add storage endpoint with cached size + TTL response
+- [x] Update dashboard with Storage & Retention card
+- [x] Add/adjust tests for ingest + storage
+- [x] Fix python-multipart dependency and failing tests (scrypt params, paging config)
 - [x] Run gates (ruff/black/pytest/doctor/freeze verify)
 - [x] Update SESSION_LOG and PR_CHECKLIST
-- [x] Commit Phase 4 changes
+- [ ] Commit Phase 5 changes
 
 Notes:
-- pytest currently times out at 300s; doctor currently fails on `/home/ninjra/AppData` permission.
+- pytest now passes; doctor still fails on `/home/ninjra/AppData` permission.

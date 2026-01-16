@@ -41,3 +41,13 @@
 - Gates (Phase 4): `poetry run pytest -q` timed out after 300s.
 - Gates (Phase 4): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
 - Gates (Phase 4): `poetry run python tools/freeze_surfaces.py verify` OK.
+- Phase 5: added ingest bridge + storage endpoints and storage dashboard card.
+- Phase 5 docs: added WSL/Windows bridge guide.
+- Phase 5 tests: added ingest/storage API tests and migrated API tests to AsyncClient.
+- Test infra: patched threadpool + asyncio to_thread in tests to avoid blocked threads.
+- Fixes: reduced scrypt maxmem failures, fixed paging config test, ensured python-multipart available.
+- Gates (Phase 5): `poetry run ruff check .` OK.
+- Gates (Phase 5): `poetry run black --check .` OK.
+- Gates (Phase 5): `poetry run pytest -q` OK (144 passed, 1 skipped).
+- Gates (Phase 5): doctor failed (permission denied creating `/home/ninjra/AppData/Local/Autocapture`).
+- Gates (Phase 5): `poetry run python tools/freeze_surfaces.py verify` OK.
