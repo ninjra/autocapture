@@ -153,7 +153,9 @@ def apply_prompt_strategy(
         )
         repeat_factor = _repeat_factor_for_strategy(strategy, settings.prompt_repeat_factor)
         if repeat_factor > 1:
-            message_list = _apply_repetition(message_list, settings.repetition_delimiter, repeat_factor)
+            message_list = _apply_repetition(
+                message_list, settings.repetition_delimiter, repeat_factor
+            )
         else:
             repeat_factor = 1
     prompt_tokens_estimate = _estimate_tokens(_serialize_messages(message_list))

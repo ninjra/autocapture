@@ -107,7 +107,10 @@ class OllamaProvider(LLMProvider):
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         user_prompt = build_user_prompt(query, context_pack_text)
-        if self._prompt_strategy.step_by_step_two_stage and self._prompt_strategy.enable_step_by_step:
+        if (
+            self._prompt_strategy.step_by_step_two_stage
+            and self._prompt_strategy.enable_step_by_step
+        ):
             return await self._generate_two_stage(system_prompt, user_prompt, temperature)
         return await self._generate_single_stage(system_prompt, user_prompt, temperature)
 
@@ -115,7 +118,10 @@ class OllamaProvider(LLMProvider):
         self, system_prompt: str, user_prompt: str, temperature: float
     ) -> str:
         strategy_result = apply_prompt_strategy(
-            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
             self._prompt_strategy,
             task_type="answer",
         )
@@ -139,7 +145,10 @@ class OllamaProvider(LLMProvider):
     ) -> str:
         stage1_prompt = _stage1_prompt(user_prompt)
         stage1_result = apply_prompt_strategy(
-            [{"role": "system", "content": system_prompt}, {"role": "user", "content": stage1_prompt}],
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": stage1_prompt},
+            ],
             self._prompt_strategy,
             task_type="answer_stage1",
             step_by_step_requested=True,
@@ -160,7 +169,10 @@ class OllamaProvider(LLMProvider):
         final_answer = _extract_final_answer(stage1_text)
         stage2_prompt = _stage2_prompt(user_prompt, final_answer)
         stage2_result = apply_prompt_strategy(
-            [{"role": "system", "content": system_prompt}, {"role": "user", "content": stage2_prompt}],
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": stage2_prompt},
+            ],
             self._prompt_strategy,
             task_type="answer_stage2",
             step_by_step_requested=False,
@@ -177,9 +189,7 @@ class OllamaProvider(LLMProvider):
         except Exception as exc:
             self._log.warning("Ollama OpenAI endpoint failed: {}", exc)
         stage2_text, usage = await self._generate_native(stage2_result.messages, temperature)
-        _log_llm_response(
-            self._log, stage2_result.metadata, stage2_text, usage, _elapsed_ms(start)
-        )
+        _log_llm_response(self._log, stage2_result.metadata, stage2_text, usage, _elapsed_ms(start))
         return stage2_text
 
     async def _generate_openai(
@@ -281,7 +291,10 @@ class OpenAIProvider(LLMProvider):
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         user_prompt = build_user_prompt(query, context_pack_text)
-        if self._prompt_strategy.step_by_step_two_stage and self._prompt_strategy.enable_step_by_step:
+        if (
+            self._prompt_strategy.step_by_step_two_stage
+            and self._prompt_strategy.enable_step_by_step
+        ):
             return await self._generate_two_stage(system_prompt, user_prompt, temperature)
         return await self._generate_single_stage(system_prompt, user_prompt, temperature)
 
@@ -330,9 +343,7 @@ class OpenAIProvider(LLMProvider):
             raise
         result = extract_response_text(data)
         usage = data.get("usage", {})
-        _log_llm_response(
-            self._log, strategy_result.metadata, result, usage, _elapsed_ms(start)
-        )
+        _log_llm_response(self._log, strategy_result.metadata, result, usage, _elapsed_ms(start))
         return result
 
     async def _generate_two_stage(
@@ -384,7 +395,11 @@ class OpenAIProvider(LLMProvider):
             raise
         stage1_text = extract_response_text(data)
         _log_llm_response(
-            self._log, stage1_result.metadata, stage1_text, data.get("usage", {}), _elapsed_ms(start)
+            self._log,
+            stage1_result.metadata,
+            stage1_text,
+            data.get("usage", {}),
+            _elapsed_ms(start),
         )
         final_answer = _extract_final_answer(stage1_text)
         stage2_prompt = _stage2_prompt(user_prompt, final_answer)
@@ -419,7 +434,11 @@ class OpenAIProvider(LLMProvider):
             raise
         stage2_text = extract_response_text(data)
         _log_llm_response(
-            self._log, stage2_result.metadata, stage2_text, data.get("usage", {}), _elapsed_ms(start)
+            self._log,
+            stage2_result.metadata,
+            stage2_text,
+            data.get("usage", {}),
+            _elapsed_ms(start),
         )
         return stage2_text
 
@@ -460,7 +479,10 @@ class OpenAICompatibleProvider(LLMProvider):
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         user_prompt = build_user_prompt(query, context_pack_text)
-        if self._prompt_strategy.step_by_step_two_stage and self._prompt_strategy.enable_step_by_step:
+        if (
+            self._prompt_strategy.step_by_step_two_stage
+            and self._prompt_strategy.enable_step_by_step
+        ):
             return await self._generate_two_stage(system_prompt, user_prompt, temperature)
         return await self._generate_single_stage(system_prompt, user_prompt, temperature)
 
@@ -506,9 +528,7 @@ class OpenAICompatibleProvider(LLMProvider):
             raise
         result = data["choices"][0]["message"]["content"].strip()
         usage = data.get("usage", {})
-        _log_llm_response(
-            self._log, strategy_result.metadata, result, usage, _elapsed_ms(start)
-        )
+        _log_llm_response(self._log, strategy_result.metadata, result, usage, _elapsed_ms(start))
         return result
 
     async def _generate_two_stage(
@@ -559,7 +579,11 @@ class OpenAICompatibleProvider(LLMProvider):
             raise
         stage1_text = data["choices"][0]["message"]["content"].strip()
         _log_llm_response(
-            self._log, stage1_result.metadata, stage1_text, data.get("usage", {}), _elapsed_ms(start)
+            self._log,
+            stage1_result.metadata,
+            stage1_text,
+            data.get("usage", {}),
+            _elapsed_ms(start),
         )
         final_answer = _extract_final_answer(stage1_text)
         stage2_prompt = _stage2_prompt(user_prompt, final_answer)
@@ -594,7 +618,11 @@ class OpenAICompatibleProvider(LLMProvider):
             raise
         stage2_text = data["choices"][0]["message"]["content"].strip()
         _log_llm_response(
-            self._log, stage2_result.metadata, stage2_text, data.get("usage", {}), _elapsed_ms(start)
+            self._log,
+            stage2_result.metadata,
+            stage2_text,
+            data.get("usage", {}),
+            _elapsed_ms(start),
         )
         return stage2_text
 

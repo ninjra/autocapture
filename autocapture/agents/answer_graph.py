@@ -11,9 +11,10 @@ from sqlalchemy import select
 
 from ..config import AppConfig
 from ..logging_utils import get_logger
-from ..memory.compression import extractive_answer
-from ..memory.context_pack import EvidenceItem, build_context_pack
+from ..memory.compression import CompressedAnswer, extractive_answer
+from ..memory.context_pack import EvidenceItem, build_context_pack, build_evidence_payload
 from ..memory.time_intent import (
+    is_time_only_expression,
     resolve_time_intent,
     resolve_time_range_for_query,
     resolve_timezone,
@@ -85,12 +86,18 @@ class AnswerGraph:
             now=now,
             tzinfo=tzinfo,
         )
+        time_only = is_time_only_expression(normalized_query)
+        retrieve_query = "" if time_only else normalized_query
         evidence, events = self._build_evidence(
-            normalized_query, resolved_time_range, filters, k, sanitized
+            retrieve_query, resolved_time_range, filters, k, sanitized
         )
         if not evidence:
             warnings.append("no_evidence")
-        if self._should_refine(evidence) and self._config.model_stages.query_refine.enabled:
+        if (
+            not time_only
+            and self._should_refine(evidence)
+            and self._config.model_stages.query_refine.enabled
+        ):
             refined = await self._refine_query(
                 normalized_query, evidence, routing_override=routing_override
             )
@@ -125,8 +132,25 @@ class AnswerGraph:
             aggregates=aggregates,
         )
         context_pack_json = pack.to_json()
-        context_pack_text = pack.to_text(extractive_only=False, format=context_pack_format)
-        context_pack_tron = context_pack_text if context_pack_format == "tron" else None
+        pack_json_text = pack.to_text(extractive_only=False, format="json")
+        pack_tron_text = (
+            pack.to_text(extractive_only=False, format="tron")
+            if context_pack_format == "tron"
+            else None
+        )
+        context_pack_tron = pack_tron_text if context_pack_format == "tron" else None
+        if time_only and resolved_time_range is not None:
+            timeline = _build_timeline_answer(evidence)
+            return _build_graph_result(
+                timeline.answer,
+                timeline.citations,
+                context_pack_json,
+                warnings,
+                used_llm=False,
+                output_format=output_format,
+                context_pack_tron=context_pack_tron,
+                prompt_strategy=None,
+            )
         if extractive_only:
             compressed = extractive_answer(evidence)
             return _build_graph_result(
@@ -150,10 +174,19 @@ class AnswerGraph:
                     "draft_generate", routing_override=routing_override
                 )
                 draft_query = _build_draft_query(query)
+                draft_pack = _select_context_pack_text(
+                    self._config,
+                    draft_decision,
+                    context_pack_format,
+                    pack_json_text,
+                    pack_tron_text,
+                    warnings,
+                    stage="draft_generate",
+                )
                 draft_text = await draft_provider.generate_answer(
                     system_prompt,
                     draft_query,
-                    context_pack_text,
+                    draft_pack,
                     temperature=draft_decision.temperature,
                 )
                 draft_citations = _extract_citations(draft_text)
@@ -172,10 +205,19 @@ class AnswerGraph:
                 "final_answer", routing_override=routing_override
             )
             final_query = _build_final_query(query, draft_text)
+            final_pack = _select_context_pack_text(
+                self._config,
+                final_decision,
+                context_pack_format,
+                pack_json_text,
+                pack_tron_text,
+                warnings,
+                stage="final_answer",
+            )
             answer_text = await final_provider.generate_answer(
                 system_prompt,
                 final_query,
-                context_pack_text,
+                final_pack,
                 temperature=final_decision.temperature,
             )
             prompt_strategy_payload = _prompt_strategy_payload(final_provider)
@@ -242,6 +284,8 @@ class AnswerGraph:
                     stmt = stmt.where(EventRecord.ts_start.between(*time_range))
                 events = session.execute(stmt).scalars().all()
             results = [RetrievedEvent(event=event, score=0.5) for event in events[:k]]
+        if not results and time_range and not query:
+            results = self._retrieval.retrieve("", time_range, retrieve_filters, limit=k)
         if not results:
             fallback_events = list(self._retrieval.list_events(limit=k))
             results = [RetrievedEvent(event=event, score=0.3) for event in fallback_events]
@@ -265,12 +309,15 @@ class AnswerGraph:
                     evidence_id=f"E{idx}",
                     event_id=event.event_id,
                     timestamp=event.ts_start.isoformat(),
+                    ts_end=event.ts_end.isoformat() if event.ts_end else None,
                     app=app_name,
                     title=title,
                     domain=domain,
                     score=result.score,
                     spans=[],
                     text=snippet,
+                    screenshot_path=event.screenshot_path,
+                    screenshot_hash=event.screenshot_hash,
                 )
             )
         return evidence, events
@@ -383,6 +430,51 @@ def _build_final_query(query: str, draft_text: str | None, max_chars: int = 2000
     )
 
 
+def _select_context_pack_text(
+    config: AppConfig,
+    decision: object,
+    requested_format: str,
+    json_text: str,
+    tron_text: str | None,
+    warnings: list[str],
+    *,
+    stage: str,
+) -> str:
+    if requested_format != "tron":
+        return json_text
+    cloud = bool(getattr(decision, "cloud", False))
+    if not cloud:
+        return tron_text or json_text
+    if config.output.allow_tron_compression:
+        return tron_text or json_text
+    warnings.append(f"tron_disabled_for_cloud_{stage}")
+    return json_text
+
+
+def _build_timeline_answer(evidence: list[EvidenceItem]) -> "CompressedAnswer":
+    if not evidence:
+        return CompressedAnswer(
+            answer="No events found in the requested time range.",
+            citations=[],
+        )
+    sorted_items = sorted(evidence, key=lambda item: item.timestamp)
+    lines: list[str] = []
+    citations: list[str] = []
+    for item in sorted_items:
+        snippet = " ".join((item.text or "").split())
+        if len(snippet) > 120:
+            snippet = snippet[:120] + "..."
+        title = item.title or ""
+        label = f"{item.app}: {title}".strip(": ")
+        if snippet:
+            line = f"{item.timestamp} — {label} — {snippet} [{item.evidence_id}]"
+        else:
+            line = f"{item.timestamp} — {label} [{item.evidence_id}]"
+        lines.append(line)
+        citations.append(item.evidence_id)
+    return CompressedAnswer(answer="\n".join(lines), citations=citations)
+
+
 def _parse_refined_query(response: str) -> RefinedQueryIntent | None:
     if not response:
         return None
@@ -460,6 +552,7 @@ def _build_graph_result(
             "warnings": warnings,
             "used_llm": used_llm,
             "context_pack": context_pack,
+            "evidence": build_evidence_payload(context_pack),
         }
         if output_format == "tron":
             from ..format.tron import encode_tron

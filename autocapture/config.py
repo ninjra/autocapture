@@ -468,6 +468,10 @@ class PrivacyConfig(BaseModel):
 class OutputConfig(BaseModel):
     format: str = Field("text", description="text|json|tron")
     context_pack_format: str = Field("json", description="json|tron")
+    allow_tron_compression: bool = Field(
+        False,
+        description="Allow TRON context packs for cloud LLM calls when enabled.",
+    )
 
     @field_validator("format")
     @classmethod
@@ -604,9 +608,7 @@ class LLMConfig(BaseModel):
     prompt_repeat_factor: int = Field(
         2, ge=2, le=3, description="Repeat factor for prompt repetition strategies."
     )
-    enable_step_by_step: bool = Field(
-        False, description="Enable optional step-by-step prompting."
-    )
+    enable_step_by_step: bool = Field(False, description="Enable optional step-by-step prompting.")
     step_by_step_phrase: str = Field(
         "Let's think step by step.",
         description="Zero-shot-CoT trigger phrase for step-by-step mode.",
@@ -645,8 +647,7 @@ class LLMConfig(BaseModel):
     prompt_repetition: bool = Field(
         False,
         description=(
-            "Legacy: repeat non-system prompt content once; use prompt_strategy_default "
-            "instead."
+            "Legacy: repeat non-system prompt content once; use prompt_strategy_default " "instead."
         ),
     )
 

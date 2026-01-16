@@ -58,6 +58,7 @@ privacy:
 output:
   format: "text"
   context_pack_format: "json"
+  allow_tron_compression: false
 time:
   timezone: null
 presets:
@@ -353,5 +354,5 @@ observability:
   prometheus_port: 9005
   prometheus_port_fallbacks: 10
   prometheus_fail_fast: false
-  grafana_url: "http://nas.local:3000"
+  grafana_url: "http://localhost:3000"
   enable_gpu_stats: true

@@ -6,7 +6,11 @@ from dateutil import tz
 
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.memory.retrieval import RetrievalService
-from autocapture.memory.time_intent import parse_time_expression, resolve_time_range_for_query
+from autocapture.memory.time_intent import (
+    is_time_only_expression,
+    parse_time_expression,
+    resolve_time_range_for_query,
+)
 from autocapture.storage.database import DatabaseManager
 from autocapture.storage.models import EventRecord
 
@@ -92,3 +96,9 @@ def test_resolve_time_range_for_query_uses_timezone_override() -> None:
         tzinfo=tzinfo,
     )
     assert resolved is not None
+
+
+def test_is_time_only_expression() -> None:
+    assert is_time_only_expression("yesterday 5 pm") is True
+    assert is_time_only_expression("an hour ago") is True
+    assert is_time_only_expression("yesterday 5 pm notes") is False
