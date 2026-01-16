@@ -50,12 +50,12 @@ and observable.
      Local mode auto-starts a bundled Qdrant sidecar when `qdrant.url` is localhost.
 4. **Create directories referenced in the config.** For example:
    ```powershell
-   New-Item -ItemType Directory -Force -Path D:\autocapture\staging
-   New-Item -ItemType Directory -Force -Path D:\autocapture\logs
+   New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\\Autocapture\\staging"
+   New-Item -ItemType Directory -Force -Path "$env:LOCALAPPDATA\\Autocapture\\logs"
    ```
 5. **Launch the orchestrator in a console session.**
    ```powershell
-   python -m autocapture.main --config autocapture.yml --log-dir D:/autocapture/logs
+   python -m autocapture.main --config autocapture.yml --log-dir "$env:LOCALAPPDATA\\Autocapture\\logs"
    ```
    You should see `Capture service started`. Move the mouse or type to confirm
    that files appear in the staging directory. Close the console with
@@ -96,7 +96,7 @@ and observable.
    Autocapture will AES-GCM encrypt screenshots before upload, but tight ACLs
    prevent accidental modification.
 4. **Map the share to Windows.** Use File Explorer or PowerShell to mount the
-   UNC path (e.g., `\\nas\autocapture`) so the capture service can stream
+   UNC path (e.g., `\\\\<nas-host>\\autocapture`) so the capture service can stream
    encrypted files. A persistent drive letter simplifies scripts and log review.
 
 ---
@@ -110,7 +110,7 @@ and observable.
    ```yaml
    services:
      postgres:
-       image: postgres:16
+       image: postgres:16.3
        environment:
          POSTGRES_DB: autocapture
          POSTGRES_USER: autocapture
@@ -123,7 +123,7 @@ and observable.
          - "5432:5432"
 
      qdrant:
-       image: qdrant/qdrant:latest
+       image: qdrant/qdrant:1.16.3
        volumes:
          - type: bind
            source: /volume1/autocapture/qdrant
@@ -132,7 +132,7 @@ and observable.
          - "6333:6333"
 
      prometheus:
-       image: prom/prometheus:latest
+       image: prom/prometheus:v2.52.0
        volumes:
          - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
          - type: bind
@@ -142,7 +142,7 @@ and observable.
          - "9090:9090"
 
      grafana:
-       image: grafana/grafana:latest
+       image: grafana/grafana:11.1.0
        environment:
          GF_SECURITY_ADMIN_USER: admin
          GF_SECURITY_ADMIN_PASSWORD: change_me
@@ -162,9 +162,9 @@ and observable.
    scrape_configs:
      - job_name: autocapture
        static_configs:
-         - targets: ['workstation.lan:9005']
+         - targets: ['<capture-host>:9005']
    ```
-   Replace `workstation.lan` with the capture workstation’s hostname or IP.
+   Replace `<capture-host>` with the capture workstation’s hostname or IP.
 4. **Launch the stack.** From the NAS shell:
    ```bash
    cd /volume1/autocapture/infra
@@ -172,7 +172,7 @@ and observable.
    ```
    Confirm container health with `docker compose ps` and review logs if any
    service fails.
-5. **Import dashboards and alerts.** Visit `http://nas.local:3000`, log into
+5. **Import dashboards and alerts.** Visit `http://<grafana-host>:3000`, log into
    Grafana, add Prometheus (`http://prometheus:9090`) as a data source, and
    import `docs/dashboard.json`. Extend `prometheus.yml` with alert rules for OCR
    backlog, storage usage, and service heartbeats as needed.
@@ -186,7 +186,7 @@ and observable.
    the NAS-backed bind mounts:
    ```yaml
      postgres:
-       image: postgres:16
+       image: postgres:16.3
        environment:
          POSTGRES_DB: autocapture
          POSTGRES_USER: autocapture
@@ -199,7 +199,7 @@ and observable.
          - "5432:5432"
 
      qdrant:
-       image: qdrant/qdrant:latest
+       image: qdrant/qdrant:1.16.3
        volumes:
          - type: bind
            source: /volume1/autocapture/qdrant
@@ -210,7 +210,7 @@ and observable.
    Restart Docker Compose on the NAS so all services come up with the updated
    configuration.
 2. **Update `autocapture.yml`** so the database, Qdrant, and Grafana entries
-   point to your NAS hostnames (e.g., `nas.local`) and confirm any paths that
+   point to your NAS hostnames (e.g., `<nas-host>`) and confirm any paths that
    move long-term artifacts (e.g., `storage`) target the mapped NAS share on
    Windows.
 3. **Run the OCR worker.** From the workstation (with the virtual environment

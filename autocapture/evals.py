@@ -200,12 +200,15 @@ def _build_evidence(
                 evidence_id=f"E{idx}",
                 event_id=event.event_id,
                 timestamp=event.ts_start.isoformat(),
+                ts_end=event.ts_end.isoformat() if event.ts_end else None,
                 app=app_name,
                 title=title,
                 domain=domain,
                 score=result.score,
                 spans=spans,
                 text=snippet,
+                screenshot_path=event.screenshot_path,
+                screenshot_hash=event.screenshot_hash,
             )
         )
     return evidence, events

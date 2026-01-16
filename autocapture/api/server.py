@@ -42,12 +42,21 @@ from ..settings_store import read_settings, update_settings
 from ..media.store import MediaStore
 from ..capture.privacy_filter import should_skip_capture
 from ..memory.compression import extractive_answer
-from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
+from ..memory.context_pack import (
+    EvidenceItem,
+    EvidenceSpan,
+    build_context_pack,
+    build_evidence_payload,
+)
 from ..memory.entities import EntityResolver, SecretStore
 from ..security.token_vault import TokenVaultStore
 from ..memory.prompts import PromptLibraryService, PromptRegistry
 from ..memory.retrieval import RetrieveFilters, RetrievalService
-from ..memory.time_intent import resolve_time_range_for_query, resolve_timezone
+from ..memory.time_intent import (
+    is_time_only_expression,
+    resolve_time_range_for_query,
+    resolve_timezone,
+)
 from ..embeddings.service import EmbeddingService
 from ..indexing.vector_index import VectorIndex
 from ..model_ops import StageRouter
@@ -918,12 +927,14 @@ def create_app(
             now=dt.datetime.now(tzinfo),
             tzinfo=tzinfo,
         )
+        time_only = is_time_only_expression(query_text)
+        evidence_query = "" if time_only else query_text
         evidence, events = await asyncio.to_thread(
             _build_evidence,
             retrieval,
             entities,
             db,
-            query_text,
+            evidence_query,
             resolved_time_range,
             request.filters,
             k,
@@ -945,12 +956,14 @@ def create_app(
             sanitized=sanitized,
             aggregates=aggregates,
         )
-        pack_text = pack.to_text(extractive_only=False, format=context_pack_format)
-        context_pack_tron = (
+        pack_json_text = pack.to_text(extractive_only=False, format="json")
+        pack_tron_text = (
             pack.to_text(extractive_only=False, format="tron")
             if context_pack_format == "tron"
             else None
         )
+        pack_text = pack_tron_text or pack_json_text
+        context_pack_tron = pack_tron_text if context_pack_format == "tron" else None
         start = dt.datetime.now(dt.timezone.utc)
         graph_attempted = False
         graph_used_llm = False
@@ -989,7 +1002,13 @@ def create_app(
                     sanitized=sanitized,
                     aggregates=aggregates,
                 )
-                pack_text = pack.to_text(extractive_only=False, format=context_pack_format)
+                pack_json_text = pack.to_text(extractive_only=False, format="json")
+                pack_tron_text = (
+                    pack.to_text(extractive_only=False, format="tron")
+                    if context_pack_format == "tron"
+                    else None
+                )
+                pack_text = pack_tron_text or pack_json_text
                 context_pack_tron = result.context_pack_tron
                 response_json = result.response_json
                 response_tron = result.response_tron
@@ -1006,7 +1025,18 @@ def create_app(
             response_json = None
             response_tron = None
 
-        if extractive_only:
+        if time_only and resolved_time_range is not None:
+            answer_text, citations = _build_timeline_answer(evidence)
+            prompt_strategy_info = None
+            response_json, response_tron = _build_answer_payload(
+                answer_text,
+                citations,
+                warnings=[],
+                used_llm=False,
+                context_pack=pack.to_json(),
+                output_format=output_format,
+            )
+        elif extractive_only:
             compressed = extractive_answer(evidence)
             answer_text = compressed.answer
             citations = compressed.citations
@@ -1028,6 +1058,13 @@ def create_app(
             )
             system_prompt = prompt_registry.get("ANSWER_WITH_CONTEXT_PACK").system_prompt
             try:
+                pack_text = _select_context_pack_text(
+                    config,
+                    decision,
+                    context_pack_format,
+                    pack_json_text,
+                    pack_tron_text,
+                )
                 answer_text = await provider.generate_answer(
                     system_prompt,
                     query_text,
@@ -1444,6 +1481,8 @@ def _build_evidence(
     if filters:
         retrieve_filters = RetrieveFilters(apps=filters.get("app"), domains=filters.get("domain"))
     results = retrieval.retrieve(query, time_range, retrieve_filters, limit=k, offset=offset)
+    if not results and time_range and not query:
+        results = retrieval.retrieve("", time_range, retrieve_filters, limit=k, offset=offset)
     evidence: list[EvidenceItem] = []
     events: list[EventRecord] = []
     for idx, result in enumerate(results, start=1):
@@ -1473,12 +1512,15 @@ def _build_evidence(
                 evidence_id=f"E{idx}",
                 event_id=event.event_id,
                 timestamp=event.ts_start.isoformat(),
+                ts_end=event.ts_end.isoformat() if event.ts_end else None,
                 app=app_name,
                 title=title,
                 domain=domain,
                 score=result.score,
                 spans=spans,
                 text=snippet,
+                screenshot_path=event.screenshot_path,
+                screenshot_hash=event.screenshot_hash,
             )
         )
     return evidence, events
@@ -1540,12 +1582,51 @@ def _build_answer_payload(
         "warnings": warnings,
         "used_llm": used_llm,
         "context_pack": context_pack,
+        "evidence": build_evidence_payload(context_pack),
     }
     if output_format == "tron":
         from ..format.tron import encode_tron
 
         return payload, encode_tron(payload)
     return payload, None
+
+
+def _select_context_pack_text(
+    config: AppConfig,
+    decision: object,
+    requested_format: str,
+    json_text: str,
+    tron_text: str | None,
+) -> str:
+    if requested_format != "tron":
+        return json_text
+    cloud = bool(getattr(decision, "cloud", False))
+    if not cloud:
+        return tron_text or json_text
+    if config.output.allow_tron_compression:
+        return tron_text or json_text
+    return json_text
+
+
+def _build_timeline_answer(evidence: list[EvidenceItem]) -> tuple[str, list[str]]:
+    if not evidence:
+        return "No events found in the requested time range.", []
+    sorted_items = sorted(evidence, key=lambda item: item.timestamp)
+    lines: list[str] = []
+    citations: list[str] = []
+    for item in sorted_items:
+        snippet = " ".join((item.text or "").split())
+        if len(snippet) > 120:
+            snippet = snippet[:120] + "..."
+        title = item.title or ""
+        label = f"{item.app}: {title}".strip(": ")
+        if snippet:
+            line = f"{item.timestamp} — {label} — {snippet} [{item.evidence_id}]"
+        else:
+            line = f"{item.timestamp} — {label} [{item.evidence_id}]"
+        lines.append(line)
+        citations.append(item.evidence_id)
+    return "\n".join(lines), citations
 
 
 def _prompt_strategy_info(payload: object | None) -> PromptStrategyInfo | None:

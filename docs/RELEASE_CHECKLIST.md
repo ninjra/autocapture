@@ -7,6 +7,8 @@ runs the same commands.
 
 - `poetry run ruff check .`
 - `poetry run black --check .`
+- `poetry run python tools/repo_hygiene_check.py`
+- `python .tools/memory_guard.py --check`
 - `poetry run pytest -q`
 - `poetry run python -m autocapture.main --config autocapture.yml doctor`
   - FFmpeg present (or explicitly disabled)

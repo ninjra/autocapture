@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import json
 import socket
 import subprocess
@@ -118,7 +119,26 @@ def _check_paths(config: AppConfig) -> DoctorCheckResult:
             probe.write_text("ok", encoding="utf-8")
             probe.unlink(missing_ok=True)
         except Exception as exc:
-            return DoctorCheckResult(name, False, f"{exc}")
+            detail = f"path={path} error={exc}"
+            if sys.platform == "win32":
+                missing = [
+                    var
+                    for var in (
+                        "LOCALAPPDATA",
+                        "USERPROFILE",
+                        "APPDATA",
+                        "HOMEDRIVE",
+                        "HOMEPATH",
+                    )
+                    if not os.environ.get(var)
+                ]
+                if missing:
+                    detail += f"; missing_env={','.join(missing)}"
+                detail += (
+                    "; set LOCALAPPDATA (recommended) or override capture.data_dir/"
+                    "capture.staging_dir in config"
+                )
+            return DoctorCheckResult(name, False, detail)
     return DoctorCheckResult("paths", True, "Writable")
 
 
@@ -398,14 +418,23 @@ def _check_port(name: str, host: str, port: int) -> DoctorCheckResult:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind((host, port))
         return DoctorCheckResult(name, True, f"Port {port} available")
+    except PermissionError as exc:
+        return DoctorCheckResult(
+            name,
+            True,
+            f"Skipped port probe for {port}: permission denied ({exc})",
+        )
     except Exception as exc:
         return DoctorCheckResult(name, False, str(exc))
 
 
 def _port_in_use(host: str, port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.settimeout(0.5)
-        return sock.connect_ex((host, port)) == 0
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            return sock.connect_ex((host, port)) == 0
+    except OSError:
+        return False
 
 
 def _check_raw_input(config: AppConfig) -> DoctorCheckResult:

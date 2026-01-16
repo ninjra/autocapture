@@ -13,7 +13,7 @@
 - Not run here (previous session reported `poetry run pytest -q` passing; `autocapture doctor` still fails on AppData permissions).
 
 ## Notes
-- `autocapture doctor` fails in WSL due to `/home/ninjra/AppData` permissions (environment-specific).
+- `autocapture doctor` fails in WSL due to `/home/<user>/AppData` permissions (environment-specific).
 
 ## Citations
 [^server]: `autocapture/api/server.py`, `tests/test_bridge_endpoints.py`

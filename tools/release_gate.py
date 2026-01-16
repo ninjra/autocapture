@@ -87,6 +87,8 @@ def main() -> int:
 
     _poetry_run(["ruff", "check", "."])
     _poetry_run(["black", "--check", "."])
+    _poetry_run(["python", "tools/repo_hygiene_check.py"])
+    _run(["python", ".tools/memory_guard.py", "--check"])
     _poetry_run(["pytest", "-q"])
     doctor_config = Path("autocapture.yml")
     if sys.platform != "win32":

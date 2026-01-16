@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "loguru": "^0.0.1-security",
-    "poetry": "^0.6.29"
-  }
-}

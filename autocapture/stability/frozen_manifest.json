@@ -1,9 +1,9 @@
 {
   "frozen": {
     "autocapture/memory/context_pack.py": {
-      "frozen_at_utc": "2026-01-16T12:03:09Z",
-      "reason": "Add TRON output format support",
-      "sha256": "7ec95ad29cb0d06958495316defbcaa7faf2b14a0271bb7dcf2b4959026b5086"
+      "frozen_at_utc": "2026-01-16T21:12:48Z",
+      "reason": "Update evidence payload metadata",
+      "sha256": "359588496f4717c76a1c20cd221fa31c38fb37983e56d33ed9481ab1e0a63da6"
     },
     "autocapture/tracking/store.py": {
       "frozen_at_utc": "2026-01-13T04:48:23Z",
@@ -21,9 +21,9 @@
       "sha256": "729a692b1092989cf75249749e74706feb7a8ef4596864b34ec9f40717d72c06"
     },
     "docs/CONTEXT_PACK.md": {
-      "frozen_at_utc": "2026-01-09T23:20:39Z",
-      "reason": "Context Pack v1 contract stabilized + tested; prevent churn.",
-      "sha256": "ace64569f3e4e3d8ae9e9be36fc9cc857f0a3e2c061630eb481b3981dee8ef9a"
+      "frozen_at_utc": "2026-01-16T21:12:48Z",
+      "reason": "Update evidence payload metadata",
+      "sha256": "105464fd0ac131f494fef44fa250733b82ed39b6b6eb10e83ba1a2d65905d2a4"
     }
   },
   "schema_version": 1

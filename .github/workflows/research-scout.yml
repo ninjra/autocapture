@@ -1,0 +1,64 @@
+name: Research Scout
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: poetry.lock
+      - name: Install Poetry
+        run: pip install poetry==1.8.3
+      - name: Install dependencies
+        run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
+      - name: Run research scout
+        id: scout
+        env:
+          META_PATH: ${{ runner.temp }}/scout_meta.json
+        run: |
+          poetry run python tools/research_scout_workflow.py \
+            --out docs/research/scout_report.json \
+            --log docs/research/scout_log.md \
+            --meta "$META_PATH" \
+            --diff-threshold 0.3 \
+            --top-n 10
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          meta_path = os.environ["META_PATH"]
+          meta = json.load(open(meta_path, "r", encoding="utf-8"))
+          print(f"threshold_exceeded={str(meta['threshold_exceeded']).lower()}")
+          PY
+      - name: Check diff
+        id: diff
+        run: |
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create pull request
+        if: steps.scout.outputs.threshold_exceeded == 'true' && steps.diff.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: research/scout-update
+          delete-branch: true
+          title: "Research scout report update"
+          body: |
+            Updates the research scout report/log based on the latest scheduled run.
+
+            - Threshold-exceeded diff triggered this PR.
+            - Review ranked items and rationale before merging.
+          commit-message: "chore: update research scout report"
+          add-paths: |
+            docs/research/scout_report.json
+            docs/research/scout_log.md

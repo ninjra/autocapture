@@ -15,6 +15,7 @@ from pathlib import Path
 
 DEFAULT_QDRANT_VERSION = "1.16.3"
 QDRANT_ZIP_NAME = "qdrant-x86_64-pc-windows-msvc.zip"
+QDRANT_SHA_NAME = "qdrant-x86_64-pc-windows-msvc.zip.sha256"
 FFMPEG_ZIP_NAME = "ffmpeg-release-essentials.zip"
 
 
@@ -126,14 +127,14 @@ def _extract_ffmpeg(zip_path: Path, dest_dir: Path) -> None:
 
 
 def _build_urls(qdrant_version: str) -> dict[str, str]:
-    qdrant_url = (
-        "https://sourceforge.net/projects/qdrant.mirror/files/"
-        f"v{qdrant_version}/{QDRANT_ZIP_NAME}/download"
-    )
+    qdrant_base = f"https://github.com/qdrant/qdrant/releases/download/v{qdrant_version}"
+    qdrant_url = f"{qdrant_base}/{QDRANT_ZIP_NAME}"
+    qdrant_sha = f"{qdrant_base}/{QDRANT_SHA_NAME}"
     ffmpeg_url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
     ffmpeg_sha = ffmpeg_url + ".sha256"
     return {
         "qdrant": qdrant_url,
+        "qdrant_sha": qdrant_sha,
         "ffmpeg": ffmpeg_url,
         "ffmpeg_sha": ffmpeg_sha,
     }
@@ -162,12 +163,15 @@ def main() -> int:
     urls = _build_urls(args.qdrant_version)
 
     qdrant_zip = downloads_dir / QDRANT_ZIP_NAME
+    qdrant_sha = downloads_dir / QDRANT_SHA_NAME
     ffmpeg_zip = downloads_dir / FFMPEG_ZIP_NAME
     ffmpeg_sha = downloads_dir / f"{FFMPEG_ZIP_NAME}.sha256"
 
     _download(urls["qdrant"], qdrant_zip)
+    _download(urls["qdrant_sha"], qdrant_sha)
     _download(urls["ffmpeg"], ffmpeg_zip)
     _download(urls["ffmpeg_sha"], ffmpeg_sha)
+    _verify_sha256(qdrant_zip, qdrant_sha)
     _verify_sha256(ffmpeg_zip, ffmpeg_sha)
 
     _extract_qdrant(qdrant_zip, vendor_dir / "qdrant")

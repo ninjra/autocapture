@@ -24,3 +24,44 @@ Phase 2+ update (2026-01-16):
 - Added research scout CLI with caching + proposal log, plus docs for VLM/TRON/time/stages and research watchlist.
 - Added DPAPI portability test and tightened PromptOps sandbox checks.
 - Pending: optional GitHub Actions scheduler for research scout; full test run after poetry install.
+
+Phase 2 remediation plan (2026-01-16):
+What exists:
+- Repo memory subsystem + CI memory guard.
+- VLM-first extraction with full-screen tiling + RapidOCR fallback.
+- TRON encode/decode and JSON/TRON output formats.
+- Deterministic time intent parser, reranker, API paging, keys export/import, PromptOps sandboxing.
+- Research scout CLI + cached report/log.
+
+Missing or incorrect:
+- Windows appdata fallback and doctor path messaging.
+- Repo hygiene cleanup (tracked obj/bin/.idea/node artifacts) + CI guard.
+- Docker image pinning + Qdrant healthcheck.
+- Qdrant vendor checksum verification.
+- Docs cleanup for machine-specific paths/hostnames + clarify Node requirement.
+- Citability enforcement (evidence payloads + time-query timeline output).
+- Research scout scheduled workflow + diff threshold.
+- Design doc and doc updates reflecting new defaults.
+
+Plan:
+- [ ] Fix doctor/paths + add tests
+- [ ] Add repo hygiene check, remove tracked artifacts, update .gitignore/CI/release gate
+- [ ] Pin docker images + add healthchecks; update docs
+- [ ] Add Qdrant checksum verification + tests
+- [ ] Enforce citations/evidence payloads + time-query timeline; update tests
+- [ ] Implement research scout scheduler + threshold logic + tests
+- [ ] Update docs/configs + add design doc
+- [ ] Run/attempt gates and update repo memory
+
+Progress (2026-01-16):
+- [x] Fix doctor/paths + add tests
+- [x] Add repo hygiene check, remove tracked artifacts, update .gitignore/release gate
+- [x] Pin docker images + add healthchecks; update docs
+- [x] Add Qdrant checksum verification + tests
+- [x] Enforce citations/evidence payloads + time-query timeline; update tests
+- [x] Implement research scout scheduler + threshold logic + tests
+- [x] Update docs/configs + add design doc
+- [x] Run/attempt gates and update repo memory
+
+Phase 2 follow-up (2026-01-16):
+- Adjusted logging defaults and port checks so doctor passes in restricted environments; release_gate now completes with warnings only.

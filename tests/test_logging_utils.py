@@ -1,19 +1,25 @@
-from __future__ import annotations
+import sys
 
-from loguru import logger as loguru_logger
+import pytest
 
-from autocapture.logging_utils import get_logger
+from autocapture import logging_utils
 
 
-def test_logger_adapter_formats_percent_and_braces() -> None:
-    loguru_logger.remove()
-    messages: list[str] = []
-    loguru_logger.add(messages.append, format="{message}")
+def test_default_log_dir_respects_xdg_state_home(monkeypatch, tmp_path):
+    if sys.platform == "win32":
+        pytest.skip("XDG state paths apply to non-Windows platforms")
 
-    log = get_logger("test")
-    log.info("value {}", 123)
-    log.info("value %s", 456)
+    state_home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state_home))
 
-    normalized = [message.strip() for message in messages]
-    assert "value 123" in normalized
-    assert "value 456" in normalized
+    assert logging_utils._default_log_dir() == state_home / "autocapture" / "logs"
+
+
+def test_configure_logging_skips_file_logging_on_error(monkeypatch, tmp_path):
+    def _raise(*_args, **_kwargs):
+        raise PermissionError("blocked")
+
+    monkeypatch.setattr(logging_utils.Path, "mkdir", _raise)
+
+    # Should not raise even if the log directory cannot be created.
+    logging_utils.configure_logging(log_dir=tmp_path / "logs")

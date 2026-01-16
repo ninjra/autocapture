@@ -87,3 +87,100 @@ async def test_answer_citations_subset(tmp_path: Path, monkeypatch, async_client
     payload = response.json()
     assert payload["citations"]
     assert all(cite.startswith("E") for cite in payload["citations"])
+
+
+@pytest.mark.anyio
+async def test_answer_json_includes_evidence_payload(tmp_path: Path, async_client_factory) -> None:
+    config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
+    config.capture.data_dir = tmp_path
+    config.embed.text_model = "local-test"
+    config.model_stages.query_refine.enabled = False
+    db = DatabaseManager(config.database)
+
+    with db.session() as session:
+        session.add(
+            CaptureRecord(
+                id="event-json-1",
+                captured_at=dt.datetime.now(dt.timezone.utc),
+                image_path=None,
+                foreground_process="Docs",
+                foreground_window="Notes",
+                monitor_id="m1",
+                is_fullscreen=False,
+                ocr_status="done",
+            )
+        )
+        session.flush()
+        session.add(
+            EventRecord(
+                event_id="event-json-1",
+                ts_start=dt.datetime.now(dt.timezone.utc),
+                ts_end=None,
+                app_name="Docs",
+                window_title="Notes",
+                url=None,
+                domain=None,
+                screenshot_path=None,
+                screenshot_hash="hash",
+                ocr_text="Meeting notes about roadmap",
+                embedding_vector=None,
+                tags={},
+            )
+        )
+
+    app = create_app(config, db_manager=db)
+    async with async_client_factory(app) as client:
+        response = await client.post(
+            "/api/answer",
+            json={"query": "roadmap", "extractive_only": True, "output_format": "json"},
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    response_json = payload["response_json"]
+    assert response_json is not None
+    assert response_json["citations"]
+    assert response_json["evidence"]
+    assert response_json["evidence"][0]["event_id"] == "event-json-1"
+    assert response_json["evidence"][0]["ts_start"]
+
+
+@pytest.mark.anyio
+async def test_time_query_timeline_includes_citations(tmp_path: Path, async_client_factory) -> None:
+    config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
+    config.capture.data_dir = tmp_path
+    config.embed.text_model = "local-test"
+    config.model_stages.query_refine.enabled = False
+    db = DatabaseManager(config.database)
+
+    in_range = EventRecord(
+        event_id="event-time-1",
+        ts_start=dt.datetime(2026, 1, 15, 17, 30, tzinfo=dt.timezone.utc),
+        ts_end=None,
+        app_name="Calendar",
+        window_title="Schedule",
+        url=None,
+        domain=None,
+        screenshot_path=None,
+        screenshot_hash="hash",
+        ocr_text="Meeting with team",
+        embedding_vector=None,
+        tags={},
+    )
+    with db.session() as session:
+        session.add(in_range)
+
+    app = create_app(config, db_manager=db)
+    time_range = ["2026-01-15T17:00:00Z", "2026-01-15T18:00:00Z"]
+    async with async_client_factory(app) as client:
+        response = await client.post(
+            "/api/answer",
+            json={
+                "query": "yesterday 5 pm",
+                "time_range": time_range,
+                "output_format": "json",
+            },
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["citations"]
+    assert "event-time-1" in payload["response_json"]["evidence"][0]["event_id"]

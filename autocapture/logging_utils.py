@@ -52,10 +52,16 @@ def _prepare_message(message, args):
 
 
 def _default_log_dir() -> Path:
-    base = os.environ.get("LOCALAPPDATA")
-    if base:
-        return Path(base) / "Autocapture" / "logs"
-    return Path.home() / "AppData" / "Local" / "Autocapture" / "logs"
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        if base:
+            return Path(base) / "Autocapture" / "logs"
+        return Path.home() / "AppData" / "Local" / "Autocapture" / "logs"
+
+    state_home = os.environ.get("XDG_STATE_HOME")
+    if state_home:
+        return Path(state_home) / "autocapture" / "logs"
+    return Path.home() / ".local" / "state" / "autocapture" / "logs"
 
 
 def configure_logging(log_dir: Path | str | None = None, level: str = "INFO") -> None:
@@ -85,7 +91,15 @@ def configure_logging(log_dir: Path | str | None = None, level: str = "INFO") ->
 
     if log_dir is not None:
         path = Path(log_dir)
-        path.mkdir(parents=True, exist_ok=True)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning(
+                "Failed to create log directory {} ({}). File logging disabled.",
+                path,
+                exc,
+            )
+            return
         logger.add(
             path / "autocapture.log",
             rotation="1 day",

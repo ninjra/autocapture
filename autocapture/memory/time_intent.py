@@ -64,6 +64,22 @@ def parse_time_expression(
     return None
 
 
+def is_time_only_expression(expression: str) -> bool:
+    if not expression:
+        return False
+    text = " ".join(expression.strip().lower().split())
+    if not text:
+        return False
+    patterns = [
+        r"^(last|past)\s+hour$",
+        r"^an?\s+hour\s+ago$",
+        r"^yesterday\s+\d{1,2}(?::\d{2})?\s*(am|pm)?$",
+        r"^at\s+\d{1,2}(?::\d{2})?\s*(am|pm)?\s+yesterday$",
+        r"^\d{1,2}(?::\d{2})?\s*(am|pm)?\s+yesterday$",
+    ]
+    return any(re.fullmatch(pattern, text) for pattern in patterns)
+
+
 def parse_time_range_payload(
     payload: dict[str, str] | None, *, tzinfo: dt.tzinfo
 ) -> tuple[dt.datetime, dt.datetime] | None:

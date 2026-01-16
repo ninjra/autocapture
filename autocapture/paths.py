@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 import os
+import ctypes
+import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -21,7 +23,95 @@ def resource_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _split_path_parts(raw: str) -> list[str]:
+    normalized = raw.replace("\\", "/")
+    return [part for part in normalized.split("/") if part]
+
+
+def _looks_like_windows_local_appdata(path: Path) -> bool:
+    parts = [part.lower() for part in _split_path_parts(str(path))]
+    for idx in range(len(parts) - 1):
+        if parts[idx] == "appdata" and parts[idx + 1] == "local":
+            return True
+    return False
+
+
+def _try_known_folder_local_appdata() -> Path | None:
+    if sys.platform != "win32":
+        return None
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return None
+    try:
+
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_uint32),
+                ("Data2", ctypes.c_uint16),
+                ("Data3", ctypes.c_uint16),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        folder_id = uuid.UUID("{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}")
+        guid = GUID(
+            folder_id.fields[0],
+            folder_id.fields[1],
+            folder_id.fields[2],
+            (ctypes.c_ubyte * 8)(*folder_id.bytes[8:]),
+        )
+        path_ptr = ctypes.c_wchar_p()
+        result = windll.shell32.SHGetKnownFolderPath(
+            ctypes.byref(guid), 0, None, ctypes.byref(path_ptr)
+        )
+        if result != 0:
+            return None
+        raw = path_ptr.value
+        windll.ole32.CoTaskMemFree(path_ptr)
+        if not raw:
+            return None
+        return Path(raw)
+    except Exception:
+        return None
+
+
+def _resolve_windows_local_appdata_base() -> Path | None:
+    candidates: list[Path] = []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        candidates.append(Path(local))
+    userprofile = os.environ.get("USERPROFILE")
+    if userprofile:
+        candidates.append(Path(userprofile) / "AppData" / "Local")
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        candidates.append(Path(appdata) / ".." / "Local")
+    homedrive = os.environ.get("HOMEDRIVE")
+    homepath = os.environ.get("HOMEPATH")
+    if homedrive and homepath:
+        candidates.append(Path(f"{homedrive}{homepath}") / "AppData" / "Local")
+    known_folder = _try_known_folder_local_appdata()
+    if known_folder:
+        candidates.append(known_folder)
+    for candidate in candidates:
+        if _looks_like_windows_local_appdata(candidate):
+            return candidate
+    home = Path.home()
+    if ":" in str(home) or "\\" in str(home):
+        fallback = home / "AppData" / "Local"
+        if _looks_like_windows_local_appdata(fallback):
+            return fallback
+    system_drive = os.environ.get("SystemDrive") or "C:"
+    fallback = Path(f"{system_drive}/Users/Public/AppData/Local")
+    return fallback if _looks_like_windows_local_appdata(fallback) else None
+
+
 def app_local_data_dir(app_name: str = "Autocapture") -> Path:
+    if sys.platform == "win32":
+        base = _resolve_windows_local_appdata_base()
+        if base:
+            return base / app_name
+        fallback = Path.cwd() / "AppData" / "Local"
+        return fallback / app_name
     base = os.environ.get("LOCALAPPDATA")
     if base:
         return Path(base) / app_name

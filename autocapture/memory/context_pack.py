@@ -24,12 +24,15 @@ class EvidenceItem:
     evidence_id: str
     event_id: str
     timestamp: str
+    ts_end: str | None
     app: str
     title: str
     domain: str | None
     score: float
     spans: list[EvidenceSpan]
     text: str
+    screenshot_path: str | None = None
+    screenshot_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,12 +70,15 @@ class ContextPack:
                     evidence_id=item.evidence_id,
                     event_id=item.event_id,
                     timestamp=item.timestamp,
+                    ts_end=item.ts_end,
                     app=item.app,
                     title=item.title,
                     domain=item.domain,
                     score=item.score,
                     spans=item.spans,
                     text="\n".join(lines),
+                    screenshot_path=item.screenshot_path,
+                    screenshot_hash=item.screenshot_hash,
                 )
             )
         return sanitized, warnings
@@ -87,7 +93,7 @@ class ContextPack:
                 {
                     "id": item.evidence_id,
                     "ts_start": item.timestamp,
-                    "ts_end": None,
+                    "ts_end": item.ts_end,
                     "source": item.app,
                     "title": item.title,
                     "text": item.text,
@@ -95,6 +101,8 @@ class ContextPack:
                         "event_id": item.event_id,
                         "domain": item.domain,
                         "score": item.score,
+                        "screenshot_path": item.screenshot_path,
+                        "screenshot_hash": item.screenshot_hash,
                         "spans": [
                             {
                                 "span_id": span.span_id,
@@ -149,3 +157,29 @@ def build_context_pack(
         evidence=list(evidence),
         warnings=[],
     )
+
+
+def build_evidence_payload(context_pack: dict) -> list[dict]:
+    evidence = context_pack.get("evidence") or []
+    if not isinstance(evidence, list):
+        return []
+    payload: list[dict] = []
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("meta") or {}
+        if not isinstance(meta, dict):
+            meta = {}
+        payload.append(
+            {
+                "id": item.get("id"),
+                "event_id": meta.get("event_id"),
+                "ts_start": item.get("ts_start"),
+                "ts_end": item.get("ts_end"),
+                "source": item.get("source"),
+                "title": item.get("title"),
+                "text": item.get("text"),
+                "meta": meta,
+            }
+        )
+    return payload
