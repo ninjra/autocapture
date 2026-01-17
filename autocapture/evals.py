@@ -70,6 +70,7 @@ def run_eval(
         provider = ProviderRouter(
             config.routing,
             config.llm,
+            config=config,
             offline=config.offline,
             privacy=config.privacy,
             prompt_strategy=PromptStrategySettings.from_llm_config(
@@ -96,6 +97,7 @@ def run_eval(
                     system_prompt,
                     query,
                     pack.to_text(extractive_only=False),
+                    priority="background",
                 )
             )
         except Exception as exc:

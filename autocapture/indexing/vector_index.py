@@ -204,7 +204,12 @@ class QdrantBackend:
         results: list[VectorHit] = []
         for hit in hits:
             payload = hit.payload or {}
-            capture_id = str(payload.get("capture_id") or payload.get("event_id") or "")
+            capture_id = str(
+                payload.get("capture_id")
+                or payload.get("event_id")
+                or payload.get("thread_id")
+                or ""
+            )
             span_key = str(payload.get("span_key") or "")
             if not capture_id or not span_key:
                 continue

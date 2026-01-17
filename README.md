@@ -10,6 +10,7 @@ A local-first desktop recall app for Windows 11 that runs as a single binary: tr
 - **Private by default** with local storage and optional cloud LLM fallback.
 - **Time-aware Q&A** with deterministic time parsing, citations, and optional TRON/JSON outputs.
 - **Stage-routed LLM pipeline** with query refinement, draft generation, and final answer stages (local-first defaults).
+- **Optional DiffusionVL local server** (`tools/diffusionvl_server.py`) for OpenAI-compatible VLM hosting.
 
 ## Repository Layout
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 import datetime as dt
 import os
@@ -35,7 +35,7 @@ class RetentionManager:
     def enforce(self) -> None:
         """Apply retention policies for ROI/video media and storage caps."""
 
-        self._prune_roi_age()
+        self._prune_focus_age()
         self._prune_video_age()
         self._prune_quota()
 
@@ -61,6 +61,9 @@ class RetentionManager:
                 if event.screenshot_path:
                     paths.append(Path(event.screenshot_path))
                 event.screenshot_path = None
+                capture = session.get(CaptureRecord, event.event_id)
+                if capture:
+                    capture.image_path = None
                 removed += 1
 
         self._db.transaction(_prune)
@@ -70,7 +73,7 @@ class RetentionManager:
             retention_files_deleted_total.inc(removed)
         return removed
 
-    def _prune_roi_age(self) -> int:
+    def _prune_focus_age(self) -> int:
         safe_statuses = {"done", "failed", "skipped"}
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(
             days=self._retention_config.roi_days
@@ -89,24 +92,52 @@ class RetentionManager:
                 .where(CaptureRecord.captured_at < cutoff)
                 .where(CaptureRecord.captured_at < protect_cutoff)
                 .where(CaptureRecord.ocr_status.in_(safe_statuses))
-                .where(CaptureRecord.image_path.is_not(None))
+                .where(
+                    or_(
+                        CaptureRecord.focus_path.is_not(None),
+                        CaptureRecord.image_path.is_not(None),
+                    )
+                )
                 .order_by(CaptureRecord.captured_at.asc())
             )
             for capture in session.scalars(stmt):
-                if capture.image_path:
+                if capture.focus_path:
+                    paths.append(Path(capture.focus_path))
+                    session.query(EventRecord).filter(
+                        EventRecord.focus_path == capture.focus_path
+                    ).update({EventRecord.focus_path: None})
+                    capture.focus_path = None
+                    removed += 1
+                    continue
+                if capture.image_path and self._is_legacy_roi_path(Path(capture.image_path)):
                     paths.append(Path(capture.image_path))
                     session.query(EventRecord).filter(
                         EventRecord.screenshot_path == capture.image_path
                     ).update({EventRecord.screenshot_path: None})
-                capture.image_path = None
-                removed += 1
+                    capture.image_path = None
+                    removed += 1
 
         self._db.transaction(_prune)
         self._delete_files(paths)
         if removed:
-            self._log.info("Pruned {} ROI images beyond TTL", removed)
+            self._log.info("Pruned {} focus crops beyond TTL", removed)
             retention_files_deleted_total.inc(removed)
         return removed
+
+    @staticmethod
+    def _is_legacy_roi_path(path: Path) -> bool:
+        parts = [part.lower() for part in path.parts]
+        if "screen" in parts:
+            return False
+        if "roi" in parts or "focus" in parts:
+            return True
+        if "media" in parts:
+            media_idx = parts.index("media")
+            if media_idx == len(parts) - 1:
+                return True
+            next_part = parts[media_idx + 1]
+            return next_part not in {"screen", "video"}
+        return False
 
     def _prune_video_age(self) -> int:
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(

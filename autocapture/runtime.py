@@ -20,6 +20,7 @@ from .capture.raw_input import RawInputListener
 from .capture.backends.monitor_utils import set_process_dpi_awareness
 from .config import AppConfig
 from .embeddings.service import EmbeddingService
+from .enrichment.scheduler import EnrichmentScheduler
 from .indexing.vector_index import VectorIndex
 from .logging_utils import get_logger
 from .media.store import MediaStore
@@ -205,6 +206,13 @@ class AppRuntime:
             Path(config.capture.data_dir),
         )
         self._retention_scheduler = RetentionScheduler(self._retention)
+        self._enrichment_scheduler = EnrichmentScheduler(
+            config,
+            self._db,
+            self._agent_jobs,
+            embedder=self._retrieval_embedder,
+            vector_index=self._vector_index,
+        )
         self._metrics = MetricsServer(config.observability, Path(config.capture.data_dir))
         self._settings_path = Path(config.capture.data_dir) / "settings.json"
         self._snooze_timer: threading.Timer | None = None
@@ -234,6 +242,8 @@ class AppRuntime:
         self._orchestrator.start()
         self._workers.start()
         self._retention_scheduler.start()
+        if self._enrichment_scheduler:
+            self._enrichment_scheduler.start()
         self._metrics.start()
         if self._promptops_scheduler:
             self._promptops_scheduler.start()
@@ -264,6 +274,8 @@ class AppRuntime:
             if self._tracker:
                 self._tracker.stop()
             self._retention_scheduler.stop()
+            if self._enrichment_scheduler:
+                self._enrichment_scheduler.stop()
             if self._promptops_scheduler:
                 self._promptops_scheduler.stop()
             if self._highlights_scheduler:

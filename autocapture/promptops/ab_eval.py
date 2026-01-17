@@ -121,6 +121,7 @@ def run_ab_eval(
                 provider = ProviderRouter(
                     config.routing,
                     config.llm,
+                    config=config,
                     offline=config.offline,
                     privacy=config.privacy,
                     prompt_strategy=_settings_for_strategy(settings, strategy),
@@ -152,6 +153,7 @@ def run_ab_eval(
                             "You are a helpful assistant.",
                             case.prompt,
                             "",
+                            priority="background",
                         )
                     )
                     metadata = getattr(provider, "last_prompt_metadata", result.metadata)

@@ -51,10 +51,11 @@ class POINT(ctypes.Structure):
 
 
 @dataclass(slots=True)
-class ROIItem:
-    image: np.ndarray
+class CaptureItem:
+    full_image: np.ndarray
+    focus_image: np.ndarray | None
     captured_at: dt.datetime
-    observation_id: str
+    capture_id: str
     segment_id: Optional[str]
     cursor_x: int
     cursor_y: int
@@ -62,6 +63,10 @@ class ROIItem:
     foreground_process: str
     foreground_window: str
     is_fullscreen: bool
+
+    @property
+    def image(self) -> np.ndarray:
+        return self.focus_image if self.focus_image is not None else self.full_image
 
 
 class CaptureOrchestrator:
@@ -73,8 +78,8 @@ class CaptureOrchestrator:
         capture_config: CaptureConfig,
         worker_config: WorkerConfig,
         privacy_config: PrivacyConfig | None = None,
-        roi_w: int = 512,
-        roi_h: int = 512,
+        roi_w: int | None = None,
+        roi_h: int | None = None,
         roi_queue_size: int = 256,
         on_ocr_observation: Optional[Callable[[str], None]] = None,
         on_vision_observation: Optional[Callable[[str], None]] = None,
@@ -94,8 +99,13 @@ class CaptureOrchestrator:
         self._privacy_config = privacy_config or PrivacyConfig()
         self._privacy = self._privacy_config
         self._privacy_policy = PrivacyPolicy(self._privacy)
-        self._roi_w = roi_w
-        self._roi_h = roi_h
+        focus_size = capture_config.focus_crop_size or capture_config.tile_size
+        self._roi_w = roi_w if roi_w is not None else focus_size
+        self._roi_h = roi_h if roi_h is not None else focus_size
+        self._fullscreen_primary = capture_config.fullscreen_primary
+        self._fullscreen_width = capture_config.fullscreen_width
+        self._focus_crop_enabled = capture_config.focus_crop_enabled
+        self._focus_reference = capture_config.focus_crop_reference
         self._on_ocr_observation = on_ocr_observation
         self._on_vision_observation = on_vision_observation
         self._vision_sample_rate = vision_sample_rate
@@ -107,7 +117,7 @@ class CaptureOrchestrator:
             on_activity=None,
             on_hotkey=hotkey_callback,
         )
-        self._roi_queue: queue.Queue[ROIItem] = queue.Queue(maxsize=roi_queue_size)
+        self._roi_queue: queue.Queue[CaptureItem] = queue.Queue(maxsize=roi_queue_size)
         self._segment_recorder = SegmentRecorder(
             capture_config=capture_config,
             ffmpeg_config=ffmpeg_config or FFmpegConfig(),
@@ -337,12 +347,21 @@ class CaptureOrchestrator:
                 exclude_regions=self._privacy.exclude_regions,
             )
             duplicate = self._duplicate_detector.update(Image.fromarray(np.ascontiguousarray(roi)))
-            observation_id = str(uuid4())
+            capture_id = str(uuid4())
             if not duplicate.is_duplicate:
-                roi_item = ROIItem(
-                    image=roi,
-                    captured_at=dt.datetime.now(dt.timezone.utc),
-                    observation_id=observation_id,
+                captured_at = dt.datetime.now(dt.timezone.utc)
+                if self._fullscreen_primary:
+                    full_image, full_origin = self._compose_fullscreen(frames, monitor)
+                    full_image = self._apply_fullscreen_masks(full_image, full_origin, frames)
+                    full_image = self._resize_fullscreen(full_image)
+                else:
+                    full_image = roi.copy()
+                focus_image = roi if self._focus_crop_enabled else None
+                capture_item = CaptureItem(
+                    full_image=full_image,
+                    focus_image=focus_image,
+                    captured_at=captured_at,
+                    capture_id=capture_id,
                     segment_id=self._active_segment_id,
                     cursor_x=cursor_x,
                     cursor_y=cursor_y,
@@ -351,11 +370,11 @@ class CaptureOrchestrator:
                     foreground_window=foreground_window or "unknown",
                     is_fullscreen=is_fullscreen,
                 )
-                self._enqueue_roi(roi_item)
+                self._enqueue_roi(capture_item)
                 captures_taken_total.inc()
         self._enqueue_video(frames, foreground_process, foreground_window, is_fullscreen)
 
-    def _enqueue_roi(self, item: ROIItem) -> None:
+    def _enqueue_roi(self, item: CaptureItem) -> None:
         if self._should_throttle_ocr():
             captures_skipped_backpressure_total.inc()
             self._apply_backpressure("ocr_backlog")
@@ -437,67 +456,98 @@ class CaptureOrchestrator:
             except queue.Empty:
                 continue
             try:
-                path = self._save_roi(item)
-                if path is None:
-                    self._persist_skipped_capture(item, "roi_write_failed")
+                full_path = self._save_fullscreen(item)
+                if full_path is None:
+                    self._persist_skipped_capture(item, "fullscreen_write_failed")
                     continue
-                self._persist_observation(item, path)
+                focus_path = None
+                if item.focus_image is not None and self._focus_crop_enabled:
+                    focus_path = self._save_focus(item)
+                    if focus_path is None:
+                        self._log.warning("Focus crop write failed for {}", item.capture_id)
+                self._persist_capture(item, full_path, focus_path)
                 if self._on_ocr_observation:
-                    self._on_ocr_observation(item.observation_id)
+                    self._on_ocr_observation(item.capture_id)
                 if (
                     self._on_vision_observation
                     and self._vision_sample_rate > 0
                     and random.random() < self._vision_sample_rate
                 ):
-                    self._on_vision_observation(item.observation_id)
+                    self._on_vision_observation(item.capture_id)
             except Exception as exc:  # pragma: no cover - side effects
                 self._log.exception(
-                    "Failed to persist ROI observation {}: {}",
-                    item.observation_id,
+                    "Failed to persist capture {}: {}",
+                    item.capture_id,
                     exc,
                 )
             finally:
                 self._roi_queue.task_done()
                 roi_queue_depth.set(self._roi_queue.qsize())
 
-    def _save_roi(self, item: ROIItem) -> Optional[Path]:
+    def _save_fullscreen(self, item: CaptureItem) -> Optional[Path]:
         if not self._has_disk_space():
             disk_low_total.inc()
             self._apply_backpressure("disk_low")
             return None
         if self._media_store:
-            return self._media_store.write_roi(item.image, item.captured_at, item.observation_id)
+            return self._media_store.write_fullscreen(
+                item.full_image, item.captured_at, item.capture_id
+            )
+        timestamp = item.captured_at.astimezone(dt.timezone.utc)
+        path = (
+            Path(self._capture_config.data_dir)
+            / "media"
+            / "screen"
+            / timestamp.strftime("%Y/%m/%d")
+            / f"{timestamp.strftime('%H%M%S_%f')}_{item.capture_id}.webp"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image = Image.fromarray(np.ascontiguousarray(item.full_image))
+        image.save(path, format="WEBP", lossless=True, quality=100, method=6)
+        return path
+
+    def _save_focus(self, item: CaptureItem) -> Optional[Path]:
+        if item.focus_image is None:
+            return None
+        if not self._has_disk_space():
+            disk_low_total.inc()
+            self._apply_backpressure("disk_low")
+            return None
+        if self._media_store:
+            return self._media_store.write_roi(item.focus_image, item.captured_at, item.capture_id)
         timestamp = item.captured_at.astimezone(dt.timezone.utc)
         path = (
             Path(self._capture_config.data_dir)
             / "media"
             / "roi"
             / timestamp.strftime("%Y/%m/%d")
-            / f"{timestamp.strftime('%H%M%S_%f')}_{item.observation_id}.webp"
+            / f"{timestamp.strftime('%H%M%S_%f')}_{item.capture_id}.webp"
         )
         path.parent.mkdir(parents=True, exist_ok=True)
-        image = Image.fromarray(np.ascontiguousarray(item.image))
+        image = Image.fromarray(np.ascontiguousarray(item.focus_image))
         image.save(path, format="WEBP", lossless=True, quality=100, method=6)
         return path
 
-    def _persist_observation(self, item: ROIItem, path: Path) -> None:
+    def _persist_capture(self, item: CaptureItem, full_path: Path, focus_path: Path | None) -> None:
         def _write(session) -> None:
-            session.add(
-                ObservationRecord(
-                    id=item.observation_id,
-                    captured_at=item.captured_at,
-                    image_path=str(path),
-                    segment_id=item.segment_id,
-                    cursor_x=item.cursor_x,
-                    cursor_y=item.cursor_y,
-                    monitor_id=item.monitor_id,
+            if focus_path is not None:
+                session.add(
+                    ObservationRecord(
+                        id=item.capture_id,
+                        captured_at=item.captured_at,
+                        image_path=str(focus_path),
+                        segment_id=item.segment_id,
+                        cursor_x=item.cursor_x,
+                        cursor_y=item.cursor_y,
+                        monitor_id=item.monitor_id,
+                    )
                 )
-            )
             session.add(
                 CaptureRecord(
-                    id=item.observation_id,
+                    id=item.capture_id,
                     captured_at=item.captured_at,
-                    image_path=str(path),
+                    image_path=str(full_path),
+                    focus_path=str(focus_path) if focus_path else None,
                     foreground_process=item.foreground_process or "unknown",
                     foreground_window=item.foreground_window or "unknown",
                     monitor_id=item.monitor_id,
@@ -508,13 +558,14 @@ class CaptureOrchestrator:
 
         self._database.transaction(_write)
 
-    def _persist_skipped_capture(self, item: ROIItem, reason: str) -> None:
+    def _persist_skipped_capture(self, item: CaptureItem, reason: str) -> None:
         def _write(session) -> None:
             session.add(
                 CaptureRecord(
-                    id=item.observation_id,
+                    id=item.capture_id,
                     captured_at=item.captured_at,
                     image_path=None,
+                    focus_path=None,
                     foreground_process=item.foreground_process or "unknown",
                     foreground_window=item.foreground_window or "unknown",
                     monitor_id=item.monitor_id,
@@ -611,6 +662,69 @@ class CaptureOrchestrator:
         x0 = max(0, x1 - self._roi_w)
         y0 = max(0, y1 - self._roi_h)
         return frame[y0:y1, x0:x1], (x0, y0)
+
+    def _compose_fullscreen(
+        self, frames: Dict[str, np.ndarray], active_monitor: MonitorInfo | None
+    ) -> tuple[np.ndarray, tuple[int, int]]:
+        if (
+            self._capture_config.layout_mode == "per_monitor"
+            and active_monitor
+            and active_monitor.id in frames
+        ):
+            return np.ascontiguousarray(frames[active_monitor.id]), (
+                active_monitor.left,
+                active_monitor.top,
+            )
+        monitors = [monitor for monitor in self._monitors if monitor.id in frames]
+        if not monitors:
+            first = next(iter(frames.values()))
+            return np.ascontiguousarray(first), (0, 0)
+        left = min(monitor.left for monitor in monitors)
+        top = min(monitor.top for monitor in monitors)
+        right = max(monitor.left + monitor.width for monitor in monitors)
+        bottom = max(monitor.top + monitor.height for monitor in monitors)
+        canvas = np.zeros((bottom - top, right - left, 3), dtype=np.uint8)
+        for monitor in monitors:
+            frame = frames.get(monitor.id)
+            if frame is None:
+                continue
+            x0 = monitor.left - left
+            y0 = monitor.top - top
+            canvas[y0 : y0 + monitor.height, x0 : x0 + monitor.width] = frame
+        return canvas, (left, top)
+
+    def _apply_fullscreen_masks(
+        self, image: np.ndarray, origin: tuple[int, int], frames: Dict[str, np.ndarray]
+    ) -> np.ndarray:
+        if not self._privacy.exclude_regions:
+            return image
+        origin_x, origin_y = origin
+        for monitor in self._monitors:
+            if monitor.id not in frames:
+                continue
+            apply_exclude_region_masks(
+                image,
+                monitor_id=monitor.id,
+                roi_origin_x=monitor.left - origin_x,
+                roi_origin_y=monitor.top - origin_y,
+                exclude_regions=self._privacy.exclude_regions,
+            )
+        return image
+
+    def _resize_fullscreen(self, image: np.ndarray) -> np.ndarray:
+        target_width = int(self._fullscreen_width or 0)
+        if target_width <= 0:
+            return image
+        height, width = image.shape[:2]
+        if width <= target_width:
+            return image
+        scale = target_width / float(width)
+        target_height = max(1, int(round(height * scale)))
+        resized = Image.fromarray(np.ascontiguousarray(image)).resize(
+            (target_width, target_height),
+            resample=Image.LANCZOS,
+        )
+        return np.array(resized)
 
     @staticmethod
     def _get_cursor_pos() -> tuple[int, int]:

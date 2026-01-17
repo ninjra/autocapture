@@ -26,6 +26,13 @@
       "value": "Answer JSON/TRON now includes evidence payload with event_id + timestamps; time-only queries return a cited timeline.",
       "why": "Guarantee citability and time-series behavior."
     },
+    "docker.docker-digest-pins": {
+      "source": "agent",
+      "ts": "2026-01-17T19:16:20Z",
+      "type": "fix",
+      "value": "Docker compose and step-by-step docs now pin Postgres 16.3-bookworm and Qdrant v1.16.3 images to immutable digests (GHCR for Qdrant).",
+      "why": "Meet digest pinning requirement and reduce image drift."
+    },
     "docker.pinned-images": {
       "source": "agent",
       "ts": "2026-01-16T14:25:00Z",
@@ -46,6 +53,13 @@
       "type": "fix",
       "value": "Resolved Windows LOCALAPPDATA fallback via ordered env/known-folder lookup; doctor path failures now report missing envs and override hints.",
       "why": "Prevent Git Bash/MSYS /home fallback and improve doctor actionability."
+    },
+    "enrichment.sql-artifacts-parse": {
+      "source": "agent",
+      "ts": "2026-01-17T04:35:35Z",
+      "type": "fix",
+      "value": "SQL artifact extraction now detects code blocks/keywords correctly and uses default sqlglot dialect to emit statements, tables, and parse errors.",
+      "why": "Ensure deterministic SQL/code artifacts from VLM text."
     },
     "environment.target-machine": {
       "source": "user",
@@ -106,6 +120,13 @@
       "value": "Scheduled research scout workflow writes docs/research report and opens PRs only when diff threshold is exceeded.",
       "why": "Automate scouting without noisy updates."
     },
+    "retention.legacy-roi-prune": {
+      "source": "agent",
+      "ts": "2026-01-17T04:35:35Z",
+      "type": "fix",
+      "value": "Retention now treats legacy image_path values outside media/screen as ROI for roi_days pruning and clears matching event paths while preserving full-screen captures.",
+      "why": "Keep backward-compatible cleanup after fullscreen primary capture change."
+    },
     "routing.stage-llm-router": {
       "source": "agent",
       "ts": "2026-01-16T12:49:28Z",
@@ -127,6 +148,27 @@
       "value": "Unfreeze files in frozen_manifest.json before edits and refreeze after with reasons.",
       "why": "Protect stability surfaces from churn."
     },
+    "tests.keys-portability-windows": {
+      "source": "agent",
+      "ts": "2026-01-17T19:31:17Z",
+      "type": "fix",
+      "value": "Key portability round-trip test now decrypts DPAPI-protected pseudonym/token vault keys on Windows before comparison.",
+      "why": "Windows import rewraps keys with DPAPI; test must compare decrypted bytes."
+    },
+    "threads.thread-events-flush-order": {
+      "source": "agent",
+      "ts": "2026-01-17T04:35:35Z",
+      "type": "fix",
+      "value": "ThreadStore flushes thread records before inserting thread_events to satisfy FK ordering; tests adjusted to flush before thread_events.",
+      "why": "Prevent FK violations when creating new threads."
+    },
+    "tooling.release-gate-python": {
+      "source": "agent",
+      "ts": "2026-01-17T04:35:35Z",
+      "type": "fix",
+      "value": "Release gate now invokes memory_guard with sys.executable to avoid missing python shims in WSL/venv environments.",
+      "why": "Keep release_gate portable across environments."
+    },
     "vision.vlm-first-extraction": {
       "source": "agent",
       "ts": "2026-01-16T12:49:28Z",
@@ -135,6 +177,6 @@
       "why": "Capture full-screen context with structured layout."
     }
   },
-  "updated_at": "2026-01-16T21:53:02Z",
+  "updated_at": "2026-01-17T19:31:17Z",
   "version": 1
 }

@@ -15,10 +15,17 @@ from ..config import AppConfig, VisionBackendConfig, is_loopback_host
 from ..image_utils import ensure_rgb
 from ..logging_utils import get_logger
 from ..llm.prompt_strategy import PromptStrategySettings
+from ..llm.governor import get_global_governor
 from .clients import VisionClient
 from .rapidocr import RapidOCRExtractor
 from .tiling import VisionTile, build_tiles
-from .types import ExtractionResult, VisionExtractionPayload, VisionRegion, build_ocr_payload
+from .types import (
+    ExtractionResult,
+    VisionExtractionPayload,
+    VisionRegion,
+    VISION_SCHEMA_VERSION,
+    build_ocr_payload,
+)
 
 _FENCE_RE = re.compile(r"```(?:json|tron)?(.*?)```", re.DOTALL | re.IGNORECASE)
 
@@ -106,12 +113,15 @@ def _build_prompt(tiles: list[VisionTile]) -> tuple[str, str]:
         "{\n"
         '  "screen_summary": "short summary",\n'
         '  "visible_text": "concatenated text transcript",\n'
+        '  "content_flags": ["code", "table", "spreadsheet", "terminal", "form", "chart"],\n'
         '  "regions": [\n'
         "    {\n"
         '      "bbox_norm": [x0, y0, x1, y1],\n'
         '      "label": "region label or ui type",\n'
         '      "app_hint": "app name hint",\n'
         '      "title_hint": "window title hint",\n'
+        '      "url_hint": "url or domain hint",\n'
+        '      "role_hint": "semantic role (editor, browser, terminal, chat, table)",\n'
         '      "text_verbatim": "verbatim text",\n'
         '      "keywords": ["keyword1", "keyword2"],\n'
         '      "confidence": 0.0\n'
@@ -219,11 +229,12 @@ class RapidOCRScreenExtractor:
         text, ocr_spans = build_ocr_payload(spans)
         tags = {
             "vision_extract": {
-                "schema_version": "v1",
+                "schema_version": VISION_SCHEMA_VERSION,
                 "engine": "rapidocr-onnxruntime",
                 "screen_summary": "",
                 "regions": [],
                 "visible_text": text,
+                "content_flags": [],
                 "tables_detected": None,
                 "spreadsheets_detected": None,
                 "parse_failed": False,
@@ -254,6 +265,8 @@ class VLMExtractor:
             prompt_strategy=PromptStrategySettings.from_llm_config(
                 config.llm, data_dir=config.capture.data_dir
             ),
+            governor=get_global_governor(config),
+            priority="background",
         )
 
     def extract(self, image: np.ndarray) -> ExtractionResult:
@@ -307,6 +320,8 @@ class DeepSeekOCRExtractor:
             prompt_strategy=PromptStrategySettings.from_llm_config(
                 config.llm, data_dir=config.capture.data_dir
             ),
+            governor=get_global_governor(config),
+            priority="background",
         )
 
     def extract(self, image: np.ndarray) -> ExtractionResult:
@@ -349,11 +364,12 @@ def _build_tags(
     regions = [region.model_dump() for region in payload.regions] if payload else []
     return {
         "vision_extract": {
-            "schema_version": "v1",
+            "schema_version": VISION_SCHEMA_VERSION,
             "engine": engine,
             "screen_summary": payload.screen_summary if payload else "",
             "regions": regions,
             "visible_text": visible_text,
+            "content_flags": payload.content_flags if payload else [],
             "tables_detected": payload.tables_detected if payload else None,
             "spreadsheets_detected": payload.spreadsheets_detected if payload else None,
             "parse_failed": meta.parse_failed,
@@ -439,13 +455,14 @@ def _disabled_result(reason: str) -> ExtractionResult:
         spans=[],
         tags={
             "vision_extract": {
-                "schema_version": "v1",
+                "schema_version": VISION_SCHEMA_VERSION,
                 "engine": "disabled",
                 "parse_failed": True,
                 "parse_format": "disabled",
                 "reason": reason,
                 "regions": [],
                 "visible_text": "",
+                "content_flags": [],
                 "tiles": [],
             }
         },
@@ -458,13 +475,14 @@ def _failed_result(engine: str, error: str) -> ExtractionResult:
         spans=[],
         tags={
             "vision_extract": {
-                "schema_version": "v1",
+                "schema_version": VISION_SCHEMA_VERSION,
                 "engine": engine,
                 "parse_failed": True,
                 "parse_format": "error",
                 "error": error,
                 "regions": [],
                 "visible_text": "",
+                "content_flags": [],
                 "tiles": [],
             }
         },

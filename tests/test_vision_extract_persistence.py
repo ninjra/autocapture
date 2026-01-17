@@ -18,13 +18,14 @@ class FakeExtractor:
             spans=[],
             tags={
                 "vision_extract": {
-                    "schema_version": "v1",
+                    "schema_version": "v2",
                     "engine": "vlm",
                     "screen_summary": "summary",
                     "regions": [],
                     "visible_text": "screen transcript",
                     "parse_failed": False,
                     "tiles": [],
+                    "content_flags": [],
                 }
             },
         )

@@ -31,6 +31,19 @@ embedding_latency_ms = Histogram("embedding_latency_ms", "Embedding latency (ms)
 retrieval_latency_ms = Histogram("retrieval_latency_ms", "Retrieval latency (ms)")
 embedding_backlog = Gauge("embedding_backlog", "Embedding backlog count")
 retention_files_deleted_total = Counter("retention_files_deleted_total", "Retention deletions")
+enrichment_backlog = Gauge("enrichment_backlog", "Events missing enrichment outputs")
+enrichment_at_risk = Gauge(
+    "enrichment_at_risk", "Events nearing retention expiry without enrichment"
+)
+enrichment_oldest_age_hours = Gauge(
+    "enrichment_oldest_age_hours", "Age (hours) of the oldest event missing enrichment"
+)
+enrichment_jobs_enqueued_total = Counter(
+    "enrichment_jobs_enqueued_total",
+    "Enrichment jobs enqueued",
+    ["stage"],
+)
+enrichment_failures_total = Counter("enrichment_failures_total", "Enrichment scheduler failures")
 vector_search_failures_total = Counter(
     "autocapture_vector_search_failures_total", "Vector search failures"
 )

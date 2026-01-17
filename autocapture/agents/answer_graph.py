@@ -19,6 +19,7 @@ from ..memory.time_intent import (
     resolve_time_range_for_query,
     resolve_timezone,
 )
+from ..memory.threads import ThreadRetrievalService
 from ..memory.retrieval import RetrieveFilters, RetrievalService, RetrievedEvent
 from ..model_ops import StageRouter
 from ..storage.models import EventRecord
@@ -60,6 +61,12 @@ class AnswerGraph:
         self._entities = entities
         self._log = get_logger("answer_graph")
         self._stage_router = StageRouter(config)
+        self._thread_retrieval = ThreadRetrievalService(
+            config,
+            retrieval._db,  # type: ignore[attr-defined]
+            embedder=getattr(retrieval, "_embedder", None),
+            vector_index=getattr(retrieval, "_vector", None),
+        )
 
     async def run(
         self,
@@ -91,6 +98,12 @@ class AnswerGraph:
         evidence, events = self._build_evidence(
             retrieve_query, resolved_time_range, filters, k, sanitized
         )
+        thread_aggregates = _build_thread_aggregates(
+            self._thread_retrieval,
+            normalized_query,
+            resolved_time_range,
+        )
+        aggregates = _merge_aggregates(aggregates, thread_aggregates)
         if not evidence:
             warnings.append("no_evidence")
         if (
@@ -441,6 +454,11 @@ def _select_context_pack_text(
     stage: str,
 ) -> str:
     if requested_format != "tron":
+        if not bool(getattr(decision, "cloud", False)):
+            return json_text
+        if config.output.allow_tron_compression and tron_text:
+            warnings.append(f"tron_forced_for_cloud_{stage}")
+            return tron_text
         return json_text
     cloud = bool(getattr(decision, "cloud", False))
     if not cloud:
@@ -521,6 +539,44 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(cleaned)
         output.append(cleaned)
     return output
+
+
+def _build_thread_aggregates(
+    retrieval: ThreadRetrievalService,
+    query: str,
+    time_range: tuple[dt.datetime, dt.datetime] | None,
+) -> dict:
+    if not retrieval:
+        return {}
+    broad = bool(time_range) or len(query.split()) <= 3
+    if not broad:
+        return {}
+    try:
+        candidates = retrieval.retrieve(query, time_range, limit=5)
+    except Exception:
+        return {}
+    if not candidates:
+        return {}
+    return {
+        "threads": [
+            {
+                "thread_id": item.thread_id,
+                "title": item.title,
+                "summary": item.summary,
+                "ts_start": item.ts_start.isoformat(),
+                "ts_end": item.ts_end.isoformat() if item.ts_end else None,
+                "citations": item.citations,
+            }
+            for item in candidates
+        ]
+    }
+
+
+def _merge_aggregates(existing: dict | None, incoming: dict | None) -> dict:
+    merged = dict(existing or {})
+    for key, value in (incoming or {}).items():
+        merged[key] = value
+    return merged
 
 
 def _prompt_strategy_payload(provider: object) -> dict | None:

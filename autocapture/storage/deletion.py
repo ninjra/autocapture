@@ -59,6 +59,7 @@ def delete_range(
         capture_ids = [capture.id for capture in captures]
         for capture in captures:
             _collect_path(capture.image_path)
+            _collect_path(capture.focus_path)
 
         events_stmt = select(EventRecord).where(EventRecord.ts_start.between(start, end))
         if process:
@@ -69,6 +70,7 @@ def delete_range(
         event_ids = [event.event_id for event in events]
         for event in events:
             _collect_path(event.screenshot_path)
+            _collect_path(event.focus_path)
 
         segments_stmt = select(SegmentRecord).where(SegmentRecord.started_at.between(start, end))
         segments = session.execute(segments_stmt).scalars().all()

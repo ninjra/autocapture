@@ -9,6 +9,20 @@ Autocapture defaults to local-only model endpoints. Recommended local options:
 - **OpenAI-compatible local servers** (vLLM, llama.cpp, Open WebUI) for larger
   Qwen2.5-VL or DiffusionVL variants. Configure `vision_extract.vlm.provider:
   openai_compatible`, `base_url: http://127.0.0.1:PORT`, and the model name.
+- **DiffusionVL local server** (scripted OpenAI-compatible endpoint):
+  ```powershell
+  poetry run python tools/diffusionvl_server.py --host 127.0.0.1 --port 8010
+  ```
+  Install `transformers` plus a CUDA-enabled PyTorch build before running real mode.
+  Then set:
+  ```yaml
+  vision_extract:
+    vlm:
+      provider: "openai_compatible"
+      base_url: "http://127.0.0.1:8010"
+      model: "hustvl/DiffusionVL-Qwen2.5VL-7B"
+  ```
+  Use `--dry-run` to validate routes in CI without loading the model.
 - **DiffusionVL-Qwen2.5VL-7B** is supported as a selectable model (use an
   OpenAI-compatible server if available): https://huggingface.co/hustvl/DiffusionVL-Qwen2.5VL-7B
 - **DeepSeek-OCR** is an optional backend (`vision_extract.engine: deepseek-ocr`):
@@ -42,8 +56,8 @@ transform stages. Each stage can override provider/model/base_url and requires
 
 `output.format` controls answer serialization (`text`, `json`, or `tron`). The context
 pack payload sent to LLMs is controlled by `output.context_pack_format` (`json` or
-`tron`). For cloud stages, TRON context packs require `output.allow_tron_compression=true`
-(default `false`).
+`tron`). For cloud stages, TRON context packs are used only when
+`output.allow_tron_compression=true` (default `false`).
 
 ## Research Scout
 

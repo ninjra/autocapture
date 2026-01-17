@@ -12,6 +12,7 @@ import json
 import time
 
 from ..llm.prompt_strategy import PromptStrategySettings, apply_prompt_strategy
+from ..llm.governor import LLMGovernor, get_global_governor
 from ..logging_utils import get_logger
 from ..resilience import RetryPolicy, is_retryable_exception, retry_sync
 
@@ -24,7 +25,13 @@ class LLMResponse:
 
 
 class AgentLLMClient:
-    def __init__(self, config: AppConfig, *, http_client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        http_client: httpx.Client | None = None,
+        governor: LLMGovernor | None = None,
+    ) -> None:
         self._config = config
         self._retry = RetryPolicy(max_retries=config.llm.retries)
         self._http_client = http_client
@@ -32,6 +39,7 @@ class AgentLLMClient:
             config.llm, data_dir=config.capture.data_dir
         )
         self._log = get_logger("agent.llm_client")
+        self._governor = governor or get_global_governor(config)
 
     def generate_text(self, system_prompt: str, user_prompt: str, context: str) -> LLMResponse:
         provider = self._config.llm.provider
@@ -94,20 +102,21 @@ class AgentLLMClient:
         start = time.monotonic()
 
         def _request() -> LLMResponse:
-            if self._http_client is not None:
-                response = self._http_client.post(f"{base_url}/api/chat", json=payload)
-            else:
-                with httpx.Client(timeout=self._config.llm.timeout_s) as client:
-                    response = client.post(f"{base_url}/api/chat", json=payload)
-            response.raise_for_status()
-            data = response.json()
-            response = LLMResponse(
-                text=data.get("message", {}).get("content", "").strip(),
-                provider="ollama",
-                model=model,
-            )
-            _log_agent_response(self._log, strategy_result.metadata, response.text, start)
-            return response
+            with self._governor.reserve("background"):
+                if self._http_client is not None:
+                    response = self._http_client.post(f"{base_url}/api/chat", json=payload)
+                else:
+                    with httpx.Client(timeout=self._config.llm.timeout_s) as client:
+                        response = client.post(f"{base_url}/api/chat", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                response_obj = LLMResponse(
+                    text=data.get("message", {}).get("content", "").strip(),
+                    provider="ollama",
+                    model=model,
+                )
+                _log_agent_response(self._log, strategy_result.metadata, response_obj.text, start)
+                return response_obj
 
         return retry_sync(_request, policy=self._retry, is_retryable=is_retryable_exception)
 
@@ -130,27 +139,28 @@ class AgentLLMClient:
         start = time.monotonic()
 
         def _request() -> LLMResponse:
-            if self._http_client is not None:
-                response = self._http_client.post(
-                    "https://api.openai.com/v1/responses", json=payload, headers=headers
-                )
-            else:
-                with httpx.Client(timeout=self._config.llm.timeout_s) as client:
-                    response = client.post(
+            with self._governor.reserve("background"):
+                if self._http_client is not None:
+                    response = self._http_client.post(
                         "https://api.openai.com/v1/responses", json=payload, headers=headers
                     )
-            response.raise_for_status()
-            data = response.json()
-            text = ""
-            for item in data.get("output", []):
-                for content in item.get("content", []):
-                    if content.get("type") == "output_text":
-                        text += content.get("text", "")
-            response = LLMResponse(
-                text=text.strip(), provider="openai", model=self._config.llm.openai_model
-            )
-            _log_agent_response(self._log, strategy_result.metadata, response.text, start)
-            return response
+                else:
+                    with httpx.Client(timeout=self._config.llm.timeout_s) as client:
+                        response = client.post(
+                            "https://api.openai.com/v1/responses", json=payload, headers=headers
+                        )
+                response.raise_for_status()
+                data = response.json()
+                text = ""
+                for item in data.get("output", []):
+                    for content in item.get("content", []):
+                        if content.get("type") == "output_text":
+                            text += content.get("text", "")
+                response_obj = LLMResponse(
+                    text=text.strip(), provider="openai", model=self._config.llm.openai_model
+                )
+                _log_agent_response(self._log, strategy_result.metadata, response_obj.text, start)
+                return response_obj
 
         return retry_sync(_request, policy=self._retry, is_retryable=is_retryable_exception)
 
@@ -198,21 +208,24 @@ class AgentLLMClient:
         start = time.monotonic()
 
         def _request() -> LLMResponse:
-            if self._http_client is not None:
-                response = self._http_client.post(
-                    f"{base_url}/v1/chat/completions", json=payload, headers=headers
-                )
-            else:
-                with httpx.Client(timeout=self._config.llm.timeout_s) as client:
-                    response = client.post(
+            with self._governor.reserve("background"):
+                if self._http_client is not None:
+                    response = self._http_client.post(
                         f"{base_url}/v1/chat/completions", json=payload, headers=headers
                     )
-            response.raise_for_status()
-            data = response.json()
-            text = data["choices"][0]["message"]["content"]
-            response = LLMResponse(text=text.strip(), provider="openai_compatible", model=model)
-            _log_agent_response(self._log, strategy_result.metadata, response.text, start)
-            return response
+                else:
+                    with httpx.Client(timeout=self._config.llm.timeout_s) as client:
+                        response = client.post(
+                            f"{base_url}/v1/chat/completions", json=payload, headers=headers
+                        )
+                response.raise_for_status()
+                data = response.json()
+                text = data["choices"][0]["message"]["content"]
+                response_obj = LLMResponse(
+                    text=text.strip(), provider="openai_compatible", model=model
+                )
+                _log_agent_response(self._log, strategy_result.metadata, response_obj.text, start)
+                return response_obj
 
         return retry_sync(_request, policy=self._retry, is_retryable=is_retryable_exception)
 

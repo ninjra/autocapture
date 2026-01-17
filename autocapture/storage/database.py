@@ -41,6 +41,7 @@ class DatabaseManager:
         self._config = config
         self._log = get_logger("db")
         self._sqlcipher_key: bytes | None = None
+        self._ran_migrations = False
         engine_kwargs = {
             "echo": config.echo,
             "pool_pre_ping": True,
@@ -48,6 +49,7 @@ class DatabaseManager:
         }
         is_sqlite = config.url.startswith("sqlite")
         is_memory = self._is_sqlite_memory(config.url)
+        self._is_memory = is_memory
         if is_sqlite and config.encryption_enabled and not is_memory:
             self._sqlcipher_key = self._load_sqlcipher_key()
             engine_kwargs["module"] = self._load_sqlcipher_module()
@@ -64,11 +66,11 @@ class DatabaseManager:
         self._engine = create_engine(config.url, **engine_kwargs)
         if is_sqlite:
             self._register_sqlite_pragmas(is_memory)
-        self._run_migrations()
-        if self._engine.dialect.name == "sqlite" and (
-            ":memory:" in str(self._engine.url) or "mode=memory" in str(self._engine.url)
-        ):
+        if is_memory:
             init_schema(self._engine)
+            self._ran_migrations = True
+        else:
+            self._run_migrations()
         self._session_factory = sessionmaker(bind=self._engine, expire_on_commit=False)
         self._log.info("Database connected at {}", config.url)
 
@@ -84,6 +86,7 @@ class DatabaseManager:
 
             self._log.warning("Alembic not available; falling back to metadata create_all")
             Base.metadata.create_all(self._engine)
+            self._ran_migrations = True
             return
 
         from alembic import command  # type: ignore
@@ -97,11 +100,13 @@ class DatabaseManager:
 
             self._log.warning("Alembic config not found; falling back to metadata create_all")
             Base.metadata.create_all(self._engine)
+            self._ran_migrations = True
             return
         alembic_cfg = Config(str(config_path))
         alembic_cfg.set_main_option("sqlalchemy.url", self._config.url)
         alembic_cfg.set_main_option("script_location", str(script_location))
         command.upgrade(alembic_cfg, "head")
+        self._ran_migrations = True
 
     @contextmanager
     def session(self) -> Iterator[Session]:

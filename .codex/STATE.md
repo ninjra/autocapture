@@ -65,3 +65,53 @@ Progress (2026-01-16):
 
 Phase 2 follow-up (2026-01-16):
 - Adjusted logging defaults and port checks so doctor passes in restricted environments; release_gate now completes with warnings only.
+
+Phase 2 architecture expansion (2026-01-17):
+Gaps vs new requirements A–J:
+- A) Memory durability: ensure answers do not require screenshots; enrichments/spans/embeddings must persist after media retention.
+- B) Full-screen primary capture: switch capture storage + API to full-screen by default; retain ROI as supplemental artifact with new config keys.
+- C) VLM-first fullscreen schema updates: add content_flags + url/title/app/role hints, persist regions as OCR spans.
+- D) Enrichment scheduler: periodic scans + idempotent job keys with schema/prompt/model revisions and metrics.
+- E) Global LLM governor: adaptive concurrency + priority for foreground vs background.
+- F) SQL/code artifact extraction: deterministic parsing (sqlglot), persist + index + tests.
+- G) Thread memory: segmentation, summaries, DB tables/migrations, retrieval integration.
+- H) DiffusionVL server: OpenAI-compatible multimodal server with dry-run + docs/tests.
+- I) TRON compression for cloud: enforce usage when cloud is enabled; add tests.
+- J) Audit known issues: docker digests pinning, research scout wiring, retention behavior, lexical index updates.
+
+Phase 2 expansion update (2026-01-17):
+What exists now:
+- Full-screen primary capture with focus-crop supplemental storage and API variants.
+- VLM-first extraction schema v2 (content_flags + app/title/url/role hints) with span persistence.
+- Enrichment scheduler with idempotent job keys + backlog/at-risk metrics.
+- Global LLM governor (priority + adaptive concurrency) wired into LLM/VLM clients.
+- SQL/code artifact extraction with sqlglot + synthetic indexing.
+- Thread tables, summaries, retrieval integration, and thread lexical index.
+- DiffusionVL OpenAI-compatible server script with dry-run and tests.
+- TRON forced for cloud when allowed; tests for compression decision logic.
+
+Remaining:
+- [ ] Update poetry.lock (sqlglot + new deps) and run gates (ruff/black/pytest/doctor/release gate).
+- [ ] Final docs touch-ups and memory ledger append.
+- [ ] Structured commits + PR creation.
+
+Phase 2 expansion completion (2026-01-17):
+- Fixed remaining test failures (CaptureItem.image alias, SQL artifact regex/dialect, retention legacy ROI pruning, thread store flush ordering).
+- Ran: poetry install --with dev; ruff; black --check; pytest; release_gate (includes repo hygiene + memory guard + generated doctor config).
+- Manual doctor with default config fails on WSL due to Windows-only encryption/embedding/vector_index checks and log dir permissions; release_gate doctor passes with disabled services config.
+
+Remaining:
+- [ ] Create commits + PR
+
+Phase 2 digest pin update (2026-01-17):
+- docker-compose.yml now pins Postgres 16.3-bookworm and Qdrant v1.16.3 to immutable digests; step-by-step docs updated.
+- Commits created and branch pushed.
+
+Remaining:
+- [ ] Open PR (blocked on gh auth token refresh in this WSL environment).
+
+CI fix (2026-01-17):
+- Windows CI failed on keys portability roundtrip; test now decrypts DPAPI-wrapped pseudonym/token vault keys on Windows before comparison.
+
+Remaining:
+- [ ] Push fix + let GitHub checks rerun.

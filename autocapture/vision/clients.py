@@ -10,6 +10,7 @@ import httpx
 
 from ..logging_utils import get_logger
 from ..llm.prompt_strategy import PromptStrategySettings, apply_prompt_strategy
+from ..llm.governor import LLMGovernor
 from ..resilience import RetryPolicy, is_retryable_exception, retry_sync
 
 
@@ -25,6 +26,8 @@ class VisionClient:
         retries: int,
         prompt_strategy: PromptStrategySettings,
         http_client: httpx.Client | None = None,
+        governor: LLMGovernor | None = None,
+        priority: str = "background",
     ) -> None:
         self._provider = provider
         self._model = model
@@ -35,8 +38,16 @@ class VisionClient:
         self._log = get_logger("vision.client")
         self._prompt_strategy = prompt_strategy
         self._http_client = http_client
+        self._governor = governor
+        self._priority = priority
 
     def generate(self, system_prompt: str, user_prompt: str, images: list[bytes]) -> str:
+        if self._governor:
+            with self._governor.reserve(self._priority):
+                return self._generate(system_prompt, user_prompt, images)
+        return self._generate(system_prompt, user_prompt, images)
+
+    def _generate(self, system_prompt: str, user_prompt: str, images: list[bytes]) -> str:
         if self._provider == "ollama":
             return self._generate_ollama(system_prompt, user_prompt, images)
         if self._provider == "openai_compatible":

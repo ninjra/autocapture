@@ -18,6 +18,7 @@ from .prompt_strategy import (
     PromptStrategySettings,
     apply_prompt_strategy,
 )
+from .governor import LLMGovernor
 from ..resilience import (
     CircuitBreaker,
     RetryPolicy,
@@ -59,6 +60,7 @@ class LLMProvider(ABC):
         context_pack_text: str,
         *,
         temperature: float | None = None,
+        priority: str = "foreground",
     ) -> str:
         """Generate an answer string for the provided prompt and context."""
 
@@ -84,6 +86,7 @@ class OllamaProvider(LLMProvider):
         timeout_s: float,
         retries: int,
         prompt_strategy: PromptStrategySettings,
+        governor: LLMGovernor | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -92,6 +95,7 @@ class OllamaProvider(LLMProvider):
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
         self._prompt_strategy = prompt_strategy
+        self._governor = governor
         self.last_prompt_metadata: PromptStrategyMetadata | None = None
         self.last_prompt_metadata_stage1: PromptStrategyMetadata | None = None
 
@@ -102,11 +106,20 @@ class OllamaProvider(LLMProvider):
         context_pack_text: str,
         *,
         temperature: float | None = None,
+        priority: str = "foreground",
     ) -> str:
         temperature = 0.2 if temperature is None else temperature
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         user_prompt = build_user_prompt(query, context_pack_text)
+        if self._governor:
+            async with self._governor.reserve_async(priority):
+                return await self._generate_internal(system_prompt, user_prompt, temperature)
+        return await self._generate_internal(system_prompt, user_prompt, temperature)
+
+    async def _generate_internal(
+        self, system_prompt: str, user_prompt: str, temperature: float
+    ) -> str:
         if (
             self._prompt_strategy.step_by_step_two_stage
             and self._prompt_strategy.enable_step_by_step
@@ -268,6 +281,7 @@ class OpenAIProvider(LLMProvider):
         timeout_s: float,
         retries: int,
         prompt_strategy: PromptStrategySettings,
+        governor: LLMGovernor | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -276,6 +290,7 @@ class OpenAIProvider(LLMProvider):
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
         self._prompt_strategy = prompt_strategy
+        self._governor = governor
         self.last_prompt_metadata: PromptStrategyMetadata | None = None
         self.last_prompt_metadata_stage1: PromptStrategyMetadata | None = None
 
@@ -286,11 +301,20 @@ class OpenAIProvider(LLMProvider):
         context_pack_text: str,
         *,
         temperature: float | None = None,
+        priority: str = "foreground",
     ) -> str:
         temperature = 0.2 if temperature is None else temperature
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         user_prompt = build_user_prompt(query, context_pack_text)
+        if self._governor:
+            async with self._governor.reserve_async(priority):
+                return await self._generate_internal(system_prompt, user_prompt, temperature)
+        return await self._generate_internal(system_prompt, user_prompt, temperature)
+
+    async def _generate_internal(
+        self, system_prompt: str, user_prompt: str, temperature: float
+    ) -> str:
         if (
             self._prompt_strategy.step_by_step_two_stage
             and self._prompt_strategy.enable_step_by_step
@@ -455,6 +479,7 @@ class OpenAICompatibleProvider(LLMProvider):
         timeout_s: float,
         retries: int,
         prompt_strategy: PromptStrategySettings,
+        governor: LLMGovernor | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -464,6 +489,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._retry_policy = RetryPolicy(max_retries=retries)
         self._breaker = CircuitBreaker()
         self._prompt_strategy = prompt_strategy
+        self._governor = governor
         self.last_prompt_metadata: PromptStrategyMetadata | None = None
         self.last_prompt_metadata_stage1: PromptStrategyMetadata | None = None
 
@@ -474,11 +500,20 @@ class OpenAICompatibleProvider(LLMProvider):
         context_pack_text: str,
         *,
         temperature: float | None = None,
+        priority: str = "foreground",
     ) -> str:
         temperature = 0.2 if temperature is None else temperature
         if not self._breaker.allow():
             raise RuntimeError("LLM circuit open")
         user_prompt = build_user_prompt(query, context_pack_text)
+        if self._governor:
+            async with self._governor.reserve_async(priority):
+                return await self._generate_internal(system_prompt, user_prompt, temperature)
+        return await self._generate_internal(system_prompt, user_prompt, temperature)
+
+    async def _generate_internal(
+        self, system_prompt: str, user_prompt: str, temperature: float
+    ) -> str:
         if (
             self._prompt_strategy.step_by_step_two_stage
             and self._prompt_strategy.enable_step_by_step

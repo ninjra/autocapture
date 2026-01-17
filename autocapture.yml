@@ -76,6 +76,13 @@ llm:
   retries: 3
   # Repeat the user prompt once (higher input tokens; may improve non-reasoning tasks).
   prompt_repetition: false
+llm_governor:
+  enabled: true
+  min_in_flight: 1
+  max_in_flight: 4
+  low_pressure_threshold: 0.45
+  high_pressure_threshold: 0.85
+  adjust_interval_s: 5.0
 promptops:
   enabled: false
   schedule_cron: "0 6 * * 1"
@@ -103,6 +110,33 @@ promptops:
   max_source_bytes: 1048576
   max_source_excerpt_chars: 2000
   max_sources: 32
+agents:
+  enabled: true
+  max_pending_jobs: 5000
+  nightly_cron: "0 3 * * *"
+  answer_agent:
+    enabled: true
+  vision:
+    provider: "ollama"
+    model: "llava"
+    base_url: null
+    api_key: null
+    max_jobs_per_hour: 20
+    run_only_when_idle: true
+    idle_hours_start: 22
+    idle_hours_end: 6
+enrichment:
+  enabled: true
+  scan_interval_s: 900.0
+  max_events_per_scan: 2000
+  window_days: null
+  at_risk_hours: 24
+threads:
+  enabled: true
+  max_gap_minutes: 15.0
+  app_similarity_threshold: 0.5
+  title_similarity_threshold: 0.3
+  max_events_per_thread: 100
 capture:
   hid:
     min_interval_ms: 500
@@ -116,6 +150,11 @@ capture:
   fps_min: 0.5
   fps_max: 2.0
   tile_size: 512
+  fullscreen_primary: true
+  fullscreen_width: 3840
+  focus_crop_enabled: true
+  focus_crop_size: 512
+  focus_crop_reference: "event"
   diff_epsilon: 0.04
   downscale_width: 256
   always_store_fullres: false

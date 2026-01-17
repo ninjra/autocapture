@@ -9,11 +9,13 @@ Phase 2 hardening focuses on a VLM-first fullscreen extraction pipeline, determi
 - Keep defaults local-first while allowing explicit per-stage cloud opt-in.
 - Provide deterministic time-range parsing and timeline answers.
 - Maintain a CI-enforced, append-only repo memory subsystem.
+- Add enrichment scheduling and thread summaries so durable memory survives media retention.
+- Enforce adaptive LLM concurrency with foreground priority for interactive queries.
 
 ## 3. Non-Goals
 - Multi-monitor capture orchestration beyond the existing virtual desktop layout.
 - Remote/cloud-first operation or auto-upload of images by default.
-- Changes to DB schema beyond additive metadata in existing tags/payloads.
+- Breaking schema migrations or destructive data migrations.
 
 ## 4. User Stories / Requirements
 - “I want my entire 7680×2160 screen preserved so later Q&A has full context.”
@@ -27,14 +29,19 @@ Phase 2 hardening focuses on a VLM-first fullscreen extraction pipeline, determi
 - Deterministic time parser exists; retrieval supports paging and time-range filtering.
 - Stage-based LLM routing exists with per-stage cloud gating.
 - Repo memory subsystem (.memory) exists with CI guard.
+- Enrichment scheduler enqueues missing vision/extraction/threads inside retention window.
+- Thread tables + summaries are persisted and indexed for broad queries.
+- SQL/code artifact extraction is deterministic and stored with enrichments.
 
 ## 6. Proposed Architecture (Mermaid diagram)
 ```mermaid
 flowchart LR
   Capture[CaptureRecord] -->|image + metadata| OCR[Vision Extractor]
   OCR -->|vision_extract tags + visible_text| Event[EventRecord]
+  Event --> Thread[Thread Segmenter + Summaries]
   Event --> Retrieval[Retrieval + Reranker]
   Retrieval --> Pack[Context Pack JSON/TRON]
+  Thread --> Pack
   Pack --> Router[Stage Router]
   Router --> Draft[Draft LLM]
   Router --> Final[Final LLM]
@@ -44,6 +51,8 @@ flowchart LR
 ## 7. Data Model (DB/tags + Qdrant payloads + paging)
 - `events` table retains `screenshot_path`, `ts_start`, `ts_end`, and `tags.vision_extract`.
 - `vision_extract` tag schema stores region bboxes, visible_text, parse metadata, and tile map.
+- `threads`, `thread_events`, and `thread_summaries` persist activity thread summaries.
+- `tags.sql_artifacts` stores parsed SQL/code blocks plus artifact_text for indexing.
 - Context pack evidence includes `event_id`, `ts_start`, `ts_end`, and screenshot metadata.
 - Retrieval supports `page`/`page_size` with SQL offsets; time-range filters limit results.
 
@@ -52,21 +61,24 @@ flowchart LR
 - Tiling defaults: 3×2 grid + downscaled full-frame, row-major order.
 - Prompt annotates each tile with normalized bbox and deterministic identifiers.
 - Parsing order: JSON → TRON → plain-text fallback with parse_failed flags.
+- Regions include app/title/url/role hints and content_flags for downstream indexing.
 
 ## 9. TRON (why/where; encode/decode; safety)
 - TRON reduces token overhead for structured payloads.
 - `output.format` controls answer serialization; `output.context_pack_format` controls payloads.
-- Cloud TRON compression requires explicit `output.allow_tron_compression=true`.
+- Cloud TRON compression requires explicit `output.allow_tron_compression=true` and is forced for cloud stages.
 
 ## 10. Time-Series Queries (parser; retrieval; prompting; citations)
 - Deterministic parser handles “last hour”, “an hour ago”, “yesterday 5 pm”, “yesterday at 17:00”.
 - Time-only queries route to time-range retrieval and return a short timeline with citations.
 - Citations always include event_id and timestamps in the evidence payload.
+- Broad/time-window queries prefer thread summaries, with drill-down to events for citations.
 
 ## 11. Model Routing by Stage (local defaults; cloud opt-in; guards)
 - Stages: query_refine, draft_generate, final_answer, tool_transform.
 - Default provider: local (Ollama/OpenAI-compatible localhost).
 - Cloud usage requires per-stage `allow_cloud` plus privacy.cloud_enabled and offline=false.
+- Adaptive LLM governor enforces concurrency limits and foreground priority.
 
 ## 12. Privacy & Security (local-only; secrets/PII; keys portability)
 - Defaults are local-only; cloud image usage requires explicit opt-in.
@@ -77,22 +89,27 @@ flowchart LR
 - GPU-first extraction and embeddings when available; deterministic tiling for 7680×2160.
 - Async pipelines with OCR/embedding worker backpressure.
 - Caching: research scout cache, prompt transforms (optional), and retrieval indexes.
+- LLM governor adapts concurrency based on CPU/GPU pressure.
 
 ## 14. Observability & Reliability (metrics; doctor; crash handling)
 - Prometheus metrics for OCR latency, backlog, and retrieval latency.
 - `autocapture doctor` validates paths, dependencies, and availability.
 - Worker lease + heartbeat to recover from stuck tasks.
+- Enrichment metrics track backlog, at-risk events, and oldest missing enrichment age.
 
 ## 15. Test Plan
 - Vision tiling determinism, TRON encode/decode, and parse fallback tests.
 - Doctor Windows path fallback and error messaging.
 - Evidence payload and citation coverage (standard + time-only queries).
 - Research scout offline caching and diff threshold logic.
+- LLM governor priority + adaptive concurrency tests.
+- SQL artifact extraction + thread summary persistence/retrieval tests.
 
 ## 16. Migration / Rollout Plan
 - Apply changes in one PR with CI gates (ruff/black/pytest/memory guard/release gate).
 - Validate doctor path fix on Windows + WSL.
 - Roll out scheduled research scout workflow after merge.
+- Apply migration for thread tables + focus paths before enabling thread summaries.
 
 ## 17. Decisions Log (reference ADRs in .memory)
 - ADR-0001: Adopt event-sourced repo memory (.memory/LEDGER.ndjson).

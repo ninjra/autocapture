@@ -45,6 +45,7 @@ class EventRecord(Base):
     url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     domain: Mapped[str | None] = mapped_column(String(256), nullable=True)
     screenshot_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    focus_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     screenshot_hash: Mapped[str] = mapped_column(String(128))
     ocr_text: Mapped[str] = mapped_column(Text)
     embedding_vector: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
@@ -133,6 +134,55 @@ class EventEnrichmentRecord(Base):
     result_id: Mapped[str] = mapped_column(String(36))
     schema_version: Mapped[str] = mapped_column(String(16))
     created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class ThreadRecord(Base):
+    __tablename__ = "threads"
+
+    thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    ts_start: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ts_end: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    app_name: Mapped[str] = mapped_column(String(256))
+    window_title: Mapped[str] = mapped_column(String(512))
+    event_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class ThreadEventRecord(Base):
+    __tablename__ = "thread_events"
+
+    __table_args__ = (
+        UniqueConstraint("thread_id", "event_id", name="uq_thread_events_thread_event"),
+        Index("ix_thread_events_event_id", "event_id"),
+        Index("ix_thread_events_thread_id", "thread_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    thread_id: Mapped[str] = mapped_column(ForeignKey("threads.thread_id", ondelete="CASCADE"))
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.event_id", ondelete="CASCADE"))
+    position: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class ThreadSummaryRecord(Base):
+    __tablename__ = "thread_summaries"
+
+    thread_id: Mapped[str] = mapped_column(
+        ForeignKey("threads.thread_id", ondelete="CASCADE"), primary_key=True
+    )
+    schema_version: Mapped[str] = mapped_column(String(16))
+    data_json: Mapped[dict] = mapped_column(JSON)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
 
@@ -257,6 +307,7 @@ class CaptureRecord(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     captured_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
     image_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    focus_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     foreground_process: Mapped[str] = mapped_column(String(256))
     foreground_window: Mapped[str] = mapped_column(String(512))
     monitor_id: Mapped[str] = mapped_column(String(64))
