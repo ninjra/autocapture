@@ -220,6 +220,24 @@ class VisionBackendConfig(BaseModel):
     allow_cloud: bool = Field(False, description="Allow cloud vision calls for this backend.")
 
 
+class UIGroundingConfig(BaseModel):
+    enabled: bool = Field(False, description="Enable UI grounding extraction.")
+    backend: str = Field(
+        "qwen_vl_ui_prompt",
+        description="UI grounding backend (qwen_vl_ui_prompt|ui_venus).",
+    )
+    vlm: VisionBackendConfig = VisionBackendConfig()
+
+    @field_validator("backend")
+    @classmethod
+    def validate_backend(cls, value: str) -> str:
+        allowed = {"qwen_vl_ui_prompt", "ui_venus"}
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"ui_grounding.backend must be one of {sorted(allowed)}")
+        return normalized
+
+
 class VisionExtractConfig(BaseModel):
     engine: str = Field("vlm", description="vlm|rapidocr|deepseek-ocr|disabled")
     fallback_engine: str = Field("rapidocr-onnxruntime")
@@ -236,6 +254,7 @@ class VisionExtractConfig(BaseModel):
             api_key=None,
         )
     )
+    ui_grounding: UIGroundingConfig = UIGroundingConfig()
 
 
 class EmbedConfig(BaseModel):

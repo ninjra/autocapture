@@ -247,6 +247,15 @@ vision_extract:
     base_url: null
     api_key: null
     allow_cloud: false
+  ui_grounding:
+    enabled: false
+    backend: "qwen_vl_ui_prompt"
+    vlm:
+      provider: "ollama"
+      model: "qwen2.5-vl:7b-instruct"
+      base_url: "http://127.0.0.1:11434"
+      api_key: null
+      allow_cloud: false
 embed:
   text_model: "BAAI/bge-base-en-v1.5"
   image_model: "google/siglip2-so400m-patch14-384"
