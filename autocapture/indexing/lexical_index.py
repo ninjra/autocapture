@@ -47,14 +47,22 @@ class LexicalIndex:
         engine = self._db.engine
         if engine.dialect.name == "sqlite":
             with engine.begin() as conn:
+                existing_agent = conn.execute(
+                    text("SELECT agent_text FROM event_fts WHERE event_id = :event_id"),
+                    {"event_id": event.event_id},
+                ).scalar()
+                agent_text = existing_agent or ""
                 conn.execute(
                     text("DELETE FROM event_fts WHERE event_id = :event_id"),
                     {"event_id": event.event_id},
                 )
                 conn.execute(
                     text(
-                        "INSERT INTO event_fts(event_id, ocr_text, window_title, app_name, domain, url) "
-                        "VALUES (:event_id, :ocr_text, :window_title, :app_name, :domain, :url)"
+                        "INSERT INTO event_fts("
+                        "event_id, ocr_text, window_title, app_name, domain, url, agent_text"
+                        ") VALUES ("
+                        ":event_id, :ocr_text, :window_title, :app_name, :domain, :url, :agent_text"
+                        ")"
                     ),
                     {
                         "event_id": event.event_id,
@@ -63,6 +71,7 @@ class LexicalIndex:
                         "app_name": event.app_name or "",
                         "domain": event.domain or "",
                         "url": event.url or "",
+                        "agent_text": agent_text,
                     },
                 )
             return

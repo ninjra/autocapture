@@ -52,6 +52,7 @@ from ..memory.entities import EntityResolver, SecretStore
 from ..security.token_vault import TokenVaultStore
 from ..memory.prompts import PromptLibraryService, PromptRegistry
 from ..memory.retrieval import RetrieveFilters, RetrievalService
+from ..memory.threads import ThreadRetrievalService
 from ..memory.time_intent import (
     is_time_only_expression,
     resolve_time_range_for_query,
@@ -202,6 +203,7 @@ class EventResponse(BaseModel):
     url: Optional[str]
     domain: Optional[str]
     screenshot_path: Optional[str]
+    focus_path: Optional[str]
     screenshot_hash: str
     ocr_text: str
     ocr_spans: list[dict[str, Any]]
@@ -305,6 +307,12 @@ def create_app(
         config,
         embedder=embedder,
         vector_index=vector_index,
+    )
+    thread_retrieval = ThreadRetrievalService(
+        config,
+        db,
+        embedder=getattr(retrieval, "_embedder", None),
+        vector_index=getattr(retrieval, "_vector", None),
     )
     encryption_mgr = EncryptionManager(config.encryption)
     secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
@@ -728,7 +736,7 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Invalid image payload") from exc
 
-        path = media_store.write_roi(image_array, captured_at, observation_id)
+        path = media_store.write_fullscreen(image_array, captured_at, observation_id)
         if path is None:
             _record_skipped_capture(
                 db,
@@ -748,6 +756,7 @@ def create_app(
                     id=observation_id,
                     captured_at=captured_at,
                     image_path=str(path),
+                    focus_path=None,
                     foreground_process=app_name,
                     foreground_window=window_title,
                     monitor_id=monitor_id,
@@ -795,12 +804,15 @@ def create_app(
         return PromptOpsRunsResponse(runs=[_promptops_summary(run) for run in runs])
 
     @app.get("/api/screenshot/{event_id}")
-    def screenshot(event_id: str) -> Response:
+    def screenshot(event_id: str, variant: str = "full") -> Response:
         with db.session() as session:
             event = session.get(EventRecord, event_id)
-            if not event or not event.screenshot_path:
+            if variant not in {"full", "focus"}:
+                raise HTTPException(status_code=422, detail="variant must be full or focus")
+            path_value = event.screenshot_path if variant == "full" else event.focus_path
+            if not event or not path_value:
                 raise HTTPException(status_code=404, detail="Screenshot not found")
-            path = Path(event.screenshot_path)
+            path = Path(path_value)
 
         if not path.is_absolute():
             path = config.capture.data_dir / path
@@ -875,6 +887,10 @@ def create_app(
         )
         routing_data = _merge_routing(config.routing, request.routing)
         aggregates = _build_aggregates(db, request.time_range)
+        thread_aggregates = _build_thread_aggregates(
+            thread_retrieval, request.query, request.time_range
+        )
+        aggregates = _merge_aggregates(aggregates, thread_aggregates)
         pack = build_context_pack(
             query=request.query,
             evidence=evidence,
@@ -943,6 +959,10 @@ def create_app(
         routing_data = _merge_routing(config.routing, request.routing)
         routing_override = request.routing.get("llm") if request.routing else None
         aggregates = _build_aggregates(db, resolved_time_range)
+        thread_aggregates = _build_thread_aggregates(
+            thread_retrieval, query_text, resolved_time_range
+        )
+        aggregates = _merge_aggregates(aggregates, thread_aggregates)
         pack = build_context_pack(
             query=query_text,
             evidence=evidence,
@@ -1254,6 +1274,7 @@ def create_app(
             url=event.url,
             domain=event.domain,
             screenshot_path=event.screenshot_path,
+            focus_path=event.focus_path,
             screenshot_hash=event.screenshot_hash,
             ocr_text=event.ocr_text,
             ocr_spans=spans,
@@ -1379,6 +1400,7 @@ def _record_skipped_capture(
                 id=observation_id,
                 captured_at=captured_at,
                 image_path=None,
+                focus_path=None,
                 foreground_process=app_name,
                 foreground_window=window_title,
                 monitor_id=monitor_id,
@@ -1565,6 +1587,42 @@ def _build_aggregates(
     return aggregates
 
 
+def _build_thread_aggregates(
+    retrieval: ThreadRetrievalService,
+    query: str,
+    time_range: Optional[tuple[dt.datetime, dt.datetime]],
+) -> dict[str, Any]:
+    broad = bool(time_range) or len((query or "").split()) <= 3
+    if not broad:
+        return {}
+    try:
+        candidates = retrieval.retrieve(query or "", time_range, limit=5)
+    except Exception:
+        return {}
+    if not candidates:
+        return {}
+    return {
+        "threads": [
+            {
+                "thread_id": item.thread_id,
+                "title": item.title,
+                "summary": item.summary,
+                "ts_start": item.ts_start.isoformat(),
+                "ts_end": item.ts_end.isoformat() if item.ts_end else None,
+                "citations": item.citations,
+            }
+            for item in candidates
+        ]
+    }
+
+
+def _merge_aggregates(base: dict | None, incoming: dict | None) -> dict[str, Any]:
+    merged = dict(base or {})
+    for key, value in (incoming or {}).items():
+        merged[key] = value
+    return merged
+
+
 def _build_answer_payload(
     answer: str,
     citations: list[str],
@@ -1599,6 +1657,10 @@ def _select_context_pack_text(
     tron_text: str | None,
 ) -> str:
     if requested_format != "tron":
+        if not bool(getattr(decision, "cloud", False)):
+            return json_text
+        if config.output.allow_tron_compression and tron_text:
+            return tron_text
         return json_text
     cloud = bool(getattr(decision, "cloud", False))
     if not cloud:
@@ -1694,9 +1756,9 @@ def _spans_for_event(
     query_lower = query.lower()
     candidate_spans = spans
     if matched_span_keys:
-        candidate_spans = [
-            span for span in spans if str(span.get("span_key")) in set(matched_span_keys)
-        ]
+        filtered = [span for span in spans if str(span.get("span_key")) in set(matched_span_keys)]
+        if filtered:
+            candidate_spans = filtered
     elif query_lower:
         candidate_spans = [
             span for span in spans if query_lower in str(span.get("text", "")).lower()
@@ -1838,4 +1900,5 @@ def _evidence_to_json(
     }
     if include_screenshots and event:
         payload["screenshot_path"] = event.screenshot_path
+        payload["focus_path"] = event.focus_path
     return payload

@@ -417,6 +417,7 @@ class PromptOpsRunner:
             llm = ProviderRouter(
                 self._config.routing,
                 self._config.llm,
+                config=self._config,
                 offline=self._config.offline,
                 privacy=self._config.privacy,
                 prompt_strategy=PromptStrategySettings.from_llm_config(
@@ -440,7 +441,9 @@ class PromptOpsRunner:
                 repair_message=repair_message,
                 gate_context=_gate_context(self._config.promptops),
             )
-            response = asyncio.run(llm.generate_answer(system_prompt, query, context))
+            response = asyncio.run(
+                llm.generate_answer(system_prompt, query, context, priority="background")
+            )
             try:
                 spec = _parse_promptops_response(response, prompt)
                 _validate_prompt_spec(spec, self._config.promptops.max_prompt_chars)

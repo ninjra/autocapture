@@ -84,6 +84,29 @@ class CaptureConfig(BaseModel):
     fps_min: float = Field(0.5, gt=0.0)
     fps_max: float = Field(2.0, gt=0.0)
     tile_size: int = Field(512, ge=256, le=2048)
+    fullscreen_primary: bool = Field(
+        True,
+        description="Store full-screen captures as the primary artifact (default).",
+    )
+    fullscreen_width: int = Field(
+        3840,
+        ge=0,
+        description="Stored full-screen width; 0 keeps native width.",
+    )
+    focus_crop_enabled: bool = Field(
+        True,
+        description="Store focus/ROI crop as a supplemental artifact.",
+    )
+    focus_crop_size: int = Field(
+        512,
+        ge=128,
+        le=4096,
+        description="Square focus crop size (pixels); defaults to tile_size if unset.",
+    )
+    focus_crop_reference: str = Field(
+        "event",
+        description="Where to store focus crop reference (event|tags).",
+    )
     diff_epsilon: float = Field(0.04, ge=0.0, le=1.0)
     downscale_width: int = Field(256, ge=64)
     always_store_fullres: bool = Field(True)
@@ -137,6 +160,14 @@ class CaptureConfig(BaseModel):
         le=1.0,
         description="Sample rate for vision-caption jobs (0 disables).",
     )
+
+    @field_validator("focus_crop_reference")
+    @classmethod
+    def _validate_focus_reference(cls, value: str) -> str:
+        allowed = {"event", "tags"}
+        if value not in allowed:
+            raise ValueError(f"focus_crop_reference must be one of {sorted(allowed)}")
+        return value
 
 
 class TrackingConfig(BaseModel):
@@ -681,6 +712,21 @@ class LLMConfig(BaseModel):
         return self
 
 
+class LLMGovernorConfig(BaseModel):
+    enabled: bool = Field(True, description="Enable adaptive LLM concurrency governor.")
+    min_in_flight: int = Field(1, ge=1, description="Minimum concurrent LLM requests.")
+    max_in_flight: int = Field(4, ge=1, description="Maximum concurrent LLM requests.")
+    low_pressure_threshold: float = Field(
+        0.45, ge=0.0, le=1.0, description="Pressure below this increases concurrency."
+    )
+    high_pressure_threshold: float = Field(
+        0.85, ge=0.0, le=1.0, description="Pressure above this decreases concurrency."
+    )
+    adjust_interval_s: float = Field(
+        5.0, ge=0.1, description="Minimum seconds between concurrency adjustments."
+    )
+
+
 class ModelStageConfig(BaseModel):
     provider: Optional[str] = Field(
         None, description="ollama|openai_compatible|openai (defaults to llm.provider)"
@@ -727,6 +773,25 @@ class AgentConfig(BaseModel):
     vision: AgentVisionConfig = AgentVisionConfig()
 
 
+class EnrichmentSchedulerConfig(BaseModel):
+    enabled: bool = Field(True)
+    scan_interval_s: float = Field(900.0, ge=5.0)
+    max_events_per_scan: int = Field(2000, ge=10)
+    window_days: int | None = Field(
+        None,
+        description="Override enrichment window in days (defaults to retention screenshot TTL).",
+    )
+    at_risk_hours: int = Field(24, ge=1, description="Window before expiry for at-risk metric.")
+
+
+class ThreadingConfig(BaseModel):
+    enabled: bool = Field(True)
+    max_gap_minutes: float = Field(15.0, ge=1.0)
+    app_similarity_threshold: float = Field(0.5, ge=0.0, le=1.0)
+    title_similarity_threshold: float = Field(0.3, ge=0.0, le=1.0)
+    max_events_per_thread: int = Field(100, ge=10)
+
+
 class AppConfig(BaseModel):
     offline: bool = Field(
         True,
@@ -748,6 +813,7 @@ class AppConfig(BaseModel):
     observability: ObservabilityConfig = ObservabilityConfig()
     api: APIConfig = APIConfig()
     llm: LLMConfig = LLMConfig()
+    llm_governor: LLMGovernorConfig = LLMGovernorConfig()
     model_stages: ModelStagesConfig = ModelStagesConfig()
     mode: ModeConfig = ModeConfig()
     routing: ProviderRoutingConfig = ProviderRoutingConfig()
@@ -758,6 +824,8 @@ class AppConfig(BaseModel):
     presets: PresetConfig = PresetConfig()
     promptops: PromptOpsConfig = PromptOpsConfig()
     agents: AgentConfig = AgentConfig()
+    enrichment: EnrichmentSchedulerConfig = EnrichmentSchedulerConfig()
+    threads: ThreadingConfig = ThreadingConfig()
 
     @field_validator("capture")
     @classmethod

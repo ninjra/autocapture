@@ -63,6 +63,41 @@ class MediaStore:
             raise
         return final_path
 
+    def write_fullscreen(self, image: np.ndarray, timestamp, capture_id: str) -> Optional[Path]:
+        if not self._has_required_space():
+            self._log.warning("Disk quota exceeded; dropping fullscreen {}", capture_id)
+            return None
+        date_prefix = timestamp.strftime("%Y/%m/%d")
+        final_dir = self._data_dir / "media" / "screen" / date_prefix
+        final_name = f"{timestamp.strftime('%H%M%S_%f')}_{capture_id}.webp"
+        final_path = final_dir / final_name
+        if self._encryption.enabled:
+            final_path = final_path.with_suffix(final_path.suffix + ".acenc")
+
+        staging_path = self._staging_dir / f"screen_{capture_id}.tmp"
+        image = ensure_rgb(image)
+        pil = Image.fromarray(np.ascontiguousarray(image))
+        staging_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            pil.save(staging_path, format="WEBP", lossless=True, quality=100, method=6)
+            final_dir.mkdir(parents=True, exist_ok=True)
+            if self._encryption.enabled:
+                atomic_publish(
+                    staging_path,
+                    final_path,
+                    writer=self._encryption.encrypt_file,
+                )
+            else:
+                atomic_publish(
+                    staging_path,
+                    final_path,
+                    writer=_copy_file,
+                )
+        except Exception:
+            safe_unlink(staging_path)
+            raise
+        return final_path
+
     def reserve_video_paths(self, timestamp, segment_id: str) -> tuple[Path, Path]:
         date_prefix = timestamp.strftime("%Y/%m/%d")
         final_dir = self._data_dir / "media" / "video" / date_prefix

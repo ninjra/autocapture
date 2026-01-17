@@ -26,7 +26,8 @@ from ..observability.metrics import ocr_backlog, ocr_latency_ms, worker_errors_t
 from ..storage.database import DatabaseManager
 from ..storage.models import CaptureRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
 from ..vision.extractors import ScreenExtractorRouter
-from ..vision.types import ExtractionResult, build_ocr_payload
+from ..vision.types import ExtractionResult, VISION_SCHEMA_VERSION, build_ocr_payload
+from ..enrichment.sql_artifacts import SqlArtifacts, extract_sql_artifacts
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,7 @@ class CapturePayload:
     capture_id: str
     captured_at: dt.datetime
     image_path: str | None
+    focus_path: str | None
     foreground_process: str
     foreground_window: str
     monitor_id: str
@@ -61,11 +63,12 @@ class LegacyOCRAdapter:
         text, ocr_spans = build_ocr_payload(spans)
         tags = {
             "vision_extract": {
-                "schema_version": "v1",
+                "schema_version": VISION_SCHEMA_VERSION,
                 "engine": "legacy-ocr",
                 "screen_summary": "",
                 "regions": [],
                 "visible_text": text,
+                "content_flags": [],
                 "tables_detected": None,
                 "spreadsheets_detected": None,
                 "parse_failed": False,
@@ -229,6 +232,10 @@ class EventIngestWorker:
             result = self._extractor.extract(image)
             ocr_text = result.text
             ocr_spans = result.spans
+            sql_artifacts = extract_sql_artifacts(
+                ocr_text,
+                (result.tags or {}).get("vision_extract", {}).get("regions", []),
+            )
             self._persist_ocr_results(
                 capture,
                 ocr_text,
@@ -236,11 +243,14 @@ class EventIngestWorker:
                 event_existing=bool(existing_event),
                 screenshot_hash=hash_rgb_image(image),
                 tags=result.tags,
+                sql_artifacts=sql_artifacts,
             )
             event = self._load_event(capture_id)
             if event:
                 self._lexical.upsert_event(event)
                 self._enqueue_enrichment(event.event_id)
+                if sql_artifacts.artifact_text:
+                    self._lexical.upsert_agent_text(event.event_id, sql_artifacts.artifact_text)
         except FileNotFoundError:
             self._mark_failed(capture_id, "missing_media")
             return False
@@ -255,7 +265,10 @@ class EventIngestWorker:
     def _enqueue_enrichment(self, event_id: str) -> None:
         if not self._config.agents.enabled:
             return
-        job_key = f"enrich:{event_id}:v1"
+        prompt_revision = "EVENT_ENRICHMENT:v1"
+        model_id = _llm_model_id(self._config)
+        schema_version = "v2"
+        job_key = f"enrich:{event_id}:{schema_version}:{prompt_revision}:{model_id}"
         self._agent_jobs.enqueue(
             job_key=job_key,
             job_type=AGENT_JOB_ENRICH_EVENT,
@@ -274,6 +287,7 @@ class EventIngestWorker:
                 capture_id=capture.id,
                 captured_at=capture.captured_at,
                 image_path=capture.image_path,
+                focus_path=capture.focus_path,
                 foreground_process=capture.foreground_process,
                 foreground_window=capture.foreground_window,
                 monitor_id=capture.monitor_id,
@@ -345,9 +359,19 @@ class EventIngestWorker:
         ocr_spans: list[dict],
         *,
         event_existing: bool,
+        sql_artifacts: SqlArtifacts | None = None,
         screenshot_hash: str | None = None,
         tags: dict | None = None,
     ) -> None:
+        focus_reference = self._config.capture.focus_crop_reference
+        focus_path = capture.focus_path if focus_reference == "event" else None
+        extra_tags: dict = {}
+        if capture.focus_path and focus_reference == "tags":
+            extra_tags = {"capture": {"focus_path": capture.focus_path}}
+        derived_tags = tags or {}
+        if sql_artifacts and (sql_artifacts.code_blocks or sql_artifacts.sql_statements):
+            derived_tags = _merge_tags(derived_tags, {"sql_artifacts": sql_artifacts.as_tags()})
+
         def _write(session) -> None:
             if not event_existing:
                 event = EventRecord(
@@ -359,12 +383,13 @@ class EventIngestWorker:
                     url=None,
                     domain=_extract_domain(capture.foreground_window, ocr_text),
                     screenshot_path=capture.image_path,
+                    focus_path=focus_path,
                     screenshot_hash=screenshot_hash or "",
                     ocr_text=ocr_text,
                     embedding_vector=None,
                     embedding_status="pending",
                     embedding_model=self._config.embed.text_model,
-                    tags=_merge_tags({}, tags or {}),
+                    tags=_merge_tags(extra_tags, derived_tags),
                 )
                 session.add(event)
                 if session.bind and session.bind.dialect.name == "sqlite":
@@ -375,8 +400,14 @@ class EventIngestWorker:
                     event.ocr_text = ocr_text
                     if screenshot_hash and not event.screenshot_hash:
                         event.screenshot_hash = screenshot_hash
-                if event and tags:
-                    event.tags = _merge_tags(event.tags or {}, tags)
+                    if focus_path and not event.focus_path:
+                        event.focus_path = focus_path
+                if event and derived_tags:
+                    event.tags = _merge_tags(
+                        _merge_tags(event.tags or {}, extra_tags), derived_tags
+                    )
+                elif event and extra_tags:
+                    event.tags = _merge_tags(event.tags or {}, extra_tags)
             if ocr_spans:
                 self._upsert_spans(session, capture.capture_id, ocr_spans)
                 span_map = {
@@ -540,3 +571,14 @@ def _extract_domain(window_title: str, ocr_text: str) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+def _llm_model_id(config: AppConfig) -> str:
+    provider = config.llm.provider
+    if provider == "openai":
+        model = config.llm.openai_model
+    elif provider == "openai_compatible":
+        model = config.llm.openai_compatible_model
+    else:
+        model = config.llm.ollama_model
+    return f"{provider}:{model}"

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..config import LLMConfig, ProviderRoutingConfig, PrivacyConfig
+from ..config import AppConfig, LLMConfig, ProviderRoutingConfig, PrivacyConfig
 from ..llm.providers import LLMProvider, OpenAICompatibleProvider, OpenAIProvider, OllamaProvider
+from ..llm.governor import get_global_governor
 from ..llm.prompt_strategy import PromptStrategySettings
 
 
@@ -20,10 +21,12 @@ class ProviderRouter:
         routing: ProviderRoutingConfig,
         llm_config: LLMConfig,
         *,
+        config: AppConfig | None = None,
         offline: bool,
         privacy: PrivacyConfig,
         prompt_strategy: PromptStrategySettings | None = None,
     ) -> None:
+        self._config = config
         self._routing = routing
         self._llm_config = llm_config
         self._offline = offline
@@ -31,6 +34,7 @@ class ProviderRouter:
         self._prompt_strategy = prompt_strategy or PromptStrategySettings.from_llm_config(
             llm_config
         )
+        self._governor = get_global_governor(config) if config else None
 
     def select_llm(self) -> tuple[LLMProvider, RoutingDecision]:
         if self._routing.llm == "openai" and not self._privacy.cloud_enabled:
@@ -50,6 +54,7 @@ class ProviderRouter:
                     timeout_s=self._llm_config.timeout_s,
                     retries=self._llm_config.retries,
                     prompt_strategy=self._prompt_strategy,
+                    governor=self._governor,
                 ),
                 RoutingDecision(llm_provider="openai_compatible"),
             )
@@ -61,6 +66,7 @@ class ProviderRouter:
                     timeout_s=self._llm_config.timeout_s,
                     retries=self._llm_config.retries,
                     prompt_strategy=self._prompt_strategy,
+                    governor=self._governor,
                 ),
                 RoutingDecision(llm_provider="openai"),
             )
@@ -71,6 +77,7 @@ class ProviderRouter:
                 timeout_s=self._llm_config.timeout_s,
                 retries=self._llm_config.retries,
                 prompt_strategy=self._prompt_strategy,
+                governor=self._governor,
             ),
             RoutingDecision(llm_provider="ollama"),
         )

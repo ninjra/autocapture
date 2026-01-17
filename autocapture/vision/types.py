@@ -7,6 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+VISION_SCHEMA_VERSION = "v2"
+
 
 @dataclass(frozen=True)
 class ExtractionResult:
@@ -22,6 +24,8 @@ class VisionRegion(BaseModel):
     label: str | None = None
     app_hint: str | None = None
     title_hint: str | None = None
+    url_hint: str | None = None
+    role_hint: str | None = None
     text_verbatim: str = ""
     keywords: list[str] = Field(default_factory=list)
     confidence: float = Field(0.0, ge=0.0, le=1.0)
@@ -43,6 +47,7 @@ class VisionExtractionPayload(BaseModel):
     screen_summary: str = ""
     regions: list[VisionRegion] = Field(default_factory=list)
     visible_text: str = ""
+    content_flags: list[str] = Field(default_factory=list)
     tables_detected: bool | None = None
     spreadsheets_detected: bool | None = None
 

@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from ..config import AppConfig, LLMConfig, ModelStageConfig, is_loopback_host
 from ..llm.providers import LLMProvider, OllamaProvider, OpenAICompatibleProvider, OpenAIProvider
+from ..llm.governor import get_global_governor
 from ..llm.prompt_strategy import PromptStrategySettings
 from ..logging_utils import get_logger
 
@@ -28,6 +29,7 @@ class StageRouter:
         self._prompt_strategy = PromptStrategySettings.from_llm_config(
             config.llm, data_dir=config.capture.data_dir
         )
+        self._governor = get_global_governor(config)
 
     def select_llm(
         self, stage: str, *, routing_override: str | None = None
@@ -49,6 +51,7 @@ class StageRouter:
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
                 prompt_strategy=self._prompt_strategy,
+                governor=self._governor,
             )
         elif provider == "openai_compatible":
             base_url = base_url or self._config.llm.openai_compatible_base_url
@@ -64,6 +67,7 @@ class StageRouter:
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
                 prompt_strategy=self._prompt_strategy,
+                governor=self._governor,
             )
         elif provider == "openai":
             api_key = api_key or self._config.llm.openai_api_key
@@ -77,6 +81,7 @@ class StageRouter:
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
                 prompt_strategy=self._prompt_strategy,
+                governor=self._governor,
             )
         else:
             raise RuntimeError(f"Unsupported LLM provider: {provider}")
@@ -151,6 +156,11 @@ def _guard_cloud(
 ) -> None:
     if not cloud:
         return
+    if not config.output.allow_tron_compression:
+        raise RuntimeError(
+            f"Cloud provider blocked for stage '{stage}' because output.allow_tron_compression=false. "
+            "Enable TRON compression for cloud usage."
+        )
     if not stage_config.allow_cloud:
         raise RuntimeError(
             f"Cloud provider blocked for stage '{stage}'. "
