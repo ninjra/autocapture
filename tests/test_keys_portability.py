@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 import types
@@ -73,8 +74,9 @@ def test_export_import_roundtrip(tmp_path: Path) -> None:
 
     import_keys(config, bundle_path, "correct-horse-battery-staple")
 
-    assert (secrets_dir / "pseudonym.key").read_bytes() == pseudonym_key
-    assert (secrets_dir / "token_vault.key").read_bytes() == token_key
+    use_dpapi = os.name == "nt"
+    assert _read_dpapi_file(secrets_dir / "pseudonym.key", use_dpapi=use_dpapi) == pseudonym_key
+    assert _read_dpapi_file(secrets_dir / "token_vault.key", use_dpapi=use_dpapi) == token_key
     assert (secrets_dir / "sqlcipher.key").read_bytes() == sqlcipher_key
     assert (secrets_dir / "host_events.key").read_bytes() == tracking_key
     assert (secrets_dir / "media.key").read_bytes() == media_key
