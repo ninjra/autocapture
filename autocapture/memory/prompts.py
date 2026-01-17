@@ -14,6 +14,9 @@ from sqlalchemy import select
 
 from ..storage.database import DatabaseManager
 from ..storage.models import PromptLibraryRecord
+from ..security.template_lint import lint_template_text
+from ..paths import resource_root
+from ..config import is_dev_mode
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,8 @@ class PromptRegistry:
 
     def load(self) -> None:
         if self._prompts_dir and self._prompts_dir.exists():
+            if not _is_trusted_prompt_path(self._prompts_dir):
+                raise ValueError(f"Untrusted prompt path: {self._prompts_dir}")
             for path in self._prompts_dir.glob("*.yaml"):
                 template = _parse_prompt(path.read_text(encoding="utf-8"))
                 self._cache[template.name] = template
@@ -64,14 +69,31 @@ class PromptRegistry:
 def _parse_prompt(raw: str) -> PromptTemplate:
     payload = yaml.safe_load(raw)
     name = payload["name"]
+    system_prompt = payload["system_prompt"]
+    raw_template = payload.get("raw_template", payload["system_prompt"])
+    derived_template = payload.get("derived_template", payload["system_prompt"])
+    lint_template_text(system_prompt, label=f"prompt:{name}:system_prompt")
+    lint_template_text(raw_template, label=f"prompt:{name}:raw_template")
+    lint_template_text(derived_template, label=f"prompt:{name}:derived_template")
     return PromptTemplate(
         name=name,
         version=payload["version"],
-        system_prompt=payload["system_prompt"],
+        system_prompt=system_prompt,
         tags=payload.get("tags", []),
-        raw_template=payload.get("raw_template", payload["system_prompt"]),
-        derived_template=payload.get("derived_template", payload["system_prompt"]),
+        raw_template=raw_template,
+        derived_template=derived_template,
     )
+
+
+def _is_trusted_prompt_path(path: Path) -> bool:
+    if is_dev_mode():
+        return True
+    root = resource_root().resolve()
+    try:
+        path = path.resolve()
+    except Exception:
+        return False
+    return root in path.parents or path == root
 
 
 class PromptLibraryService:

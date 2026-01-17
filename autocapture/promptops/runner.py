@@ -22,6 +22,7 @@ import yaml
 from ..config import AppConfig, PromptOpsConfig
 from ..evals import EvalMetrics
 from ..logging_utils import get_logger
+from ..security.template_lint import lint_template_text
 from ..memory.router import ProviderRouter
 from ..llm.prompt_strategy import PromptStrategySettings
 from ..promptops.evals import EvalRunResult, run_eval_detailed
@@ -790,6 +791,7 @@ def _validate_prompt_template(template: str, max_chars: int, *, label: str) -> N
         raise ValueError(f"PromptOps {label} exceeds max length ({max_chars} chars)")
     if "__" in template:
         raise ValueError(f"PromptOps {label} contains disallowed dunder sequence")
+    lint_template_text(template, label=f"PromptOps {label}")
     parsed = SandboxedEnvironment().parse(template)
     forbidden_nodes = (
         nodes.Import,
