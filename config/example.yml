@@ -273,6 +273,28 @@ worker:
   embedding_max_attempts: 5
   watchdog_interval_s: 5.0
   max_task_runtime_s: 900.0
+runtime:
+  auto_pause:
+    on_fullscreen: true
+    mode: "hard"
+    release_gpu: true
+    poll_hz: 2
+  qos:
+    idle_grace_ms: 2000
+    profile_active:
+      ocr_workers: 1
+      embed_workers: 0
+      agent_workers: 0
+      vision_extract: false
+      ui_grounding: false
+      cpu_priority: "below_normal"
+    profile_idle:
+      ocr_workers: 4
+      embed_workers: 2
+      agent_workers: 1
+      vision_extract: true
+      ui_grounding: true
+      cpu_priority: "normal"
 retention:
   video_days: 3
   roi_days: 7

@@ -297,6 +297,78 @@ class WorkerConfig(BaseModel):
     )
 
 
+class RuntimeAutoPauseConfig(BaseModel):
+    on_fullscreen: bool = Field(True, description="Pause pipeline when fullscreen detected.")
+    mode: str = Field(
+        "hard",
+        description="Pause mode: hard (pause all workers + capture) or soft (capture only).",
+    )
+    release_gpu: bool = Field(
+        True,
+        description="Release GPU allocations when entering fullscreen hard pause.",
+    )
+    poll_hz: float = Field(2.0, ge=0.1, description="Fullscreen monitor polling rate (Hz).")
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        allowed = {"hard", "soft"}
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"runtime.auto_pause.mode must be one of {sorted(allowed)}")
+        return normalized
+
+
+class RuntimeQosProfile(BaseModel):
+    ocr_workers: int = Field(1, ge=0)
+    embed_workers: int = Field(0, ge=0)
+    agent_workers: int = Field(0, ge=0)
+    vision_extract: bool = Field(False)
+    ui_grounding: bool = Field(False)
+    cpu_priority: str = Field("below_normal", description="below_normal|normal")
+    ocr_batch_size: int | None = Field(None, ge=1, description="Override OCR batch size.")
+    embed_batch_size: int | None = Field(None, ge=1, description="Override embedding batch size.")
+    reranker_batch_size: int | None = Field(None, ge=1, description="Override reranker batch size.")
+
+    @field_validator("cpu_priority")
+    @classmethod
+    def validate_cpu_priority(cls, value: str) -> str:
+        allowed = {"below_normal", "normal"}
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"runtime.qos.cpu_priority must be one of {sorted(allowed)}")
+        return normalized
+
+
+class RuntimeQosConfig(BaseModel):
+    idle_grace_ms: int = Field(2000, ge=0)
+    profile_active: RuntimeQosProfile = Field(
+        default_factory=lambda: RuntimeQosProfile(
+            ocr_workers=1,
+            embed_workers=0,
+            agent_workers=0,
+            vision_extract=False,
+            ui_grounding=False,
+            cpu_priority="below_normal",
+        )
+    )
+    profile_idle: RuntimeQosProfile = Field(
+        default_factory=lambda: RuntimeQosProfile(
+            ocr_workers=4,
+            embed_workers=2,
+            agent_workers=1,
+            vision_extract=True,
+            ui_grounding=True,
+            cpu_priority="normal",
+        )
+    )
+
+
+class RuntimeConfig(BaseModel):
+    auto_pause: RuntimeAutoPauseConfig = RuntimeAutoPauseConfig()
+    qos: RuntimeQosConfig = RuntimeQosConfig()
+
+
 class RetentionPolicyConfig(BaseModel):
     video_days: int = Field(3, ge=1)
     roi_days: int = Field(14, ge=1)
@@ -804,6 +876,7 @@ class AppConfig(BaseModel):
     embed: EmbedConfig = EmbedConfig()
     reranker: RerankerConfig = RerankerConfig()
     worker: WorkerConfig = WorkerConfig()
+    runtime: RuntimeConfig = RuntimeConfig()
     retention: RetentionPolicyConfig = RetentionPolicyConfig()
     storage: StorageQuotaConfig = StorageQuotaConfig()
     database: DatabaseConfig = DatabaseConfig()

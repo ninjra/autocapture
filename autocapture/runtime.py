@@ -32,6 +32,8 @@ from .storage.retention import RetentionManager
 from .tracking import HostVectorTracker
 from .worker.supervisor import WorkerSupervisor
 from .qdrant.sidecar import QdrantSidecar
+from .runtime_governor import RuntimeGovernor, RuntimeMode
+from .gpu_lease import get_global_gpu_lease
 
 
 class RetentionScheduler:
@@ -158,6 +160,7 @@ class AppRuntime:
         self._running = False
 
         self._db = DatabaseManager(config.database)
+        self._gpu_lease = get_global_gpu_lease()
         self._agent_jobs = AgentJobQueue(self._db)
         self._retrieval_embedder = EmbeddingService(config.embed)
         self._vector_index = VectorIndex(config, self._retrieval_embedder.dim)
@@ -178,6 +181,12 @@ class AppRuntime:
             track_mouse_movement=config.tracking.track_mouse_movement,
             mouse_move_sample_ms=config.tracking.mouse_move_sample_ms,
         )
+        self._runtime_governor = RuntimeGovernor(
+            config.runtime,
+            db_manager=self._db,
+            raw_input=self._raw_input,
+            gpu_lease=self._gpu_lease,
+        )
         self._orchestrator = CaptureOrchestrator(
             database=self._db,
             capture_config=config.capture,
@@ -190,6 +199,8 @@ class AppRuntime:
             ocr_backlog_check_s=1.0,
             media_store=MediaStore(config.capture, config.encryption),
             ffmpeg_config=config.ffmpeg,
+            runtime_governor=self._runtime_governor,
+            runtime_auto_pause=config.runtime.auto_pause.on_fullscreen,
         )
         self._qdrant_sidecar = QdrantSidecar(
             config, Path(config.capture.data_dir), Path(config.capture.data_dir) / "logs"
@@ -198,6 +209,7 @@ class AppRuntime:
             config=config,
             db_manager=self._db,
             vector_index=self._vector_index,
+            runtime_governor=self._runtime_governor,
         )
         self._retention = RetentionManager(
             config.storage,
@@ -219,6 +231,7 @@ class AppRuntime:
         self._promptops_runner: PromptOpsRunner | None = None
         self._promptops_scheduler: PromptOpsScheduler | None = None
         self._highlights_scheduler: HighlightsScheduler | None = None
+        self._fullscreen_paused = False
         if config.promptops.enabled:
             self._promptops_runner = PromptOpsRunner(config, self._db)
             self._promptops_scheduler = PromptOpsScheduler(
@@ -240,6 +253,8 @@ class AppRuntime:
         if self._tracker:
             self._tracker.start()
         self._orchestrator.start()
+        self._runtime_governor.subscribe(self._on_runtime_mode_change)
+        self._runtime_governor.start()
         self._workers.start()
         self._retention_scheduler.start()
         if self._enrichment_scheduler:
@@ -270,6 +285,8 @@ class AppRuntime:
             finally:
                 self._workers.flush()
 
+            self._runtime_governor.unsubscribe(self._on_runtime_mode_change)
+            self._runtime_governor.stop()
             self._metrics.stop()
             if self._tracker:
                 self._tracker.stop()
@@ -367,6 +384,61 @@ class AppRuntime:
             self._schedule_snooze_resume(snooze_until)
         if should_pause:
             self._orchestrator.pause()
+
+    def _on_runtime_mode_change(self, mode: RuntimeMode) -> None:
+        if mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
+            if not self._fullscreen_paused:
+                self._fullscreen_paused = True
+                self._orchestrator.pause()
+                self._pause_background_loops()
+            return
+        if self._fullscreen_paused:
+            self._fullscreen_paused = False
+            if not self._config.privacy.paused:
+                self._orchestrator.resume()
+            self._resume_background_loops()
+
+    def _pause_background_loops(self) -> None:
+        try:
+            self._retention_scheduler.stop()
+        except Exception:
+            pass
+        if self._enrichment_scheduler:
+            try:
+                self._enrichment_scheduler.stop()
+            except Exception:
+                pass
+        if self._promptops_scheduler:
+            try:
+                self._promptops_scheduler.stop()
+            except Exception:
+                pass
+        if self._highlights_scheduler:
+            try:
+                self._highlights_scheduler.stop()
+            except Exception:
+                pass
+
+    def _resume_background_loops(self) -> None:
+        try:
+            self._retention_scheduler.start()
+        except Exception:
+            pass
+        if self._enrichment_scheduler:
+            try:
+                self._enrichment_scheduler.start()
+            except Exception:
+                pass
+        if self._promptops_scheduler:
+            try:
+                self._promptops_scheduler.start()
+            except Exception:
+                pass
+        if self._highlights_scheduler:
+            try:
+                self._highlights_scheduler.start()
+            except Exception:
+                pass
 
     def _schedule_snooze_resume(self, until: dt.datetime) -> None:
         delay = max((until - dt.datetime.now(dt.timezone.utc)).total_seconds(), 0.0)

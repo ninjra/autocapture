@@ -22,6 +22,7 @@ from sqlalchemy import func, select
 from .privacy import PrivacyPolicy, get_screen_lock_status
 from .privacy_filter import apply_exclude_region_masks, should_skip_capture
 from ..config import CaptureConfig, FFmpegConfig, PrivacyConfig, WorkerConfig
+from ..runtime_governor import RuntimeGovernor, RuntimeMode
 from ..logging_utils import get_logger
 from ..observability.metrics import (
     captures_skipped_backpressure_total,
@@ -91,6 +92,8 @@ class CaptureOrchestrator:
         media_store: MediaStore | None = None,
         ffmpeg_config: FFmpegConfig | None = None,
         backend: object | None = None,
+        runtime_governor: RuntimeGovernor | None = None,
+        runtime_auto_pause: bool | None = None,
     ) -> None:
         self._log = get_logger("orchestrator")
         self._database = database
@@ -156,6 +159,8 @@ class CaptureOrchestrator:
         self._capture_restart_limit = 5
         self._capture_restart_backoff_s = 0.5
         self._capture_restart_max_backoff_s = 30.0
+        self._runtime = runtime_governor
+        self._runtime_auto_pause = bool(runtime_auto_pause)
 
     def start(self) -> None:
         with self._state_lock:
@@ -262,6 +267,12 @@ class CaptureOrchestrator:
         try:
             while self._running.is_set():
                 loop_start = time.monotonic()
+                if (
+                    self._runtime
+                    and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE
+                ):
+                    time.sleep(min(1.0, interval))
+                    continue
                 now_ms = int(loop_start * 1000)
                 active = (
                     (now_ms < self._raw_input.active_until_ts)
@@ -316,7 +327,11 @@ class CaptureOrchestrator:
         is_fullscreen = False
         if ctx and ctx.hwnd:
             is_fullscreen = is_fullscreen_window(ctx.hwnd)
-        if is_fullscreen and self._capture_config.hid.block_fullscreen:
+        if (
+            is_fullscreen
+            and self._capture_config.hid.block_fullscreen
+            and not self._runtime_auto_pause
+        ):
             return
         if should_skip_capture(
             paused=self._privacy.paused,
