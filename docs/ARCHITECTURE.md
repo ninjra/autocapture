@@ -18,6 +18,9 @@ Autocapture is a local-first Personal Activity Memory Engine. It captures activi
 - `autocapture/agents/` orchestrates enrichment, vision captioning, and nightly highlights.
 - Agent jobs are stored in `agent_jobs`/`agent_results` with leasing + retries.
 - Enrichment and vision outputs are augmentation-only, stored in tags + synthetic indexes.
+- `autocapture/enrichment/scheduler.py` scans recent events to enqueue missing
+  vision_extract/enrichment/thread_summary jobs and tracks backlog + at-risk metrics.
+- SQL/code artifacts are extracted deterministically and indexed for lexical + vector search.
 
 ### Retrieval + Context Pack
 - `autocapture/memory/retrieval.py` fetches event evidence from SQLite.
@@ -25,6 +28,8 @@ Autocapture is a local-first Personal Activity Memory Engine. It captures activi
   - Daily highlight snippets are attached under `aggregates`.
   - Evidence payloads include event_id, timestamps, and screenshot metadata for citations.
 - `autocapture/format/tron.py` adds TRON encode/decode for compact structured payloads.
+- `autocapture/memory/threads.py` stores deterministic activity threads and thread summaries
+  for broad/time-window retrieval.
 
 ### Providers + Routing
 - `autocapture/memory/router.py` selects providers per layer.
@@ -33,6 +38,8 @@ Autocapture is a local-first Personal Activity Memory Engine. It captures activi
   final_answer, tool_transform) with per-stage cloud opt-ins.
 - Vision extractors use `vision_extract` backend configuration with explicit cloud-image
   gating.
+- `autocapture/llm/governor.py` enforces adaptive concurrency and foreground priority across
+  interactive queries + background agents.
 
 ### Time Intent
 - `autocapture/memory/time_intent.py` deterministically parses time expressions for
@@ -50,6 +57,7 @@ Autocapture is a local-first Personal Activity Memory Engine. It captures activi
 ## Data Model
 The local SQLite DB contains:
 - `events` (activity + OCR evidence)
+- `threads`, `thread_events`, `thread_summaries` (activity threads + summaries)
 - `entities`, `entity_aliases` (alias graph)
 - `daily_aggregates` (time-series metrics)
 - `agent_jobs`, `agent_results` (agent queue + outputs)

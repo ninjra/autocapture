@@ -50,8 +50,8 @@ scheduled task is launching the orchestrator (or OCR worker) with the generic
 virtual environment interpreter directly:
 
 ```powershell
-$venv = "C:\\Path\\To\\repo\\.venv\\Scripts\\python.exe"
-nssm install Autocapture $venv "-m" "autocapture.main" --config C:/Path/To/autocapture.yml
+$venv = "<repo-root>\\.venv\\Scripts\\python.exe"
+nssm install Autocapture $venv "-m" "autocapture.main" --config "<repo-root>/autocapture.yml"
 ```
 
 You can find the correct path programmatically while inside the virtual
@@ -71,8 +71,8 @@ Starting with this release the orchestrator also refuses to start under an
 unexpected interpreter and prints a message similar to::
 
     Autocapture refused to start under unexpected interpreter.
-    Expected: D:\path\to\repo\.venv\Scripts\python.exe
-    Current:  C:\Users\you\AppData\Local\Programs\Python\Python311\python.exe
+    Expected: <repo-root>\.venv\Scripts\python.exe
+    Current:  %LOCALAPPDATA%\Programs\Python\Python311\python.exe
 
 If you see that output, adjust the service configuration and restart it so the
 preferred virtual environment interpreter is used.
