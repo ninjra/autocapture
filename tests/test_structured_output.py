@@ -4,13 +4,13 @@ import json
 
 import pytest
 
-from autocapture.agents.schemas import EventEnrichmentV1
+from autocapture.agents.schemas import EventEnrichmentV2
 from autocapture.agents.structured_output import StructuredOutputError, parse_structured_output
 
 
 def _valid_payload() -> dict:
     return {
-        "schema_version": "v1",
+        "schema_version": "v2",
         "event_id": "evt-1",
         "short_summary": "Working on project notes.",
         "what_i_was_doing": "Summarizing meeting notes.",
@@ -35,7 +35,7 @@ def _valid_payload() -> dict:
 def test_structured_output_parses_code_fence() -> None:
     payload = json.dumps(_valid_payload())
     text = f"```json\n{payload}\n```"
-    result = parse_structured_output(text, EventEnrichmentV1)
+    result = parse_structured_output(text, EventEnrichmentV2)
     assert result.event_id == "evt-1"
 
 
@@ -45,10 +45,10 @@ def test_structured_output_repairs() -> None:
     def repair(_raw: str) -> str:
         return json.dumps(_valid_payload())
 
-    result = parse_structured_output(bad, EventEnrichmentV1, repair_fn=repair)
+    result = parse_structured_output(bad, EventEnrichmentV2, repair_fn=repair)
     assert result.short_summary
 
 
 def test_structured_output_fails_without_repair() -> None:
     with pytest.raises(StructuredOutputError):
-        parse_structured_output("no json here", EventEnrichmentV1)
+        parse_structured_output("no json here", EventEnrichmentV2)
