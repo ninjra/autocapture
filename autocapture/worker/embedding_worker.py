@@ -10,9 +10,13 @@ from typing import Optional
 from sqlalchemy import select, update
 
 from ..config import AppConfig
+from ..runtime_governor import RuntimeGovernor, RuntimeMode
 from ..embeddings.service import EmbeddingService
 from ..indexing.lexical_index import LexicalIndex
 from ..indexing.vector_index import IndexUnavailable, SpanEmbeddingUpsert, VectorIndex
+from ..indexing.spans_v2 import SpanV2Upsert, SpansV2Index, SparseEmbedding
+from ..embeddings.sparse import SparseEncoder
+from ..embeddings.late import LateInteractionEncoder
 from ..logging_utils import get_logger
 from ..observability.metrics import (
     embedding_backlog,
@@ -30,6 +34,7 @@ class EmbeddingWorker:
         db_manager: DatabaseManager | None = None,
         embedder: Optional[EmbeddingService] = None,
         vector_index: VectorIndex | None = None,
+        runtime_governor: RuntimeGovernor | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
@@ -37,6 +42,22 @@ class EmbeddingWorker:
         self._embedder = embedder or EmbeddingService(config.embed)
         self._vector_index = vector_index or VectorIndex(config, self._embedder.dim)
         self._lexical_index = LexicalIndex(self._db)
+        self._runtime = runtime_governor
+        self._spans_v2: SpansV2Index | None = None
+        self._sparse_encoder: SparseEncoder | None = None
+        self._late_encoder: LateInteractionEncoder | None = None
+        if (
+            config.retrieval.use_spans_v2
+            or config.retrieval.sparse_enabled
+            or config.retrieval.late_enabled
+        ):
+            self._spans_v2 = SpansV2Index(config, self._embedder.dim)
+            if config.retrieval.sparse_enabled:
+                self._sparse_encoder = SparseEncoder(config.retrieval.sparse_model)
+            if config.retrieval.late_enabled:
+                self._late_encoder = LateInteractionEncoder(
+                    dim=int(config.qdrant.late_vector_size), max_tokens=64
+                )
         self._lease_timeout_s = config.worker.embedding_lease_ms / 1000
         self._max_attempts = config.worker.embedding_max_attempts
         self._max_task_runtime_s = config.worker.max_task_runtime_s
@@ -50,6 +71,9 @@ class EmbeddingWorker:
         while True:
             if stop_event and stop_event.is_set():
                 return
+            if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
+                time.sleep(min(poll_interval, 1.0))
+                continue
             try:
                 processed = self.process_batch()
                 backoff_s = 1.0
@@ -100,6 +124,10 @@ class EmbeddingWorker:
 
     def _process_event_embeddings(self) -> int:
         batch_size = self._config.embed.text_batch_size
+        if self._runtime:
+            profile = self._runtime.qos_profile()
+            if profile.embed_batch_size:
+                batch_size = profile.embed_batch_size
         self._recover_stale_event_embeddings()
 
         def _claim(
@@ -230,6 +258,10 @@ class EmbeddingWorker:
 
     def _process_span_embeddings(self) -> int:
         batch_size = self._config.embed.text_batch_size
+        if self._runtime:
+            profile = self._runtime.qos_profile()
+            if profile.embed_batch_size:
+                batch_size = profile.embed_batch_size
         self._recover_stale_embeddings()
         with self._db.session() as session:
             embedding_ids = (
@@ -328,6 +360,19 @@ class EmbeddingWorker:
             ticker.join(timeout=1.0)
             return 0
 
+        sparse_vectors: dict[str, SparseEmbedding] = {}
+        if self._sparse_encoder and self._config.retrieval.sparse_enabled:
+            sparse_list = self._sparse_encoder.encode([span.text for _, span, _ in span_rows])
+            for (_embedding, span, _event), sparse in zip(span_rows, sparse_list, strict=False):
+                sparse_vectors[span.span_key] = sparse
+
+        late_vectors: dict[str, list[list[float]]] = {}
+        if self._late_encoder and self._config.retrieval.late_enabled:
+            eligible = self._eligible_late_span_keys(span_rows)
+            for _embedding, span, _event in span_rows:
+                if span.span_key in eligible:
+                    late_vectors[span.span_key] = self._late_encoder.encode_text(span.text)
+
         vectors: list[list[float]] = []
         span_texts = [span.text for embedding, span, _ in span_rows if embedding.vector is None]
         if span_texts:
@@ -354,6 +399,7 @@ class EmbeddingWorker:
 
         vectors_iter = iter(vectors)
         upserts: list[SpanEmbeddingUpsert] = []
+        spans_v2_upserts: list[SpanV2Upsert] = []
 
         def _prepare(session) -> None:
             for embedding, span, event in span_rows:
@@ -390,6 +436,18 @@ class EmbeddingWorker:
                         embedding_model=self._embedder.model_name,
                     )
                 )
+                if self._spans_v2:
+                    spans_v2_upserts.append(
+                        SpanV2Upsert(
+                            capture_id=event.event_id,
+                            span_key=record.span_key,
+                            dense_vector=vector,
+                            sparse_vector=sparse_vectors.get(record.span_key),
+                            late_vectors=late_vectors.get(record.span_key),
+                            payload=_build_spans_v2_payload(event, span),
+                            embedding_model=self._embedder.model_name,
+                        )
+                    )
 
         self._db.transaction(_prepare)
 
@@ -431,6 +489,12 @@ class EmbeddingWorker:
                 stop_tick.set()
                 ticker.join(timeout=1.0)
                 return 0
+
+        if spans_v2_upserts and self._spans_v2:
+            try:
+                self._spans_v2.upsert(spans_v2_upserts)
+            except Exception as exc:
+                self._log.warning("Spans v2 indexing failed: {}", exc)
 
         def _finalize(session) -> None:
             for embedding, span, _event in span_rows:
@@ -512,6 +576,27 @@ class EmbeddingWorker:
 
         self._db.transaction(_recover)
 
+    def _eligible_late_span_keys(
+        self, span_rows: list[tuple[EmbeddingRecord, OCRSpanRecord, EventRecord]]
+    ) -> set[str]:
+        config = self._config.retrieval
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=config.late_max_days)
+        per_event: dict[str, list[OCRSpanRecord]] = {}
+        for _embedding, span, event in span_rows:
+            if event.ts_start < cutoff:
+                continue
+            if len(span.text or "") > config.late_text_max_chars:
+                continue
+            per_event.setdefault(event.event_id, []).append(span)
+        eligible: set[str] = set()
+        for _event_id, spans in per_event.items():
+            spans_sorted = sorted(
+                spans, key=lambda s: float(getattr(s, "confidence", 0.0)), reverse=True
+            )
+            for span in spans_sorted[: config.late_max_spans_per_event]:
+                eligible.add(span.span_key)
+        return eligible
+
 
 def _ensure_aware(timestamp: dt.datetime | None) -> dt.datetime | None:
     if timestamp is None:
@@ -519,3 +604,34 @@ def _ensure_aware(timestamp: dt.datetime | None) -> dt.datetime | None:
     if timestamp.tzinfo is None:
         return timestamp.replace(tzinfo=dt.timezone.utc)
     return timestamp
+
+
+def _build_spans_v2_payload(event: EventRecord, span: OCRSpanRecord) -> dict:
+    bbox_norm = _normalize_bbox(span.bbox)
+    text = (span.text or "").strip()
+    if len(text) > 300:
+        text = text[:300]
+    return {
+        "event_id": event.event_id,
+        "capture_id": event.event_id,
+        "span_id": span.span_key,
+        "ts": event.ts_start.isoformat(),
+        "app": event.app_name,
+        "window_title": event.window_title,
+        "domain": event.domain or "",
+        "bbox_norm": bbox_norm,
+        "tile_id": None,
+        "text": text,
+        "tags": event.tags or {},
+    }
+
+
+def _normalize_bbox(bbox: object) -> list[float]:
+    if isinstance(bbox, list) and bbox:
+        values = [float(val) for val in bbox if isinstance(val, (int, float))]
+        if not values:
+            return []
+        max_val = max(values)
+        if max_val <= 1.0 and len(values) >= 4:
+            return [max(0.0, min(1.0, float(val))) for val in values[:4]]
+    return []
