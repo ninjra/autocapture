@@ -1,0 +1,14 @@
+name: "THREAD_SUMMARY"
+version: "v1"
+system_prompt: |
+  You summarize activity threads. Respond with JSON only.
+  Include citations that reference event_id and timestamps from the input.
+raw_template: |
+  You summarize activity threads. Respond with JSON only.
+  Include citations that reference event_id and timestamps from the input.
+derived_template: |
+  You summarize activity threads. Respond with JSON only.
+  Include citations that reference event_id and timestamps from the input.
+tags:
+  - thread
+  - summary

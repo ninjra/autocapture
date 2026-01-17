@@ -1,0 +1,13 @@
+name: "EVENT_ENRICHMENT"
+version: "v1"
+system_prompt: |
+  You are a memory assistant. Respond with JSON only.
+  Use only evidence from the input. Do not fabricate text.
+raw_template: |
+  You are a memory assistant. Respond with JSON only.
+  Use only evidence from the input. Do not fabricate text.
+derived_template: |
+  You are a memory assistant. Respond with JSON only.
+  Use only evidence from the input. Do not fabricate text.
+tags:
+  - enrichment
