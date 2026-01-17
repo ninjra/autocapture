@@ -109,8 +109,8 @@ and observable.
 2. **Author the Compose file (`docker-compose.yml`).** Example:
    ```yaml
    services:
-     postgres:
-       image: postgres:16.3
+    postgres:
+      image: postgres:16.3-bookworm@sha256:8a32d0678dd54cd5ebe3488382d92de6c3933473465db7cab42b3fab0a65c659
        environment:
          POSTGRES_DB: autocapture
          POSTGRES_USER: autocapture
@@ -122,8 +122,8 @@ and observable.
        ports:
          - "5432:5432"
 
-     qdrant:
-       image: qdrant/qdrant:1.16.3
+    qdrant:
+      image: ghcr.io/qdrant/qdrant/qdrant:v1.16.3@sha256:a982bd080fcce0b4021ae25c447dd0851809e5b7683890de26bdade098d13027
        volumes:
          - type: bind
            source: /volume1/autocapture/qdrant
@@ -186,7 +186,7 @@ and observable.
    the NAS-backed bind mounts:
    ```yaml
      postgres:
-       image: postgres:16.3
+       image: postgres:16.3-bookworm@sha256:8a32d0678dd54cd5ebe3488382d92de6c3933473465db7cab42b3fab0a65c659
        environment:
          POSTGRES_DB: autocapture
          POSTGRES_USER: autocapture
@@ -199,7 +199,7 @@ and observable.
          - "5432:5432"
 
      qdrant:
-       image: qdrant/qdrant:1.16.3
+       image: ghcr.io/qdrant/qdrant/qdrant:v1.16.3@sha256:a982bd080fcce0b4021ae25c447dd0851809e5b7683890de26bdade098d13027
        volumes:
          - type: bind
            source: /volume1/autocapture/qdrant
