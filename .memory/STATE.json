@@ -26,6 +26,13 @@
       "value": "Answer JSON/TRON now includes evidence payload with event_id + timestamps; time-only queries return a cited timeline.",
       "why": "Guarantee citability and time-series behavior."
     },
+    "docker.docker-digest-pins": {
+      "source": "agent",
+      "ts": "2026-01-17T19:16:20Z",
+      "type": "fix",
+      "value": "Docker compose and step-by-step docs now pin Postgres 16.3-bookworm and Qdrant v1.16.3 images to immutable digests (GHCR for Qdrant).",
+      "why": "Meet digest pinning requirement and reduce image drift."
+    },
     "docker.pinned-images": {
       "source": "agent",
       "ts": "2026-01-16T14:25:00Z",
@@ -163,6 +170,6 @@
       "why": "Capture full-screen context with structured layout."
     }
   },
-  "updated_at": "2026-01-17T04:35:35Z",
+  "updated_at": "2026-01-17T19:16:20Z",
   "version": 1
 }

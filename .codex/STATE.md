@@ -102,3 +102,10 @@ Phase 2 expansion completion (2026-01-17):
 
 Remaining:
 - [ ] Create commits + PR
+
+Phase 2 digest pin update (2026-01-17):
+- docker-compose.yml now pins Postgres 16.3-bookworm and Qdrant v1.16.3 to immutable digests; step-by-step docs updated.
+- Commits created and branch pushed.
+
+Remaining:
+- [ ] Open PR (blocked on gh auth token refresh in this WSL environment).
