@@ -148,6 +148,13 @@
       "value": "Unfreeze files in frozen_manifest.json before edits and refreeze after with reasons.",
       "why": "Protect stability surfaces from churn."
     },
+    "tests.keys-portability-windows": {
+      "source": "agent",
+      "ts": "2026-01-17T19:31:17Z",
+      "type": "fix",
+      "value": "Key portability round-trip test now decrypts DPAPI-protected pseudonym/token vault keys on Windows before comparison.",
+      "why": "Windows import rewraps keys with DPAPI; test must compare decrypted bytes."
+    },
     "threads.thread-events-flush-order": {
       "source": "agent",
       "ts": "2026-01-17T04:35:35Z",
@@ -170,6 +177,6 @@
       "why": "Capture full-screen context with structured layout."
     }
   },
-  "updated_at": "2026-01-17T19:16:20Z",
+  "updated_at": "2026-01-17T19:31:17Z",
   "version": 1
 }

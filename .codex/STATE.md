@@ -109,3 +109,9 @@ Phase 2 digest pin update (2026-01-17):
 
 Remaining:
 - [ ] Open PR (blocked on gh auth token refresh in this WSL environment).
+
+CI fix (2026-01-17):
+- Windows CI failed on keys portability roundtrip; test now decrypts DPAPI-wrapped pseudonym/token vault keys on Windows before comparison.
+
+Remaining:
+- [ ] Push fix + let GitHub checks rerun.
