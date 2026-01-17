@@ -63,6 +63,11 @@ process_cpu_percent = Gauge("process_cpu_percent", "Process CPU percent")
 process_rss_mb = Gauge("process_rss_mb", "Process RSS (MB)")
 gpu_utilization = Gauge("gpu_utilization_percent", "GPU utilization percent")
 gpu_memory_used_mb = Gauge("gpu_memory_used_mb", "GPU memory used (MB)")
+runtime_mode_state = Gauge("runtime_mode_state", "Runtime mode active (1/0)", ["mode"])
+runtime_mode_changes_total = Counter("runtime_mode_changes_total", "Runtime mode changes", ["mode"])
+runtime_pause_reason_total = Counter(
+    "runtime_pause_reason_total", "Runtime pause reasons", ["reason"]
+)
 
 # Folder size stats are expensive on large trees; only refresh periodically.
 _FOLDER_SIZE_UPDATE_INTERVAL_S = 60.0

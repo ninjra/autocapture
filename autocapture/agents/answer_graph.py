@@ -95,8 +95,20 @@ class AnswerGraph:
         )
         time_only = is_time_only_expression(normalized_query)
         retrieve_query = "" if time_only else normalized_query
+        speculative = bool(
+            self._config.retrieval.speculative_enabled
+            and self._config.model_stages.draft_generate.enabled
+        )
+        draft_k = self._config.retrieval.speculative_draft_k if speculative else k
+        final_k = self._config.retrieval.speculative_final_k if speculative else k
+        retrieval_mode = "baseline" if speculative else None
         evidence, events = self._build_evidence(
-            retrieve_query, resolved_time_range, filters, k, sanitized
+            retrieve_query,
+            resolved_time_range,
+            filters,
+            draft_k,
+            sanitized,
+            retrieval_mode=retrieval_mode,
         )
         thread_aggregates = _build_thread_aggregates(
             self._thread_retrieval,
@@ -110,6 +122,7 @@ class AnswerGraph:
             not time_only
             and self._should_refine(evidence)
             and self._config.model_stages.query_refine.enabled
+            and not speculative
         ):
             refined = await self._refine_query(
                 normalized_query, evidence, routing_override=routing_override
@@ -128,8 +141,14 @@ class AnswerGraph:
             if refined_query != normalized_query or (
                 not refined_query and resolved_time_range is not None
             ):
+                retrieve_query = refined_query
                 evidence, events = self._build_evidence(
-                    refined_query, resolved_time_range, filters, k, sanitized
+                    refined_query,
+                    resolved_time_range,
+                    filters,
+                    draft_k,
+                    sanitized,
+                    retrieval_mode=retrieval_mode,
                 )
         pack = build_context_pack(
             query=query,
@@ -181,6 +200,10 @@ class AnswerGraph:
         draft_text: str | None = None
         draft_citations: list[str] = []
         draft_valid = False
+        speculative_confident = False
+        if speculative:
+            score, gap = self._evidence_confidence(evidence)
+            speculative_confident = _is_confident(score, gap, self._config.retrieval)
         if self._config.model_stages.draft_generate.enabled:
             try:
                 draft_provider, draft_decision = self._stage_router.select_llm(
@@ -203,10 +226,55 @@ class AnswerGraph:
                     temperature=draft_decision.temperature,
                 )
                 draft_citations = _extract_citations(draft_text)
-                draft_valid = _valid_citations(draft_citations, evidence)
+                draft_valid = _verify_answer(draft_text, draft_citations, evidence)
             except Exception as exc:
                 warnings.append("draft_failed")
                 self._log.warning("Draft generation failed; skipping: {}", exc)
+
+        if speculative and draft_valid and draft_text is not None and speculative_confident:
+            return _build_graph_result(
+                draft_text,
+                draft_citations,
+                context_pack_json,
+                warnings,
+                used_llm=True,
+                output_format=output_format,
+                context_pack_tron=context_pack_tron,
+                prompt_strategy=None,
+            )
+
+        if speculative:
+            evidence, events = self._build_evidence(
+                retrieve_query,
+                resolved_time_range,
+                filters,
+                final_k,
+                sanitized,
+                retrieval_mode="deep",
+            )
+            if not evidence:
+                warnings.append("no_evidence_deep")
+            pack = build_context_pack(
+                query=query,
+                evidence=evidence,
+                entity_tokens=self._entities.tokens_for_events(events),
+                routing=routing,
+                filters={
+                    "time_range": resolved_time_range,
+                    "apps": filters.get("app") if filters else None,
+                    "domains": filters.get("domain") if filters else None,
+                },
+                sanitized=sanitized,
+                aggregates=aggregates,
+            )
+            context_pack_json = pack.to_json()
+            pack_json_text = pack.to_text(extractive_only=False, format="json")
+            pack_tron_text = (
+                pack.to_text(extractive_only=False, format="tron")
+                if context_pack_format == "tron"
+                else None
+            )
+            context_pack_tron = pack_tron_text if context_pack_format == "tron" else None
 
         answer_text = ""
         citations: list[str] = []
@@ -235,7 +303,7 @@ class AnswerGraph:
             )
             prompt_strategy_payload = _prompt_strategy_payload(final_provider)
             citations = _extract_citations(answer_text)
-            final_valid = _valid_citations(citations, evidence)
+            final_valid = _verify_answer(answer_text, citations, evidence)
         except Exception as exc:
             warnings.append("final_failed")
             self._log.warning("Final answer failed; falling back: {}", exc)
@@ -252,19 +320,6 @@ class AnswerGraph:
             citations = compressed.citations
             used_llm = False
 
-        if used_llm:
-            verifier = RulesVerifier()
-            verifier.verify(
-                [
-                    Claim(
-                        text=answer_text,
-                        evidence_ids=citations,
-                        entity_tokens=[],
-                    )
-                ],
-                {item.evidence_id for item in evidence},
-                set(),
-            )
         return _build_graph_result(
             answer_text,
             citations,
@@ -283,13 +338,16 @@ class AnswerGraph:
         filters: dict[str, list[str]] | None,
         k: int,
         sanitized: bool,
+        retrieval_mode: str | None = None,
     ):
         retrieve_filters = None
         if filters:
             retrieve_filters = RetrieveFilters(
                 apps=filters.get("app"), domains=filters.get("domain")
             )
-        results = self._retrieval.retrieve(query, time_range, retrieve_filters, limit=k)
+        results = self._retrieval.retrieve(
+            query, time_range, retrieve_filters, limit=k, mode=retrieval_mode
+        )
         if not results:
             with self._retrieval._db.session() as session:  # type: ignore[attr-defined]
                 stmt = select(EventRecord).where(EventRecord.ocr_text.ilike(f"%{query}%"))
@@ -331,6 +389,17 @@ class AnswerGraph:
                     text=snippet,
                     screenshot_path=event.screenshot_path,
                     screenshot_hash=event.screenshot_hash,
+                    retrieval={
+                        "engine": getattr(result, "engine", "hybrid"),
+                        "rank": getattr(result, "rank", idx),
+                        "rank_gap": getattr(result, "rank_gap", 0.0),
+                        "lexical_score": getattr(result, "lexical_score", 0.0),
+                        "vector_score": getattr(result, "vector_score", 0.0),
+                        "sparse_score": getattr(result, "sparse_score", 0.0),
+                        "late_score": getattr(result, "late_score", 0.0),
+                        "matched_spans": getattr(result, "matched_span_keys", []),
+                        "ts_start": event.ts_start.isoformat(),
+                    },
                 )
             )
         return evidence, events
@@ -411,11 +480,20 @@ class AnswerGraph:
 
         return ProviderRoutingConfig(**routing)
 
+    def _evidence_confidence(self, evidence: list[EvidenceItem]) -> tuple[float, float]:
+        scores = [item.score for item in evidence if isinstance(item.score, (int, float))]
+        if not scores:
+            return 0.0, 0.0
+        scores.sort(reverse=True)
+        top = scores[0]
+        second = scores[1] if len(scores) > 1 else 0.0
+        return top, max(0.0, top - second)
+
 
 def _extract_citations(answer_text: str) -> list[str]:
     import re
 
-    return re.findall(r"E\\d+", answer_text or "")
+    return re.findall(r"E\d+", answer_text or "")
 
 
 def _valid_citations(citations: list[str], evidence: list) -> bool:
@@ -423,6 +501,28 @@ def _valid_citations(citations: list[str], evidence: list) -> bool:
         return False
     evidence_ids = {item.evidence_id for item in evidence}
     return all(citation in evidence_ids for citation in citations)
+
+
+def _verify_answer(answer_text: str, citations: list[str], evidence: list[EvidenceItem]) -> bool:
+    if not _valid_citations(citations, evidence):
+        return False
+    verifier = RulesVerifier()
+    errors = verifier.verify(
+        [
+            Claim(
+                text=answer_text,
+                evidence_ids=citations,
+                entity_tokens=[],
+            )
+        ],
+        {item.evidence_id for item in evidence},
+        set(),
+    )
+    return not errors
+
+
+def _is_confident(score: float, gap: float, config) -> bool:
+    return score >= config.fusion_confidence_min and gap >= config.fusion_rank_gap_min
 
 
 def _build_draft_query(query: str) -> str:

@@ -6,6 +6,7 @@ from typing import Iterable
 
 from ..config import EmbedConfig, is_dev_mode
 from ..logging_utils import get_logger
+from ..gpu_lease import get_global_gpu_lease
 
 
 class EmbeddingService:
@@ -15,7 +16,11 @@ class EmbeddingService:
         self._backend = None
         self._dim = None
         self._model_name = config.text_model
+        self._lease_key = f"embed:{id(self)}"
+        get_global_gpu_lease().register_release_hook(self._lease_key, self._on_release)
+        self._init_backend()
 
+    def _init_backend(self) -> None:
         if self._model_name == "local-test":
             self._backend = "local-test"
             self._dim = 16
@@ -62,6 +67,8 @@ class EmbeddingService:
         if not text_list:
             return []
         if self._backend is None:
+            self._init_backend()
+        if self._backend is None:
             raise RuntimeError("Embedding backend not initialized")
 
         if self._backend in {"local-test", "dev-fallback"}:
@@ -81,6 +88,15 @@ class EmbeddingService:
         )
         return [vec.tolist() for vec in vectors]
 
+    def close(self) -> None:
+        if self._backend and self._backend not in {"local-test", "dev-fallback"}:
+            _try_empty_cuda_cache()
+        self._backend = None
+
+    def _on_release(self, reason: str) -> None:
+        _ = reason
+        self.close()
+
 
 def _hash_embedding(text: str, dim: int) -> list[float]:
     import hashlib
@@ -90,3 +106,17 @@ def _hash_embedding(text: str, dim: int) -> list[float]:
     if len(values) < dim:
         values.extend([0.0] * (dim - len(values)))
     return values
+
+
+def _try_empty_cuda_cache() -> None:
+    import importlib.util
+
+    if importlib.util.find_spec("torch") is None:
+        return
+    try:
+        import torch  # type: ignore
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        return

@@ -12,6 +12,7 @@ import json
 import time
 
 from ..logging_utils import get_logger
+from ..gpu_lease import get_global_gpu_lease
 from .prompt_strategy import (
     PromptStrategy,
     PromptStrategyMetadata,
@@ -98,6 +99,8 @@ class OllamaProvider(LLMProvider):
         self._governor = governor
         self.last_prompt_metadata: PromptStrategyMetadata | None = None
         self.last_prompt_metadata_stage1: PromptStrategyMetadata | None = None
+        self._lease_key = f"ollama:{self._base_url}:{self._model}"
+        get_global_gpu_lease().register_release_hook(self._lease_key, self._on_release)
 
     async def generate_answer(
         self,
@@ -268,6 +271,18 @@ class OllamaProvider(LLMProvider):
         except Exception as exc:
             self._breaker.record_failure(exc)
             raise
+
+    def unload(self) -> None:
+        """Best-effort unload for local Ollama models."""
+        payload = {"model": self._model, "prompt": "", "stream": False, "keep_alive": 0}
+        try:
+            httpx.post(f"{self._base_url}/api/generate", json=payload, timeout=2.0)
+        except Exception as exc:  # pragma: no cover - best-effort
+            self._log.debug("Ollama unload failed: {}", exc)
+
+    def _on_release(self, reason: str) -> None:
+        _ = reason
+        self.unload()
 
 
 class OpenAIProvider(LLMProvider):

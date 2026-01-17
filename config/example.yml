@@ -247,6 +247,15 @@ vision_extract:
     base_url: null
     api_key: null
     allow_cloud: false
+  ui_grounding:
+    enabled: false
+    backend: "qwen_vl_ui_prompt"
+    vlm:
+      provider: "ollama"
+      model: "qwen2.5-vl:7b-instruct"
+      base_url: "http://127.0.0.1:11434"
+      api_key: null
+      allow_cloud: false
 embed:
   text_model: "BAAI/bge-base-en-v1.5"
   image_model: "google/siglip2-so400m-patch14-384"
@@ -256,9 +265,34 @@ embed:
   use_half_precision: true
 reranker:
   enabled: true
-  model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+  model: "BAAI/bge-reranker-v2-m3"
   device: "auto"
   top_k: 100
+  batch_size_active: 8
+  batch_size_idle: 32
+  disable_in_active: false
+  disable_in_fullscreen: true
+  force_cpu_in_active: true
+retrieval:
+  use_spans_v2: false
+  sparse_enabled: false
+  late_enabled: false
+  fusion_enabled: false
+  fusion_rewrites: 4
+  fusion_rrf_k: 60
+  fusion_confidence_min: 0.65
+  fusion_rank_gap_min: 0.1
+  sparse_model: "hash-splade"
+  late_max_days: 30
+  late_max_spans_per_event: 128
+  late_text_max_chars: 200
+  late_candidate_k: 100
+  late_rerank_k: 50
+  rewrite_max_chars: 200
+  speculative_enabled: false
+  speculative_draft_k: 6
+  speculative_final_k: 12
+  traces_enabled: false
 worker:
   # data_dir: "%LOCALAPPDATA%/Autocapture/data"       # optional override
   lease_ms: 60000
@@ -273,6 +307,28 @@ worker:
   embedding_max_attempts: 5
   watchdog_interval_s: 5.0
   max_task_runtime_s: 900.0
+runtime:
+  auto_pause:
+    on_fullscreen: true
+    mode: "hard"
+    release_gpu: true
+    poll_hz: 2
+  qos:
+    idle_grace_ms: 2000
+    profile_active:
+      ocr_workers: 1
+      embed_workers: 0
+      agent_workers: 0
+      vision_extract: false
+      ui_grounding: false
+      cpu_priority: "below_normal"
+    profile_idle:
+      ocr_workers: 4
+      embed_workers: 2
+      agent_workers: 1
+      vision_extract: true
+      ui_grounding: true
+      cpu_priority: "normal"
 retention:
   video_days: 3
   roi_days: 7
@@ -299,8 +355,10 @@ qdrant:
   # binary_path: "C:/Path/To/qdrant.exe"  # optional override
   text_collection: "text_spans"
   image_collection: "image_tiles"
+  spans_v2_collection: "spans_v2"
   text_vector_size: 768
   image_vector_size: 768
+  late_vector_size: 128
   distance: "Cosine"
   hnsw_ef_construct: 128
   hnsw_m: 16

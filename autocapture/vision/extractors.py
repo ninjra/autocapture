@@ -12,6 +12,7 @@ import numpy as np
 
 from ..agents.structured_output import extract_json_payload
 from ..config import AppConfig, VisionBackendConfig, is_loopback_host
+from ..runtime_governor import RuntimeGovernor
 from ..image_utils import ensure_rgb
 from ..logging_utils import get_logger
 from ..llm.prompt_strategy import PromptStrategySettings
@@ -389,18 +390,25 @@ def _build_tags(
 
 
 class ScreenExtractorRouter:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self, config: AppConfig, *, runtime_governor: RuntimeGovernor | None = None
+    ) -> None:
         self._config = config
         self._vision = config.vision_extract
         self._log = get_logger("vision.router")
         self._vlm: VLMExtractor | None = None
         self._rapid: RapidOCRScreenExtractor | None = None
         self._deepseek: DeepSeekOCRExtractor | None = None
+        self._runtime = runtime_governor
 
-    def extract(self, image: np.ndarray) -> ExtractionResult:
+    def extract(self, image: np.ndarray, *, allow_vlm: bool | None = None) -> ExtractionResult:
         if self._config.routing.ocr == "disabled":
             return _disabled_result("routing_disabled")
         engine = (self._vision.engine or "").lower()
+        if allow_vlm is None and self._runtime:
+            allow_vlm = self._runtime.allow_vision_extract()
+        if allow_vlm is False and engine in {"vlm", "qwen-vl", "deepseek-ocr", "deepseek"}:
+            engine = "rapidocr-onnxruntime"
         if engine in {"disabled", "off"}:
             return _disabled_result("engine_disabled")
         try:

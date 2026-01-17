@@ -297,6 +297,32 @@ class PromptOpsRunRecord(Base):
     status: Mapped[str] = mapped_column(String(32), default="pending")
 
 
+class RetrievalTraceRecord(Base):
+    __tablename__ = "retrieval_traces"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    query_text: Mapped[str] = mapped_column(Text)
+    rewrites_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    fused_results_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class RuntimeStateRecord(Base):
+    __tablename__ = "runtime_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    current_mode: Mapped[str] = mapped_column(String(32), default="ACTIVE_INTERACTIVE")
+    pause_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    since_ts: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    last_fullscreen_hwnd: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_fullscreen_process: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    last_fullscreen_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
 class CaptureRecord(Base):
     __tablename__ = "captures"
     __table_args__ = (

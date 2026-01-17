@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from ..agents import AGENT_JOB_ENRICH_EVENT
 from ..agents.jobs import AgentJobQueue
 from ..config import AppConfig, OCRConfig
+from ..runtime_governor import RuntimeGovernor, RuntimeMode
 from ..image_utils import ensure_rgb, hash_rgb_image
 from ..indexing.lexical_index import LexicalIndex
 from ..logging_utils import get_logger
@@ -26,6 +27,8 @@ from ..observability.metrics import ocr_backlog, ocr_latency_ms, worker_errors_t
 from ..storage.database import DatabaseManager
 from ..storage.models import CaptureRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
 from ..vision.extractors import ScreenExtractorRouter
+from ..vision.layout import build_layout
+from ..vision.ui_grounding import UIGroundingRouter
 from ..vision.types import ExtractionResult, VISION_SCHEMA_VERSION, build_ocr_payload
 from ..enrichment.sql_artifacts import SqlArtifacts, extract_sql_artifacts
 
@@ -85,10 +88,12 @@ class EventIngestWorker:
         config: AppConfig,
         db_manager: DatabaseManager | None = None,
         ocr_processor: Optional[object] = None,
+        runtime_governor: RuntimeGovernor | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.event_ingest")
+        self._runtime = runtime_governor
         self._lexical = LexicalIndex(self._db)
         self._media_store = MediaStore(config.capture, config.encryption)
         self._agent_jobs = AgentJobQueue(self._db)
@@ -96,7 +101,7 @@ class EventIngestWorker:
         self._max_attempts = config.worker.ocr_max_attempts
         self._max_task_runtime_s = config.worker.max_task_runtime_s
         if ocr_processor is None:
-            self._extractor = ScreenExtractorRouter(config)
+            self._extractor = ScreenExtractorRouter(config, runtime_governor=runtime_governor)
         else:
             if hasattr(ocr_processor, "extract"):
                 self._extractor = ocr_processor
@@ -104,12 +109,19 @@ class EventIngestWorker:
                 self._extractor = LegacyOCRAdapter(ocr_processor)
             else:
                 raise ValueError("ocr_processor must implement extract() or run()")
+        self._ui_grounding = UIGroundingRouter(config, runtime_governor=runtime_governor)
 
     def process_batch(self, limit: Optional[int] = None) -> int:
+        if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
+            return 0
         processed = 0
         self._recover_stale_captures()
         if limit is None:
             limit = self._config.ocr.batch_size
+            if self._runtime:
+                profile = self._runtime.qos_profile()
+                if profile.ocr_batch_size:
+                    limit = profile.ocr_batch_size
         with self._db.session() as session:
             capture_ids = (
                 session.execute(
@@ -148,6 +160,9 @@ class EventIngestWorker:
         while True:
             if stop_event and stop_event.is_set():
                 return
+            if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
+                time.sleep(min(poll_interval, 1.0))
+                continue
             try:
                 processed = self.process_batch()
                 backoff_s = 1.0
@@ -232,6 +247,12 @@ class EventIngestWorker:
             result = self._extractor.extract(image)
             ocr_text = result.text
             ocr_spans = result.spans
+            layout_blocks, layout_md = build_layout(ocr_spans)
+            tags = _merge_tags(
+                result.tags or {}, {"layout_blocks": layout_blocks, "layout_md": layout_md}
+            )
+            ui_result = self._ui_grounding.extract(image)
+            tags = _merge_tags(tags, {"ui_elements": ui_result.tags})
             sql_artifacts = extract_sql_artifacts(
                 ocr_text,
                 (result.tags or {}).get("vision_extract", {}).get("regions", []),
@@ -242,7 +263,7 @@ class EventIngestWorker:
                 ocr_spans,
                 event_existing=bool(existing_event),
                 screenshot_hash=hash_rgb_image(image),
-                tags=result.tags,
+                tags=tags,
                 sql_artifacts=sql_artifacts,
             )
             event = self._load_event(capture_id)

@@ -33,6 +33,7 @@ class EvidenceItem:
     text: str
     screenshot_path: str | None = None
     screenshot_hash: str | None = None
+    retrieval: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,7 @@ class ContextPack:
                         "score": item.score,
                         "screenshot_path": item.screenshot_path,
                         "screenshot_hash": item.screenshot_hash,
+                        "retrieval": item.retrieval or {},
                         "spans": [
                             {
                                 "span_id": span.span_id,

@@ -9,6 +9,7 @@ import numpy as np
 
 from ..config import OCRConfig
 from ..logging_utils import get_logger
+from ..gpu_lease import get_global_gpu_lease
 
 
 def available_onnx_providers() -> list[str]:
@@ -42,14 +43,20 @@ class RapidOCRExtractor:
     def __init__(self, config: OCRConfig) -> None:
         if importlib.util.find_spec("rapidocr_onnxruntime") is None:
             raise RuntimeError("rapidocr_onnxruntime is required for RapidOCR extraction")
-        from rapidocr_onnxruntime import RapidOCR
-
         self._config = config
         self._log = get_logger("ocr")
+        self._engine: object | None = None
+        self._lease_key = f"ocr:{id(self)}"
+        get_global_gpu_lease().register_release_hook(self._lease_key, self._on_release)
+        self._init_engine()
+
+    def _init_engine(self) -> None:
+        from rapidocr_onnxruntime import RapidOCR
+
         providers = available_onnx_providers()
         self._log.info("ONNX Runtime providers available: {}", providers or "none")
-        selected, use_cuda = select_onnx_provider(config, providers)
-        if config.device.lower() == "cuda" and selected != "CUDAExecutionProvider":
+        selected, use_cuda = select_onnx_provider(self._config, providers)
+        if self._config.device.lower() == "cuda" and selected != "CUDAExecutionProvider":
             self._log.warning(
                 "OCR device=cuda but CUDAExecutionProvider unavailable; falling back to CPU. "
                 "Install onnxruntime-gpu and CUDA/cuDNN."
@@ -67,6 +74,8 @@ class RapidOCRExtractor:
         self._engine(sample)
 
     def extract(self, image: np.ndarray) -> list[tuple[str, float, list[int]]]:
+        if self._engine is None:
+            self._init_engine()
         bgr = image[:, :, ::-1]
         results, _ = self._engine(bgr)
         spans = []
@@ -75,3 +84,10 @@ class RapidOCRExtractor:
             flattened = [int(coord) for point in box for coord in point]
             spans.append((text, float(confidence), flattened))
         return spans
+
+    def close(self) -> None:
+        self._engine = None
+
+    def _on_release(self, reason: str) -> None:
+        _ = reason
+        self.close()

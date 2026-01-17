@@ -55,6 +55,7 @@ from ..storage.models import (
     ThreadSummaryRecord,
 )
 from ..media.store import MediaStore
+from ..runtime_governor import RuntimeGovernor, RuntimeMode
 from ..vision.extractors import ScreenExtractorRouter
 from ..enrichment.sql_artifacts import extract_sql_artifacts
 
@@ -68,6 +69,7 @@ class AgentJobWorker:
         embedder: EmbeddingService | None = None,
         vector_index: VectorIndex | None = None,
         llm_client: AgentLLMClient | None = None,
+        runtime_governor: RuntimeGovernor | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
@@ -75,12 +77,13 @@ class AgentJobWorker:
         self._queue = AgentJobQueue(self._db)
         self._embedder = embedder or EmbeddingService(config.embed)
         self._vector_index = vector_index or VectorIndex(config, self._embedder.dim)
+        self._runtime = runtime_governor
         self._lexical = LexicalIndex(self._db)
         self._thread_lexical = ThreadLexicalIndex(self._db)
         self._llm = llm_client or AgentLLMClient(config)
         self._prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
         self._media_store = MediaStore(config.capture, config.encryption)
-        self._screen_extractor = ScreenExtractorRouter(config)
+        self._screen_extractor = ScreenExtractorRouter(config, runtime_governor=runtime_governor)
         secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
         self._entities = EntityResolver(
             self._db,
@@ -96,6 +99,9 @@ class AgentJobWorker:
         while True:
             if stop_event and stop_event.is_set():
                 return
+            if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
+                time.sleep(min(poll_interval, 1.0))
+                continue
             try:
                 processed = self.process_batch()
                 backoff_s = 1.0

@@ -220,6 +220,24 @@ class VisionBackendConfig(BaseModel):
     allow_cloud: bool = Field(False, description="Allow cloud vision calls for this backend.")
 
 
+class UIGroundingConfig(BaseModel):
+    enabled: bool = Field(False, description="Enable UI grounding extraction.")
+    backend: str = Field(
+        "qwen_vl_ui_prompt",
+        description="UI grounding backend (qwen_vl_ui_prompt|ui_venus).",
+    )
+    vlm: VisionBackendConfig = VisionBackendConfig()
+
+    @field_validator("backend")
+    @classmethod
+    def validate_backend(cls, value: str) -> str:
+        allowed = {"qwen_vl_ui_prompt", "ui_venus"}
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"ui_grounding.backend must be one of {sorted(allowed)}")
+        return normalized
+
+
 class VisionExtractConfig(BaseModel):
     engine: str = Field("vlm", description="vlm|rapidocr|deepseek-ocr|disabled")
     fallback_engine: str = Field("rapidocr-onnxruntime")
@@ -236,6 +254,7 @@ class VisionExtractConfig(BaseModel):
             api_key=None,
         )
     )
+    ui_grounding: UIGroundingConfig = UIGroundingConfig()
 
 
 class EmbedConfig(BaseModel):
@@ -255,9 +274,14 @@ class EmbedConfig(BaseModel):
 
 class RerankerConfig(BaseModel):
     enabled: bool = True
-    model: str = Field("cross-encoder/ms-marco-MiniLM-L-6-v2")
+    model: str = Field("BAAI/bge-reranker-v2-m3")
     device: str = Field("auto", description="auto|cuda|cpu; auto prefers CUDA when available")
     top_k: int = Field(100, ge=1)
+    batch_size_active: int = Field(8, ge=1)
+    batch_size_idle: int = Field(32, ge=1)
+    disable_in_active: bool = Field(False)
+    disable_in_fullscreen: bool = Field(True)
+    force_cpu_in_active: bool = Field(True)
 
 
 class WorkerConfig(BaseModel):
@@ -295,6 +319,78 @@ class WorkerConfig(BaseModel):
     max_task_runtime_s: float = Field(
         900.0, gt=0.0, description="Max heartbeat duration before lease reclaim."
     )
+
+
+class RuntimeAutoPauseConfig(BaseModel):
+    on_fullscreen: bool = Field(True, description="Pause pipeline when fullscreen detected.")
+    mode: str = Field(
+        "hard",
+        description="Pause mode: hard (pause all workers + capture) or soft (capture only).",
+    )
+    release_gpu: bool = Field(
+        True,
+        description="Release GPU allocations when entering fullscreen hard pause.",
+    )
+    poll_hz: float = Field(2.0, ge=0.1, description="Fullscreen monitor polling rate (Hz).")
+
+    @field_validator("mode")
+    @classmethod
+    def validate_mode(cls, value: str) -> str:
+        allowed = {"hard", "soft"}
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"runtime.auto_pause.mode must be one of {sorted(allowed)}")
+        return normalized
+
+
+class RuntimeQosProfile(BaseModel):
+    ocr_workers: int = Field(1, ge=0)
+    embed_workers: int = Field(0, ge=0)
+    agent_workers: int = Field(0, ge=0)
+    vision_extract: bool = Field(False)
+    ui_grounding: bool = Field(False)
+    cpu_priority: str = Field("below_normal", description="below_normal|normal")
+    ocr_batch_size: int | None = Field(None, ge=1, description="Override OCR batch size.")
+    embed_batch_size: int | None = Field(None, ge=1, description="Override embedding batch size.")
+    reranker_batch_size: int | None = Field(None, ge=1, description="Override reranker batch size.")
+
+    @field_validator("cpu_priority")
+    @classmethod
+    def validate_cpu_priority(cls, value: str) -> str:
+        allowed = {"below_normal", "normal"}
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"runtime.qos.cpu_priority must be one of {sorted(allowed)}")
+        return normalized
+
+
+class RuntimeQosConfig(BaseModel):
+    idle_grace_ms: int = Field(2000, ge=0)
+    profile_active: RuntimeQosProfile = Field(
+        default_factory=lambda: RuntimeQosProfile(
+            ocr_workers=1,
+            embed_workers=0,
+            agent_workers=0,
+            vision_extract=False,
+            ui_grounding=False,
+            cpu_priority="below_normal",
+        )
+    )
+    profile_idle: RuntimeQosProfile = Field(
+        default_factory=lambda: RuntimeQosProfile(
+            ocr_workers=4,
+            embed_workers=2,
+            agent_workers=1,
+            vision_extract=True,
+            ui_grounding=True,
+            cpu_priority="normal",
+        )
+    )
+
+
+class RuntimeConfig(BaseModel):
+    auto_pause: RuntimeAutoPauseConfig = RuntimeAutoPauseConfig()
+    qos: RuntimeQosConfig = RuntimeQosConfig()
 
 
 class RetentionPolicyConfig(BaseModel):
@@ -368,8 +464,10 @@ class QdrantConfig(BaseModel):
     )
     text_collection: str = Field("text_spans")
     image_collection: str = Field("image_tiles")
+    spans_v2_collection: str = Field("spans_v2")
     text_vector_size: int = Field(768, ge=64)
     image_vector_size: int = Field(768, ge=64)
+    late_vector_size: int = Field(128, ge=32)
     distance: str = Field("Cosine")
     hnsw_ef_construct: int = Field(128, ge=1)
     hnsw_m: int = Field(16, ge=1)
@@ -536,6 +634,28 @@ class SecurityConfig(BaseModel):
         default_factory=_default_security_provider,
         description="windows_hello|cred_ui|test|disabled",
     )
+
+
+class RetrievalConfig(BaseModel):
+    use_spans_v2: bool = Field(False, description="Use spans_v2 Qdrant collection.")
+    sparse_enabled: bool = Field(False, description="Enable learned sparse retrieval.")
+    late_enabled: bool = Field(False, description="Enable late-interaction reranking.")
+    fusion_enabled: bool = Field(False, description="Enable multi-query fusion (RRF).")
+    fusion_rewrites: int = Field(4, ge=1, le=8)
+    fusion_rrf_k: int = Field(60, ge=1)
+    fusion_confidence_min: float = Field(0.65, ge=0.0, le=1.0)
+    fusion_rank_gap_min: float = Field(0.1, ge=0.0, le=1.0)
+    sparse_model: str = Field("hash-splade")
+    late_max_days: int = Field(30, ge=1)
+    late_max_spans_per_event: int = Field(128, ge=1)
+    late_text_max_chars: int = Field(200, ge=1)
+    late_candidate_k: int = Field(100, ge=1)
+    late_rerank_k: int = Field(50, ge=1)
+    rewrite_max_chars: int = Field(200, ge=10)
+    speculative_enabled: bool = Field(False, description="Enable speculative draft/verify.")
+    speculative_draft_k: int = Field(6, ge=1)
+    speculative_final_k: int = Field(12, ge=1)
+    traces_enabled: bool = Field(False, description="Persist retrieval traces.")
 
 
 class PresetConfig(BaseModel):
@@ -804,6 +924,7 @@ class AppConfig(BaseModel):
     embed: EmbedConfig = EmbedConfig()
     reranker: RerankerConfig = RerankerConfig()
     worker: WorkerConfig = WorkerConfig()
+    runtime: RuntimeConfig = RuntimeConfig()
     retention: RetentionPolicyConfig = RetentionPolicyConfig()
     storage: StorageQuotaConfig = StorageQuotaConfig()
     database: DatabaseConfig = DatabaseConfig()
@@ -821,6 +942,7 @@ class AppConfig(BaseModel):
     output: OutputConfig = OutputConfig()
     time: TimeConfig = TimeConfig()
     security: SecurityConfig = SecurityConfig()
+    retrieval: RetrievalConfig = RetrievalConfig()
     presets: PresetConfig = PresetConfig()
     promptops: PromptOpsConfig = PromptOpsConfig()
     agents: AgentConfig = AgentConfig()

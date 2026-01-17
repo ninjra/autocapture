@@ -43,8 +43,17 @@ and observable.
    * `capture.staging_dir` / `capture.data_dir` → optional overrides (default to
      `%LOCALAPPDATA%/Autocapture/*` on Windows).
    * `capture.hid.min_interval_ms` / `fps_soft_cap` → tune cadence.
-   * `capture.hid.block_fullscreen` → leave `true` so fullscreen apps are
-     ignored automatically.
+   * `runtime.auto_pause.on_fullscreen` → leave `true` to pause capture +
+     background workers when any fullscreen window is detected.
+   * `runtime.auto_pause.mode` → keep `hard` to pause all workers and release GPU
+     allocations during fullscreen; `release_gpu` controls unload behavior.
+   * `capture.hid.block_fullscreen` → only applies when runtime auto-pause is
+     disabled or in soft mode (capture-only); otherwise it is overridden.
+   * `runtime.qos.profile_active` / `runtime.qos.profile_idle` → adjust worker
+     counts, vision extraction, UI grounding, and CPU priority for active vs idle.
+   * `retrieval.use_spans_v2`, `retrieval.sparse_enabled`, `retrieval.late_enabled`,
+     `retrieval.fusion_enabled`, `retrieval.speculative_enabled`,
+     `retrieval.traces_enabled` → enable advanced retrieval modes as needed.
    * `ocr`, `embed`, `database`, `qdrant`, `encryption`, and
      `observability` URLs → point at the services you intend to run (local or NAS).
      Local mode auto-starts a bundled Qdrant sidecar when `qdrant.url` is localhost.
@@ -62,16 +71,16 @@ and observable.
    `Ctrl+C` when done testing.
 6. **Review logs and metrics locally.** The orchestrator writes structured logs
    under the `--log-dir` you provided. You can also hit the Prometheus endpoint
-   (default `http://localhost:9005/metrics`) with:
+   (default `localhost:9005/metrics`) with:
    ```powershell
    Invoke-WebRequest http://localhost:9005/metrics | Select-Object -ExpandProperty Content
    ```
    Confirm counters like `captures_taken_total` increment while you
    interact with the workstation.
 7. **Optional – Install as a Windows Service.** Once satisfied, register the
-   orchestrator with [NSSM](https://nssm.cc/) using the interpreter inside your
-   virtual environment so child processes always inherit the same Python
-   runtime:
+   orchestrator with a Windows service wrapper (such as NSSM) using the
+   interpreter inside your virtual environment so child processes always inherit
+   the same Python runtime:
    ```powershell
    nssm install Autocapture "C:\Path\To\repo\.venv\Scripts\python.exe" "-m" "autocapture.main" "--config" "C:/Path/To/autocapture.yml" "--log-dir" "C:/Path/To/logs"
    nssm set Autocapture AppDirectory "C:/Path/To/repo"
@@ -172,10 +181,10 @@ and observable.
    ```
    Confirm container health with `docker compose ps` and review logs if any
    service fails.
-5. **Import dashboards and alerts.** Visit `http://<grafana-host>:3000`, log into
-   Grafana, add Prometheus (`http://prometheus:9090`) as a data source, and
-   import `docs/dashboard.json`. Extend `prometheus.yml` with alert rules for OCR
-   backlog, storage usage, and service heartbeats as needed.
+5. **Import dashboards and alerts.** Open Grafana on port 3000, add Prometheus
+   on port 9090 as a data source, and import `docs/dashboard.json`. Extend
+   `prometheus.yml` with alert rules for OCR backlog, storage usage, and service
+   heartbeats as needed.
 
 ---
 

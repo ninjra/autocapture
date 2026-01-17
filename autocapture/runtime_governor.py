@@ -1,0 +1,227 @@
+"""Runtime governor for fullscreen pause and QoS mode selection."""
+
+from __future__ import annotations
+
+import datetime as dt
+import threading
+import time
+from dataclasses import dataclass
+from enum import Enum
+from typing import Callable
+
+from .config import RuntimeConfig, RuntimeQosProfile
+from .logging_utils import get_logger
+from .observability.metrics import (
+    runtime_mode_changes_total,
+    runtime_mode_state,
+    runtime_pause_reason_total,
+)
+from .storage.database import DatabaseManager
+from .storage.models import RuntimeStateRecord
+from .tracking.win_foreground import get_foreground_context, is_fullscreen_window
+from .gpu_lease import GpuLease, get_global_gpu_lease
+
+
+class RuntimeMode(str, Enum):
+    FULLSCREEN_HARD_PAUSE = "FULLSCREEN_HARD_PAUSE"
+    ACTIVE_INTERACTIVE = "ACTIVE_INTERACTIVE"
+    IDLE_DRAIN = "IDLE_DRAIN"
+
+
+@dataclass(frozen=True)
+class FullscreenState:
+    is_fullscreen: bool
+    hwnd: int | None
+    process_name: str | None
+    window_title: str | None
+
+
+class WindowMonitor:
+    """Poll foreground window state to detect fullscreen usage."""
+
+    def __init__(self) -> None:
+        self._last_state = FullscreenState(False, None, None, None)
+
+    def sample(self) -> FullscreenState:
+        ctx = get_foreground_context()
+        if not ctx or not ctx.hwnd:
+            self._last_state = FullscreenState(False, None, None, None)
+            return self._last_state
+        fullscreen = bool(is_fullscreen_window(ctx.hwnd))
+        state = FullscreenState(
+            fullscreen,
+            ctx.hwnd,
+            ctx.process_name,
+            ctx.window_title,
+        )
+        self._last_state = state
+        return state
+
+    @property
+    def last_state(self) -> FullscreenState:
+        return self._last_state
+
+
+class RuntimeGovernor:
+    """Single source of truth for runtime mode, worker QoS, and fullscreen pause."""
+
+    def __init__(
+        self,
+        config: RuntimeConfig,
+        *,
+        db_manager: DatabaseManager | None = None,
+        raw_input: object | None = None,
+        window_monitor: WindowMonitor | None = None,
+        gpu_lease: GpuLease | None = None,
+    ) -> None:
+        self._config = config
+        self._db = db_manager
+        self._raw_input = raw_input
+        self._monitor = window_monitor or WindowMonitor()
+        self._gpu_lease = gpu_lease or get_global_gpu_lease()
+        self._log = get_logger("runtime.governor")
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._callbacks: list[Callable[[RuntimeMode], None]] = []
+        self._current_mode = RuntimeMode.ACTIVE_INTERACTIVE
+        self._since_ts = dt.datetime.now(dt.timezone.utc)
+        self._pause_reason: str | None = None
+        self._last_fullscreen: FullscreenState = FullscreenState(False, None, None, None)
+
+    def start(self) -> None:
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+        self._log.info("Runtime governor started")
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+        self._log.info("Runtime governor stopped")
+
+    def subscribe(self, callback: Callable[[RuntimeMode], None]) -> None:
+        with self._lock:
+            self._callbacks.append(callback)
+
+    def unsubscribe(self, callback: Callable[[RuntimeMode], None]) -> None:
+        with self._lock:
+            self._callbacks = [cb for cb in self._callbacks if cb is not callback]
+
+    @property
+    def current_mode(self) -> RuntimeMode:
+        with self._lock:
+            return self._current_mode
+
+    @property
+    def pause_reason(self) -> str | None:
+        with self._lock:
+            return self._pause_reason
+
+    def qos_profile(self, mode: RuntimeMode | None = None) -> RuntimeQosProfile:
+        mode = mode or self.current_mode
+        if mode == RuntimeMode.IDLE_DRAIN:
+            return self._config.qos.profile_idle
+        return self._config.qos.profile_active
+
+    def allow_vision_extract(self) -> bool:
+        profile = self.qos_profile()
+        return bool(profile.vision_extract)
+
+    def allow_ui_grounding(self) -> bool:
+        profile = self.qos_profile()
+        return bool(profile.ui_grounding)
+
+    def is_fullscreen_pause(self) -> bool:
+        return self.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE
+
+    def _run_loop(self) -> None:
+        interval = max(0.01, 1.0 / max(self._config.auto_pause.poll_hz, 0.1))
+        while not self._stop.is_set():
+            try:
+                state = self._monitor.sample()
+                mode, reason = self._determine_mode(state)
+                self._maybe_update(mode, reason, state)
+            except Exception as exc:  # pragma: no cover - defensive
+                self._log.debug("Runtime governor loop failed: {}", exc)
+            self._stop.wait(interval)
+
+    def _determine_mode(self, state: FullscreenState) -> tuple[RuntimeMode, str | None]:
+        if self._config.auto_pause.on_fullscreen and state.is_fullscreen:
+            return RuntimeMode.FULLSCREEN_HARD_PAUSE, "fullscreen"
+        now_ms = int(time.monotonic() * 1000)
+        last_input_ms = self._get_last_input_ms()
+        idle_grace_ms = max(0, int(self._config.qos.idle_grace_ms))
+        if last_input_ms is None:
+            return RuntimeMode.IDLE_DRAIN, None
+        if now_ms - last_input_ms <= idle_grace_ms:
+            return RuntimeMode.ACTIVE_INTERACTIVE, None
+        return RuntimeMode.IDLE_DRAIN, None
+
+    def _get_last_input_ms(self) -> int | None:
+        raw = self._raw_input
+        if raw is None:
+            return None
+        value = getattr(raw, "last_input_ts", None)
+        if isinstance(value, (int, float)):
+            return int(value)
+        return None
+
+    def _maybe_update(self, mode: RuntimeMode, reason: str | None, state: FullscreenState) -> None:
+        notify = False
+        with self._lock:
+            if mode != self._current_mode:
+                self._current_mode = mode
+                self._since_ts = dt.datetime.now(dt.timezone.utc)
+                self._pause_reason = reason
+                notify = True
+            self._last_fullscreen = state if state.is_fullscreen else self._last_fullscreen
+
+        if notify:
+            runtime_mode_changes_total.labels(mode.value).inc()
+            _set_runtime_mode_metrics(mode)
+            if reason:
+                runtime_pause_reason_total.labels(reason).inc()
+            if mode == RuntimeMode.FULLSCREEN_HARD_PAUSE and self._config.auto_pause.release_gpu:
+                self._gpu_lease.release("fullscreen")
+            self._persist_state(mode, reason, state)
+            self._notify_callbacks(mode)
+
+    def _notify_callbacks(self, mode: RuntimeMode) -> None:
+        callbacks: list[Callable[[RuntimeMode], None]] = []
+        with self._lock:
+            callbacks = list(self._callbacks)
+        for callback in callbacks:
+            try:
+                callback(mode)
+            except Exception as exc:  # pragma: no cover - defensive
+                self._log.debug("Runtime callback failed: {}", exc)
+
+    def _persist_state(self, mode: RuntimeMode, reason: str | None, state: FullscreenState) -> None:
+        if self._db is None:
+            return
+
+        def _update(session) -> None:
+            record = session.get(RuntimeStateRecord, 1)
+            if record is None:
+                record = RuntimeStateRecord(id=1)
+                session.add(record)
+            record.current_mode = mode.value
+            record.pause_reason = reason
+            record.since_ts = self._since_ts
+            record.last_fullscreen_hwnd = str(state.hwnd) if state.hwnd else None
+            record.last_fullscreen_process = state.process_name
+            record.last_fullscreen_title = state.window_title
+
+        try:
+            self._db.transaction(_update)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._log.debug("Failed to persist runtime state: {}", exc)
+
+
+def _set_runtime_mode_metrics(mode: RuntimeMode) -> None:
+    for value in RuntimeMode:
+        runtime_mode_state.labels(value.value).set(1.0 if value == mode else 0.0)
