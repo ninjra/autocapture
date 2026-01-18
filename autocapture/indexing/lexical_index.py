@@ -11,6 +11,7 @@ from sqlalchemy import bindparam, text
 from sqlalchemy.exc import OperationalError
 
 from ..logging_utils import get_logger
+from ..text.normalize import normalize_text
 from ..storage.database import DatabaseManager
 from ..storage.models import EventRecord
 
@@ -52,6 +53,12 @@ class LexicalIndex:
                     {"event_id": event.event_id},
                 ).scalar()
                 agent_text = existing_agent or ""
+                ocr_text = event.ocr_text_normalized or event.ocr_text or ""
+                layout_md = _extract_layout_md(event.tags)
+                if layout_md:
+                    if event.ocr_text_normalized:
+                        layout_md = normalize_text(layout_md)
+                    ocr_text = f"{ocr_text}\n\n{layout_md}".strip()
                 conn.execute(
                     text("DELETE FROM event_fts WHERE event_id = :event_id"),
                     {"event_id": event.event_id},
@@ -66,7 +73,7 @@ class LexicalIndex:
                     ),
                     {
                         "event_id": event.event_id,
-                        "ocr_text": event.ocr_text_normalized or event.ocr_text or "",
+                        "ocr_text": ocr_text,
                         "window_title": event.window_title or "",
                         "app_name": event.app_name or "",
                         "domain": event.domain or "",
@@ -175,3 +182,12 @@ def _sanitize_fts_query(query: str) -> str:
     # SQLite FTS5 requires embedded quotes to be escaped by doubling them.
     quoted = ['"' + token.replace('"', '""') + '"' for token in tokens]
     return " AND ".join(quoted)
+
+
+def _extract_layout_md(tags: object) -> str:
+    if not isinstance(tags, dict):
+        return ""
+    value = tags.get("layout_md")
+    if isinstance(value, str):
+        return value.strip()
+    return ""
