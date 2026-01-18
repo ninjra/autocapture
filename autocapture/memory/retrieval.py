@@ -546,6 +546,9 @@ class RetrievalService:
             profile = self._runtime.qos_profile()
             if profile.reranker_batch_size:
                 batch_size = profile.reranker_batch_size
+            budget = self._runtime.qos_budget()
+            if budget.gpu_policy in {"prefer_cpu", "disallow_gpu"}:
+                device_override = "cpu"
         top_k = min(len(results), self._config.reranker.top_k)
         head = results[:top_k]
         tail = results[top_k:]
@@ -760,11 +763,13 @@ def _assign_ranks(results: list[RetrievedEvent]) -> list[RetrievedEvent]:
 
 def _rrf_fuse(results_lists: list[list[RetrievedEvent]], rrf_k: int) -> list[RetrievedEvent]:
     scores: dict[str, float] = {}
+    best_ranks: dict[str, int] = {}
     meta: dict[str, RetrievedEvent] = {}
     for results in results_lists:
         for rank, item in enumerate(results, start=1):
             event_id = item.event.event_id
             scores[event_id] = scores.get(event_id, 0.0) + 1.0 / (rrf_k + rank)
+            best_ranks[event_id] = min(best_ranks.get(event_id, rank), rank)
             if event_id not in meta:
                 meta[event_id] = item
             else:
@@ -804,7 +809,13 @@ def _rrf_fuse(results_lists: list[list[RetrievedEvent]], rrf_k: int) -> list[Ret
                 event_id=base.event_id,
             )
         )
-    fused.sort(key=lambda item: item.score, reverse=True)
+    fused.sort(
+        key=lambda item: (
+            -item.score,
+            best_ranks.get(item.event.event_id, 10_000),
+            item.event.event_id,
+        )
+    )
     return fused
 
 
