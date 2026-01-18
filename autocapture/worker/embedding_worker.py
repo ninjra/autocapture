@@ -10,7 +10,7 @@ from typing import Optional
 from sqlalchemy import select, update
 
 from ..config import AppConfig
-from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..runtime_governor import RuntimeGovernor
 from ..runtime_pause import PauseController, paused_guard
 from ..embeddings.service import EmbeddingService
 from ..indexing.lexical_index import LexicalIndex
@@ -70,20 +70,27 @@ class EmbeddingWorker:
         self._max_task_runtime_s = config.worker.max_task_runtime_s
         self._index_backoff_s = 0.0
 
+    def _allow_work(self) -> bool:
+        if not self._runtime:
+            return True
+        if self._runtime.allow_workers():
+            return True
+        self._log.debug("Embedding worker paused by runtime governor")
+        return False
+
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
-        self._recover_stale_embeddings()
-        self._recover_stale_event_embeddings()
+        if self._allow_work():
+            self._recover_stale_embeddings()
+            self._recover_stale_event_embeddings()
         backoff_s = 1.0
         while True:
             if stop_event and stop_event.is_set():
                 return
             if paused_guard(self._pause, stop_event):
                 return
-            if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
-                poll_interval = self._config.worker.poll_interval_s
-                if self._runtime:
-                    poll_interval = self._runtime.poll_interval_s(poll_interval)
-                time.sleep(min(poll_interval, 1.0))
+            if not self._allow_work():
+                sleep_ms = self._runtime.qos_budget().sleep_ms if self._runtime else int(1000)
+                time.sleep(max(0.01, sleep_ms / 1000.0))
                 continue
             try:
                 processed = self.process_batch()
@@ -139,11 +146,15 @@ class EmbeddingWorker:
     def _process_event_embeddings(self) -> int:
         if paused_guard(self._pause):
             return 0
+        if not self._allow_work():
+            return 0
         batch_size = self._config.embed.text_batch_size
         if self._runtime:
             profile = self._runtime.qos_profile()
             if profile.embed_batch_size:
                 batch_size = profile.embed_batch_size
+        if not self._allow_work():
+            return 0
         self._recover_stale_event_embeddings()
 
         def _claim(
@@ -173,9 +184,9 @@ class EmbeddingWorker:
                 event.embedding_heartbeat_at = claimed_at
                 event.embedding_attempts += 1
                 event.embedding_last_error = None
-                text_value = event.ocr_text or ""
-                if self._config.features.enable_normalized_indexing:
-                    text_value = event.ocr_text_normalized or text_value
+                text_value = _event_text_with_layout(
+                    event, normalized=self._config.features.enable_normalized_indexing
+                )
                 tasks.append((event.event_id, text_value))
 
             return claimed_at, tasks
@@ -195,6 +206,8 @@ class EmbeddingWorker:
         def _tick_heartbeat() -> None:
             warned = False
             while not stop_tick.wait(tick_interval):
+                if not self._allow_work():
+                    return
                 if time.monotonic() - start_ts >= self._max_task_runtime_s:
                     if not warned:
                         self._log.warning(
@@ -279,11 +292,15 @@ class EmbeddingWorker:
     def _process_span_embeddings(self) -> int:
         if paused_guard(self._pause):
             return 0
+        if not self._allow_work():
+            return 0
         batch_size = self._config.embed.text_batch_size
         if self._runtime:
             profile = self._runtime.qos_profile()
             if profile.embed_batch_size:
                 batch_size = profile.embed_batch_size
+        if not self._allow_work():
+            return 0
         self._recover_stale_embeddings()
         with self._db.session() as session:
             embedding_ids = (
@@ -326,6 +343,8 @@ class EmbeddingWorker:
         def _tick_span_heartbeat() -> None:
             warned = False
             while not stop_tick.wait(tick_interval):
+                if not self._allow_work():
+                    return
                 if time.monotonic() - start_ts >= self._max_task_runtime_s:
                     if not warned:
                         self._log.warning(
@@ -720,6 +739,22 @@ def _normalize_bbox(bbox: object, frame_size: tuple[int, int] | None) -> list[fl
                 max(0.0, min(1.0, y1 / height)),
             ]
     return []
+
+
+def _event_text_with_layout(event: EventRecord, *, normalized: bool) -> str:
+    text_value = event.ocr_text or ""
+    layout_md = ""
+    if isinstance(event.tags, dict):
+        layout_md = str(event.tags.get("layout_md") or "").strip()
+    if layout_md:
+        text_value = f"{text_value}\n\n{layout_md}".strip()
+    if not normalized:
+        return text_value
+    normalized_text = event.ocr_text_normalized or normalize_text(event.ocr_text or "")
+    if layout_md:
+        normalized_layout = normalize_text(layout_md)
+        normalized_text = f"{normalized_text}\n\n{normalized_layout}".strip()
+    return normalized_text
 
 
 def _frame_size_from_tags(tags: dict | None) -> tuple[int, int] | None:

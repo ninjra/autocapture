@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from ..agents import AGENT_JOB_ENRICH_EVENT
 from ..agents.jobs import AgentJobQueue
 from ..config import AppConfig, CaptureConfig, OCRConfig
-from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..runtime_governor import RuntimeGovernor
 from ..runtime_pause import PauseController, paused_guard
 from ..image_utils import ensure_rgb, hash_rgb_image
 from ..indexing.lexical_index import LexicalIndex
@@ -122,12 +122,22 @@ class EventIngestWorker:
         self._ui_grounding = UIGroundingRouter(config, runtime_governor=runtime_governor)
         self._ppstructure = PaddleLayoutExtractor(config.ocr)
 
+    def _allow_work(self) -> bool:
+        if not self._runtime:
+            return True
+        if self._runtime.allow_workers():
+            return True
+        self._log.debug("OCR worker paused by runtime governor")
+        return False
+
     def process_batch(self, limit: Optional[int] = None) -> int:
         if paused_guard(self._pause):
             return 0
-        if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
+        if not self._allow_work():
             return 0
         processed = 0
+        if not self._allow_work():
+            return 0
         self._recover_stale_captures()
         if limit is None:
             limit = self._config.ocr.batch_size
@@ -150,6 +160,8 @@ class EventIngestWorker:
         ocr_backlog.set(len(capture_ids))
 
         for capture_id in capture_ids:
+            if not self._allow_work():
+                break
             claimed = self._claim_capture(capture_id)
             if not claimed:
                 continue
@@ -167,18 +179,17 @@ class EventIngestWorker:
         return processed
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
-        self._recover_stale_captures()
+        if self._allow_work():
+            self._recover_stale_captures()
         backoff_s = 1.0
         while True:
             if stop_event and stop_event.is_set():
                 return
             if paused_guard(self._pause, stop_event):
                 return
-            if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
-                poll_interval = self._config.worker.poll_interval_s
-                if self._runtime:
-                    poll_interval = self._runtime.poll_interval_s(poll_interval)
-                time.sleep(min(poll_interval, 1.0))
+            if not self._allow_work():
+                sleep_ms = self._runtime.qos_budget().sleep_ms if self._runtime else int(1000)
+                time.sleep(max(0.01, sleep_ms / 1000.0))
                 continue
             try:
                 processed = self.process_batch()
@@ -231,6 +242,8 @@ class EventIngestWorker:
     def _ingest_capture(self, capture_id: str) -> bool:
         capture = self._load_capture(capture_id)
         if not capture:
+            return False
+        if not self._allow_work():
             return False
 
         existing_event = self._load_event(capture_id)
@@ -437,6 +450,8 @@ class EventIngestWorker:
         interval = max(self._lease_timeout_s / 3, 1.0)
         warned = False
         while not stop_event.wait(interval):
+            if not self._allow_work():
+                return
             if time.monotonic() - start_ts >= self._max_task_runtime_s:
                 if not warned:
                     self._log.warning(

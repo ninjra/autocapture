@@ -55,7 +55,7 @@ from ..storage.models import (
     ThreadSummaryRecord,
 )
 from ..media.store import MediaStore
-from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..runtime_governor import RuntimeGovernor
 from ..runtime_pause import PauseController, paused_guard
 from ..vision.extractors import ScreenExtractorRouter
 from ..enrichment.sql_artifacts import extract_sql_artifacts
@@ -102,6 +102,14 @@ class AgentJobWorker:
         self._lease_timeout_s = config.worker.lease_ms / 1000
         self._max_task_runtime_s = config.worker.max_task_runtime_s
 
+    def _allow_work(self) -> bool:
+        if not self._runtime:
+            return True
+        if self._runtime.allow_workers():
+            return True
+        self._log.debug("Agent worker paused by runtime governor")
+        return False
+
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         backoff_s = 1.0
         while True:
@@ -109,11 +117,9 @@ class AgentJobWorker:
                 return
             if paused_guard(self._pause, stop_event):
                 return
-            if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
-                poll_interval = self._config.worker.poll_interval_s
-                if self._runtime:
-                    poll_interval = self._runtime.poll_interval_s(poll_interval)
-                time.sleep(min(poll_interval, 1.0))
+            if not self._allow_work():
+                sleep_ms = self._runtime.qos_budget().sleep_ms if self._runtime else int(1000)
+                time.sleep(max(0.01, sleep_ms / 1000.0))
                 continue
             try:
                 processed = self.process_batch()
@@ -136,6 +142,8 @@ class AgentJobWorker:
         if not self._config.agents.enabled:
             return 0
         if paused_guard(self._pause):
+            return 0
+        if not self._allow_work():
             return 0
         self._recover_stale_leases()
         worker_id = "agent-worker"
