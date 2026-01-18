@@ -23,3 +23,13 @@ def test_configure_logging_skips_file_logging_on_error(monkeypatch, tmp_path):
 
     # Should not raise even if the log directory cannot be created.
     logging_utils.configure_logging(log_dir=tmp_path / "logs")
+
+
+def test_logging_redacts_secrets(capsys):
+    logging_utils.configure_logging(log_dir=None, level="INFO")
+    log = logging_utils.get_logger("test")
+    log.info("Bearer sk-test-secret")
+    log.info("api_key=sk-test-secret")
+    captured = capsys.readouterr()
+    assert "sk-test-secret" not in captured.out
+    assert "[REDACTED]" in captured.out

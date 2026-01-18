@@ -10,6 +10,7 @@ from ..llm.providers import LLMProvider, OllamaProvider, OpenAICompatibleProvide
 from ..llm.governor import get_global_governor
 from ..llm.prompt_strategy import PromptStrategySettings
 from ..logging_utils import get_logger
+from ..security.secret_store import SecretStore as EnvSecretStore
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,7 @@ class StageRouter:
             config.llm, data_dir=config.capture.data_dir
         )
         self._governor = get_global_governor(config)
+        self._secrets = EnvSecretStore()
 
     def select_llm(
         self, stage: str, *, routing_override: str | None = None
@@ -56,6 +58,9 @@ class StageRouter:
         elif provider == "openai_compatible":
             base_url = base_url or self._config.llm.openai_compatible_base_url
             api_key = api_key or self._config.llm.openai_compatible_api_key
+            if not api_key:
+                record = self._secrets.get("OPENAI_COMPATIBLE_API_KEY")
+                api_key = record.value if record else None
             if not base_url:
                 raise RuntimeError(f"Stage '{stage}' requires openai_compatible base_url")
             cloud = _is_cloud_endpoint(base_url)
@@ -71,6 +76,9 @@ class StageRouter:
             )
         elif provider == "openai":
             api_key = api_key or self._config.llm.openai_api_key
+            if not api_key:
+                record = self._secrets.get("OPENAI_API_KEY")
+                api_key = record.value if record else None
             if not api_key:
                 raise RuntimeError(f"Stage '{stage}' requires OpenAI API key")
             cloud = True
