@@ -42,7 +42,11 @@ class UIElement(BaseModel):
     def _validate_bbox(cls, value: list[float]) -> list[float]:
         if len(value) != 4:
             raise ValueError("bbox_norm must have 4 values")
-        return [max(0.0, min(1.0, float(val))) for val in value]
+        vals = [float(val) for val in value]
+        for val in vals:
+            if val < 0.0 or val > 1.0:
+                raise ValueError("bbox_norm values must be within [0,1]")
+        return vals
 
     @field_validator("click_point_norm")
     @classmethod
@@ -51,7 +55,11 @@ class UIElement(BaseModel):
             return None
         if len(value) != 2:
             raise ValueError("click_point_norm must have 2 values")
-        return [max(0.0, min(1.0, float(val))) for val in value]
+        vals = [float(val) for val in value]
+        for val in vals:
+            if val < 0.0 or val > 1.0:
+                raise ValueError("click_point_norm values must be within [0,1]")
+        return vals
 
 
 class UIGroundingPayload(BaseModel):
@@ -220,15 +228,22 @@ def _parse_payload(raw_text: str) -> tuple[UIGroundingPayload | None, dict[str, 
 
 
 def _normalize_elements(elements: list[UIElement]) -> list[UIElement]:
-    def _sort_key(elem: UIElement) -> tuple[float, float]:
+    def _sort_key(item: tuple[int, UIElement]) -> tuple[float, float, float, float, int]:
+        idx, elem = item
         bbox = elem.bbox_norm if elem.bbox_norm else [0.0, 0.0, 0.0, 0.0]
-        return (bbox[1], bbox[0])
+        return (bbox[1], bbox[0], bbox[3], bbox[2], idx)
 
-    ordered = sorted(elements, key=_sort_key)
+    ordered = sorted(list(enumerate(elements)), key=_sort_key)
     normalized: list[UIElement] = []
-    for idx, element in enumerate(ordered, start=1):
+    for out_idx, (_in_idx, element) in enumerate(ordered, start=1):
         data = element.model_dump()
-        data["id"] = data.get("id") or f"U{idx}"
+        data["id"] = data.get("id") or f"U{out_idx}"
+        if isinstance(data.get("bbox_norm"), list):
+            data["bbox_norm"] = [round(float(val), 4) for val in data["bbox_norm"]]
+        if isinstance(data.get("click_point_norm"), list):
+            data["click_point_norm"] = [round(float(val), 4) for val in data["click_point_norm"]]
+        if data.get("confidence") is not None:
+            data["confidence"] = round(float(data["confidence"]), 4)
         normalized.append(UIElement.model_validate(data))
     return normalized
 
