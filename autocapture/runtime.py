@@ -239,7 +239,7 @@ class AppRuntime:
             media_store=MediaStore(config.capture, config.encryption),
             ffmpeg_config=config.ffmpeg,
             runtime_governor=self._runtime_governor,
-            runtime_auto_pause=config.runtime.auto_pause.on_fullscreen,
+            runtime_auto_pause=config.runtime.auto_pause.enabled,
             pause_controller=self._runtime_context.pause,
         )
         self._qdrant_sidecar = QdrantSidecar(

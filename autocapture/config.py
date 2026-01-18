@@ -343,16 +343,39 @@ class WorkerConfig(BaseModel):
 
 
 class RuntimeAutoPauseConfig(BaseModel):
+    enabled: bool = Field(
+        True, description="Enable fullscreen auto-pause handling (alias: on_fullscreen)."
+    )
     on_fullscreen: bool = Field(True, description="Pause pipeline when fullscreen detected.")
     mode: str = Field(
         "hard",
         description="Pause mode: hard (pause all workers + capture) or soft (capture only).",
+    )
+    fullscreen_hard_pause_enabled: bool = Field(
+        True, description="Allow FULLSCREEN_HARD_PAUSE mode when fullscreen detected."
     )
     release_gpu: bool = Field(
         True,
         description="Release GPU allocations when entering fullscreen hard pause.",
     )
     poll_hz: float = Field(2.0, ge=0.1, description="Fullscreen monitor polling rate (Hz).")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reconcile_aliases(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        if "enabled" not in data and "on_fullscreen" in data:
+            data["enabled"] = data.get("on_fullscreen")
+        if "on_fullscreen" not in data and "enabled" in data:
+            data["on_fullscreen"] = data.get("enabled")
+        if "fullscreen_hard_pause_enabled" not in data and "mode" in data:
+            mode = str(data.get("mode") or "").strip().lower()
+            if mode in {"hard", "soft"}:
+                data["fullscreen_hard_pause_enabled"] = mode == "hard"
+        if "mode" not in data and "fullscreen_hard_pause_enabled" in data:
+            data["mode"] = "hard" if data.get("fullscreen_hard_pause_enabled") else "soft"
+        return data
 
     @field_validator("mode")
     @classmethod
@@ -374,6 +397,14 @@ class RuntimeQosProfile(BaseModel):
     ocr_batch_size: int | None = Field(None, ge=1, description="Override OCR batch size.")
     embed_batch_size: int | None = Field(None, ge=1, description="Override embedding batch size.")
     reranker_batch_size: int | None = Field(None, ge=1, description="Override reranker batch size.")
+    sleep_ms: int | None = Field(
+        None, ge=0, description="Optional sleep budget for paused/idle loops."
+    )
+    max_batch: int | None = Field(None, ge=0, description="Optional max batch size hint.")
+    max_concurrency: int | None = Field(None, ge=0, description="Optional concurrency hint.")
+    gpu_policy: str = Field(
+        "allow_gpu", description="allow_gpu|prefer_cpu|disallow_gpu|release_on_pause"
+    )
 
     @field_validator("cpu_priority")
     @classmethod
@@ -384,8 +415,18 @@ class RuntimeQosProfile(BaseModel):
             raise ValueError(f"runtime.qos.cpu_priority must be one of {sorted(allowed)}")
         return normalized
 
+    @field_validator("gpu_policy")
+    @classmethod
+    def validate_gpu_policy(cls, value: str) -> str:
+        allowed = {"allow_gpu", "prefer_cpu", "disallow_gpu", "release_on_pause"}
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"runtime.qos.gpu_policy must be one of {sorted(allowed)}")
+        return normalized
+
 
 class RuntimeQosConfig(BaseModel):
+    enabled: bool = Field(True, description="Enable runtime QoS profiles.")
     idle_grace_ms: int = Field(2000, ge=0)
     profile_active: RuntimeQosProfile = Field(
         default_factory=lambda: RuntimeQosProfile(
