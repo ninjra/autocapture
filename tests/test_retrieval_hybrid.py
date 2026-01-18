@@ -112,7 +112,7 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
                 end=15,
                 text="roadmap",
                 confidence=0.9,
-                bbox={},
+                bbox={"x0": 0, "y0": 0, "x1": 10, "y1": 10},
             )
         )
         session.add(
@@ -123,7 +123,7 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
                 end=6,
                 text="Random",
                 confidence=0.9,
-                bbox={},
+                bbox={"x0": 0, "y0": 0, "x1": 10, "y1": 10},
             )
         )
 

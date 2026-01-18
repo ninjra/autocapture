@@ -8,7 +8,7 @@ from autocapture.config import AppConfig, DatabaseConfig, ProviderRoutingConfig
 from autocapture.memory.entities import EntityResolver, SecretStore
 from autocapture.memory.retrieval import RetrievalService
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import EventRecord
+from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 
 
 class _StubEmbedder:
@@ -53,6 +53,19 @@ def _setup_graph() -> tuple[AnswerGraph, RetrievalService, DatabaseManager]:
     now = dt.datetime.now(dt.timezone.utc)
     with db.session() as session:
         session.add(
+            CaptureRecord(
+                id="evt-graph",
+                captured_at=now,
+                image_path=None,
+                foreground_process="Editor",
+                foreground_window="Notes",
+                monitor_id="m1",
+                is_fullscreen=False,
+                ocr_status="done",
+            )
+        )
+        session.flush()
+        session.add(
             EventRecord(
                 event_id="evt-graph",
                 ts_start=now,
@@ -65,6 +78,17 @@ def _setup_graph() -> tuple[AnswerGraph, RetrievalService, DatabaseManager]:
                 screenshot_hash="hash",
                 ocr_text="hello world",
                 tags={},
+            )
+        )
+        session.add(
+            OCRSpanRecord(
+                capture_id="evt-graph",
+                span_key="S1",
+                start=0,
+                end=5,
+                text="hello",
+                confidence=0.9,
+                bbox={"x0": 0, "y0": 0, "x1": 10, "y1": 10},
             )
         )
     retrieval = RetrievalService(
@@ -92,6 +116,39 @@ def test_answer_graph_extractive_only(monkeypatch) -> None:
     )
     assert result.answer
     assert result.citations
+
+
+def test_answer_graph_filters_non_citable_results() -> None:
+    config = AppConfig(database=DatabaseConfig(url="sqlite:///:memory:", sqlite_wal=False))
+    config.embed.text_model = "local-test"
+    db = DatabaseManager(config.database)
+    now = dt.datetime.now(dt.timezone.utc)
+    with db.session() as session:
+        session.add(
+            EventRecord(
+                event_id="evt-nocite",
+                ts_start=now,
+                ts_end=None,
+                app_name="Editor",
+                window_title="Notes",
+                url=None,
+                domain=None,
+                screenshot_path=None,
+                screenshot_hash="hash",
+                ocr_text="hello world",
+                tags={},
+            )
+        )
+    retrieval = RetrievalService(
+        db, config, embedder=_StubEmbedder(), vector_index=_StubVectorIndex()
+    )
+    secret = SecretStore(config.capture.data_dir).get_or_create()
+    entities = EntityResolver(db, secret)
+    graph = AnswerGraph(config, retrieval, prompt_registry=_StubPromptRegistry(), entities=entities)
+
+    evidence, _events, no_evidence = graph._build_evidence("hello", None, None, 2, sanitized=False)
+    assert no_evidence is True
+    assert evidence == []
 
 
 def test_answer_graph_llm_path(monkeypatch) -> None:

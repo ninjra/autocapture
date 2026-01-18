@@ -17,7 +17,12 @@ from ..storage.models import (
     OverlayProjectRecord,
 )
 from .clock import Clock
-from .schemas import OverlayEventEvidence, OverlayItemSummary, OverlayPersistEvent, OverlayProjectSummary
+from .schemas import (
+    OverlayEventEvidence,
+    OverlayItemSummary,
+    OverlayPersistEvent,
+    OverlayProjectSummary,
+)
 
 DEFAULT_PROJECT_NAME = "Inbox"
 
@@ -184,7 +189,9 @@ class OverlayTrackerStore:
             if not item:
                 return
             projects = (
-                session.execute(select(OverlayProjectRecord).order_by(OverlayProjectRecord.name.asc()))
+                session.execute(
+                    select(OverlayProjectRecord).order_by(OverlayProjectRecord.name.asc())
+                )
                 .scalars()
                 .all()
             )
@@ -261,9 +268,7 @@ class OverlayTrackerStore:
 
         self._db.transaction(_tx)
 
-    def _ensure_default_project(
-        self, session, now_utc: dt.datetime
-    ) -> OverlayProjectRecord:
+    def _ensure_default_project(self, session, now_utc: dt.datetime) -> OverlayProjectRecord:
         project = session.execute(
             select(OverlayProjectRecord).where(OverlayProjectRecord.name == DEFAULT_PROJECT_NAME)
         ).scalar_one_or_none()

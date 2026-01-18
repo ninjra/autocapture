@@ -69,7 +69,7 @@ async def test_answer_citations_subset(tmp_path: Path, monkeypatch, async_client
                 end=30,
                 text="roadmap",
                 confidence=0.9,
-                bbox={},
+                bbox={"x0": 0, "y0": 0, "x1": 10, "y1": 10},
             )
         )
 
@@ -127,6 +127,17 @@ async def test_answer_json_includes_evidence_payload(tmp_path: Path, async_clien
                 tags={},
             )
         )
+        session.add(
+            OCRSpanRecord(
+                capture_id="event-json-1",
+                span_key="S1",
+                start=0,
+                end=7,
+                text="Meeting",
+                confidence=0.9,
+                bbox={"x0": 0, "y0": 0, "x1": 10, "y1": 10},
+            )
+        )
 
     app = create_app(config, db_manager=db)
     async with async_client_factory(app) as client:
@@ -167,7 +178,31 @@ async def test_time_query_timeline_includes_citations(tmp_path: Path, async_clie
         tags={},
     )
     with db.session() as session:
+        session.add(
+            CaptureRecord(
+                id="event-time-1",
+                captured_at=dt.datetime(2026, 1, 15, 17, 30, tzinfo=dt.timezone.utc),
+                image_path=None,
+                foreground_process="Calendar",
+                foreground_window="Schedule",
+                monitor_id="m1",
+                is_fullscreen=False,
+                ocr_status="done",
+            )
+        )
+        session.flush()
         session.add(in_range)
+        session.add(
+            OCRSpanRecord(
+                capture_id="event-time-1",
+                span_key="S1",
+                start=0,
+                end=7,
+                text="Meeting",
+                confidence=0.9,
+                bbox={"x0": 0, "y0": 0, "x1": 10, "y1": 10},
+            )
+        )
 
     app = create_app(config, db_manager=db)
     time_range = ["2026-01-15T17:00:00Z", "2026-01-15T18:00:00Z"]

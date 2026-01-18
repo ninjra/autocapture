@@ -61,9 +61,9 @@ class OverlayTrackerEngine:
             "queue_depth": self._queue.qsize(),
             "dropped_events": self._dropped,
             "last_error": self._last_error,
-            "last_retention_run": self._last_retention_run.isoformat()
-            if self._last_retention_run
-            else None,
+            "last_retention_run": (
+                self._last_retention_run.isoformat() if self._last_retention_run else None
+            ),
         }
 
     def start(self) -> None:
@@ -152,7 +152,9 @@ class OverlayTrackerEngine:
         if event.event_type == "input_activity":
             if not self._last_context:
                 return []
-            if should_deny_process(self._last_context.process_name, self._config.policy.deny_processes):
+            if should_deny_process(
+                self._last_context.process_name, self._config.policy.deny_processes
+            ):
                 return []
             return self._handle_input_activity(event)
         return []

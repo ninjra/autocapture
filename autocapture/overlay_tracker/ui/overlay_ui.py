@@ -142,9 +142,7 @@ class OverlayEvidenceDialog(QtWidgets.QDialog):
             process = _clean(entry.process_name, sanitize)
             title = _clean(entry.raw_window_title or "", sanitize, key="raw_window_title")
             url = _clean(entry.raw_browser_url or "", sanitize, key="raw_browser_url")
-            lines.append(
-                f"[{local_ts} / {utc_ts}] {entry.event_type} {process}"
-            )
+            lines.append(f"[{local_ts} / {utc_ts}] {entry.event_type} {process}")
             if title:
                 lines.append(f"  title: {title}")
             if url:

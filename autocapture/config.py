@@ -847,7 +847,9 @@ class OverlayTrackerCollectorConfig(BaseModel):
     @model_validator(mode="after")
     def _validate_debounce(self) -> "OverlayTrackerCollectorConfig":
         if self.input_debounce_ms < self.input_poll_ms:
-            raise ValueError("overlay_tracker.collectors.input_debounce_ms must be >= input_poll_ms")
+            raise ValueError(
+                "overlay_tracker.collectors.input_debounce_ms must be >= input_poll_ms"
+            )
         return self
 
 
