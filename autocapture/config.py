@@ -800,6 +800,104 @@ class UIConfig(BaseModel):
     )
 
 
+class OverlayHotkeySpec(BaseModel):
+    modifiers: list[str] = Field(default_factory=list)
+    key: str = Field("F24", description="Virtual key name (e.g., F24, SPACE, O).")
+
+
+class OverlayTrackerHotkeysConfig(BaseModel):
+    toggle_overlay: OverlayHotkeySpec = Field(
+        default_factory=lambda: OverlayHotkeySpec(modifiers=["ctrl", "shift"], key="O")
+    )
+    interactive_mode: OverlayHotkeySpec = Field(
+        default_factory=lambda: OverlayHotkeySpec(modifiers=["ctrl", "shift"], key="I")
+    )
+    project_cycle: OverlayHotkeySpec = Field(
+        default_factory=lambda: OverlayHotkeySpec(modifiers=["ctrl", "shift"], key="P")
+    )
+    toggle_running: OverlayHotkeySpec = Field(
+        default_factory=lambda: OverlayHotkeySpec(modifiers=["ctrl", "shift"], key="R")
+    )
+    rename: OverlayHotkeySpec = Field(
+        default_factory=lambda: OverlayHotkeySpec(modifiers=["ctrl", "shift"], key="N")
+    )
+    snooze: OverlayHotkeySpec = Field(
+        default_factory=lambda: OverlayHotkeySpec(modifiers=["ctrl", "shift"], key="S")
+    )
+    snooze_minutes: list[int] = Field(
+        default_factory=lambda: [15, 60, 240],
+        description="Preset durations for snooze hotkey.",
+    )
+
+    @field_validator("snooze_minutes")
+    @classmethod
+    def _validate_snooze_minutes(cls, value: list[int]) -> list[int]:
+        if any(minutes <= 0 for minutes in value):
+            raise ValueError("overlay_tracker.hotkeys.snooze_minutes must be positive")
+        return value
+
+
+class OverlayTrackerCollectorConfig(BaseModel):
+    foreground_enabled: bool = True
+    input_enabled: bool = True
+    fallback_foreground_poll_ms: int = Field(1000, ge=50, le=2000)
+    input_poll_ms: int = Field(250, ge=50, le=2000)
+    input_debounce_ms: int = Field(500, ge=50, le=5000)
+
+    @model_validator(mode="after")
+    def _validate_debounce(self) -> "OverlayTrackerCollectorConfig":
+        if self.input_debounce_ms < self.input_poll_ms:
+            raise ValueError("overlay_tracker.collectors.input_debounce_ms must be >= input_poll_ms")
+        return self
+
+
+class OverlayTrackerUiConfig(BaseModel):
+    enabled: bool = True
+    dock: str = Field("right", description="right|left")
+    width_px: int = Field(320, ge=200, le=480)
+    click_through_default: bool = True
+    interactive_timeout_seconds: int = Field(10, ge=1, le=120)
+    refresh_ms: int = Field(1000, ge=100, le=5000)
+    auto_hide_fullscreen: bool = True
+
+    @field_validator("dock")
+    @classmethod
+    def _validate_dock(cls, value: str) -> str:
+        if value not in {"left", "right"}:
+            raise ValueError("overlay_tracker.ui.dock must be 'left' or 'right'")
+        return value
+
+
+class OverlayTrackerPolicyConfig(BaseModel):
+    deny_processes: list[str] = Field(default_factory=list)
+    max_window_title_length: int = Field(512, ge=64, le=2048)
+
+
+class OverlayTrackerRetentionConfig(BaseModel):
+    event_days: int = Field(14, ge=1, le=365)
+    event_cap: int = Field(200000, ge=1000, le=1000000)
+
+
+class OverlayTrackerUrlPluginConfig(BaseModel):
+    enabled: bool = False
+    allow_browsers: list[str] = Field(default_factory=lambda: ["chrome.exe", "msedge.exe"])
+    allow_domains: list[str] = Field(default_factory=list)
+    token_rules: list[dict] = Field(default_factory=list)
+
+
+class OverlayTrackerConfig(BaseModel):
+    enabled: bool = False
+    platforms: list[str] = Field(default_factory=lambda: ["windows"])
+    stale_after_hours: float = Field(48.0, gt=0.0)
+    hotness_half_life_minutes: float = Field(30.0, gt=0.0)
+    collectors: OverlayTrackerCollectorConfig = OverlayTrackerCollectorConfig()
+    ui: OverlayTrackerUiConfig = OverlayTrackerUiConfig()
+    hotkeys: OverlayTrackerHotkeysConfig = OverlayTrackerHotkeysConfig()
+    policy: OverlayTrackerPolicyConfig = OverlayTrackerPolicyConfig()
+    retention: OverlayTrackerRetentionConfig = OverlayTrackerRetentionConfig()
+    url_plugin: OverlayTrackerUrlPluginConfig = OverlayTrackerUrlPluginConfig()
+
+
 class LLMConfig(BaseModel):
     provider: str = Field("ollama", description="ollama|openai|openai_compatible")
     ollama_url: str = Field("http://127.0.0.1:11434")
@@ -1011,6 +1109,7 @@ class AppConfig(BaseModel):
     security: SecurityConfig = SecurityConfig()
     templates: TemplateHardeningConfig = TemplateHardeningConfig()
     ui: UIConfig = UIConfig()
+    overlay_tracker: OverlayTrackerConfig = OverlayTrackerConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
     presets: PresetConfig = PresetConfig()
     promptops: PromptOpsConfig = PromptOpsConfig()

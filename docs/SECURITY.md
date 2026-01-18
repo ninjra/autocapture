@@ -40,6 +40,16 @@
 - Postgres URLs must include `sslmode=require`/`verify-*` when `database.require_tls_for_remote=true`.
 - Qdrant URLs must be HTTPS when `qdrant.require_tls_for_remote=true`.
 
+## Overlay tracker sensitive fields
+- `overlay_items.last_window_title_raw`
+- `overlay_items.last_browser_url_raw`
+- `overlay_events.raw_window_title`
+- `overlay_events.raw_browser_url`
+- `overlay_items.display_name`
+
+These fields are tagged for redaction by the cleaner/secret redaction helpers. The overlay
+tracker itself does not mask them at collection time.
+
 ## Token vault (reversible pseudonyms)
 - When `privacy.token_vault_enabled=true`, sensitive tokens map to encrypted originals in `token_vault`.
 - Decrypting tokens requires local authorization (`privacy.allow_token_vault_decrypt=true`) and API key when remote.

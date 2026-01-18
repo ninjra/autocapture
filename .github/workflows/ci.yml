@@ -80,6 +80,8 @@ jobs:
         run: choco install innosetup -y
       - name: Release gate
         run: poetry run python tools/release_gate.py
+      - name: Overlay tracker Windows tests
+        run: poetry run pytest -q tests/test_overlay_tracker_windows.py
       - name: Upload PyInstaller bundle
         uses: actions/upload-artifact@v4
         with:
