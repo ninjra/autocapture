@@ -728,6 +728,10 @@ class AgentJobWorker:
             self._log.debug("Thread summary embedding failed: {}", exc)
 
     def _upsert_spans(self, session, capture_id: str, spans: list[dict]) -> None:
+        event = session.get(EventRecord, capture_id)
+        frame_hash = getattr(event, "frame_hash", None) if event else None
+        if event and not frame_hash:
+            frame_hash = event.screenshot_hash
         rows = [
             {
                 "capture_id": capture_id,
@@ -737,6 +741,9 @@ class AgentJobWorker:
                 "text": str(span.get("text", "")),
                 "confidence": float(span.get("conf", 0.0)),
                 "bbox": span.get("bbox", []),
+                "engine": str(span.get("engine") or "agent"),
+                "frame_hash": frame_hash,
+                "schema_version": "v1",
             }
             for span in spans
         ]
@@ -769,6 +776,10 @@ class AgentJobWorker:
                         session.rollback()
 
     def _upsert_embeddings(self, session, capture_id: str, spans: list[dict]) -> None:
+        event = session.get(EventRecord, capture_id)
+        frame_hash = getattr(event, "frame_hash", None) if event else None
+        if event and not frame_hash:
+            frame_hash = event.screenshot_hash
         rows = [
             {
                 "capture_id": capture_id,
@@ -776,6 +787,7 @@ class AgentJobWorker:
                 "model": self._config.embed.text_model,
                 "status": "pending",
                 "span_key": str(span.get("span_key")),
+                "frame_hash": frame_hash,
             }
             for span in spans
         ]
