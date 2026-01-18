@@ -1,0 +1,4 @@
+{"id": "case-1", "scenario_class": "lexical", "query": "roadmap", "expected_evidence_ids": ["EVT-1"]}
+{"id": "case-2", "scenario_class": "token", "query": "ticket-123", "expected_evidence_ids": ["EVT-1"]}
+{"id": "case-3", "scenario_class": "proper_noun", "query": "Alpha Beta", "expected_evidence_ids": ["EVT-3"]}
+{"id": "case-4", "scenario_class": "no_evidence", "query": "unobtainium", "expected_no_evidence": true}

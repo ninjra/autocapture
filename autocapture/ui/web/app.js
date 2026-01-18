@@ -173,6 +173,13 @@ searchForm.addEventListener('submit', async (event) => {
     searchResults.appendChild(card);
     return;
   }
+  if (data && data.no_evidence) {
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    card.textContent = data.message || 'No evidence found.';
+    searchResults.appendChild(card);
+    return;
+  }
   const evidence = Array.isArray(data.evidence) ? data.evidence : [];
   evidence.forEach((item) => {
     const card = document.createElement('div');

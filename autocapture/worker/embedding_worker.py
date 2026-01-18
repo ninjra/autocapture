@@ -23,8 +23,10 @@ from ..observability.metrics import (
     embedding_latency_ms,
     worker_errors_total,
 )
+from ..observability.otel import otel_span, record_histogram
 from ..storage.database import DatabaseManager
 from ..storage.models import EmbeddingRecord, EventRecord, OCRSpanRecord
+from ..text.normalize import normalize_text
 
 
 class EmbeddingWorker:
@@ -157,7 +159,10 @@ class EmbeddingWorker:
                 event.embedding_heartbeat_at = claimed_at
                 event.embedding_attempts += 1
                 event.embedding_last_error = None
-                tasks.append((event.event_id, event.ocr_text or ""))
+                text_value = event.ocr_text or ""
+                if self._config.features.enable_normalized_indexing:
+                    text_value = event.ocr_text_normalized or text_value
+                tasks.append((event.event_id, text_value))
 
             return claimed_at, tasks
 
@@ -360,9 +365,16 @@ class EmbeddingWorker:
             ticker.join(timeout=1.0)
             return 0
 
+        def _index_text(text: str) -> str:
+            if self._config.features.enable_normalized_indexing:
+                return normalize_text(text)
+            return text
+
         sparse_vectors: dict[str, SparseEmbedding] = {}
         if self._sparse_encoder and self._config.retrieval.sparse_enabled:
-            sparse_list = self._sparse_encoder.encode([span.text for _, span, _ in span_rows])
+            sparse_list = self._sparse_encoder.encode(
+                [_index_text(span.text or "") for _, span, _ in span_rows]
+            )
             for (_embedding, span, _event), sparse in zip(span_rows, sparse_list, strict=False):
                 sparse_vectors[span.span_key] = sparse
 
@@ -371,10 +383,16 @@ class EmbeddingWorker:
             eligible = self._eligible_late_span_keys(span_rows)
             for _embedding, span, _event in span_rows:
                 if span.span_key in eligible:
-                    late_vectors[span.span_key] = self._late_encoder.encode_text(span.text)
+                    late_vectors[span.span_key] = self._late_encoder.encode_text(
+                        _index_text(span.text or "")
+                    )
 
         vectors: list[list[float]] = []
-        span_texts = [span.text for embedding, span, _ in span_rows if embedding.vector is None]
+        span_texts = [
+            _index_text(span.text or "")
+            for embedding, span, _ in span_rows
+            if embedding.vector is None
+        ]
         if span_texts:
             try:
                 start = time.monotonic()
@@ -420,8 +438,11 @@ class EmbeddingWorker:
                 record.span_key = record.span_key or span.span_key
                 record.heartbeat_at = dt.datetime.now(dt.timezone.utc)
                 record.updated_at = dt.datetime.now(dt.timezone.utc)
+                frame_hash = getattr(event, "frame_hash", None) or event.screenshot_hash
                 payload = {
                     "event_id": event.event_id,
+                    "frame_id": event.event_id,
+                    "frame_hash": frame_hash,
                     "span_key": record.span_key,
                     "ts_start": event.ts_start.isoformat(),
                     "app_name": event.app_name,
@@ -453,7 +474,14 @@ class EmbeddingWorker:
 
         if upserts:
             try:
-                self._vector_index.upsert_spans(upserts)
+                upsert_start = time.monotonic()
+                with otel_span("vector_upsert", {"stage_name": "vector_upsert"}):
+                    self._vector_index.upsert_spans(upserts)
+                record_histogram(
+                    "vector_upsert_ms",
+                    (time.monotonic() - upsert_start) * 1000,
+                    {"stage_name": "vector_upsert"},
+                )
                 self._index_backoff_s = 0.0
             except IndexUnavailable as exc:
                 self._log.warning("Vector index unavailable: {}", exc)
@@ -492,7 +520,14 @@ class EmbeddingWorker:
 
         if spans_v2_upserts and self._spans_v2:
             try:
-                self._spans_v2.upsert(spans_v2_upserts)
+                upsert_start = time.monotonic()
+                with otel_span("vector_upsert", {"stage_name": "vector_upsert"}):
+                    self._spans_v2.upsert(spans_v2_upserts)
+                record_histogram(
+                    "vector_upsert_ms",
+                    (time.monotonic() - upsert_start) * 1000,
+                    {"stage_name": "vector_upsert"},
+                )
             except Exception as exc:
                 self._log.warning("Spans v2 indexing failed: {}", exc)
 
@@ -611,9 +646,12 @@ def _build_spans_v2_payload(event: EventRecord, span: OCRSpanRecord) -> dict:
     text = (span.text or "").strip()
     if len(text) > 300:
         text = text[:300]
+    frame_hash = getattr(event, "frame_hash", None) or event.screenshot_hash
     return {
         "event_id": event.event_id,
         "capture_id": event.event_id,
+        "frame_id": event.event_id,
+        "frame_hash": frame_hash,
         "span_id": span.span_key,
         "ts": event.ts_start.isoformat(),
         "app": event.app_name,

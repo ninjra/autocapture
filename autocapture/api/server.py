@@ -37,10 +37,13 @@ from ..config import AppConfig, ProviderRoutingConfig, apply_settings_overrides,
 from ..encryption import EncryptionManager
 from ..logging_utils import get_logger
 from ..observability.metrics import get_gpu_snapshot, get_metrics_port
+from ..observability.otel import init_otel
 from ..paths import resource_root
 from ..settings_store import read_settings, update_settings
 from ..media.store import MediaStore
-from ..capture.privacy_filter import should_skip_capture
+from ..capture.privacy_filter import apply_exclude_region_masks, should_skip_capture
+from ..capture.frame_record import build_frame_record_v1, build_privacy_flags, capture_record_kwargs
+from ..time_utils import elapsed_ms, monotonic_now, utc_now
 from ..memory.compression import extractive_answer
 from ..memory.context_pack import (
     EvidenceItem,
@@ -60,6 +63,7 @@ from ..memory.time_intent import (
 )
 from ..embeddings.service import EmbeddingService
 from ..indexing.vector_index import VectorIndex
+from ..indexing.pruner import IndexPruner
 from ..model_ops import StageRouter
 from ..memory.verification import Claim, RulesVerifier
 from ..security.oidc import GoogleOIDCVerifier
@@ -91,6 +95,8 @@ class RetrieveRequest(BaseModel):
 
 class RetrieveResponse(BaseModel):
     evidence: list[dict[str, Any]]
+    no_evidence: bool = False
+    message: str | None = None
 
 
 class IngestMetadata(BaseModel):
@@ -150,6 +156,8 @@ class ContextPackResponse(BaseModel):
     pack: dict[str, Any]
     text: Optional[str] = None
     tron: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
+    message: str | None = None
 
 
 class AnswerRequest(BaseModel):
@@ -192,6 +200,8 @@ class AnswerResponse(BaseModel):
     response_tron: Optional[str] = None
     context_pack_tron: Optional[str] = None
     prompt_strategy: Optional[PromptStrategyInfo] = None
+    no_evidence: bool = False
+    message: str | None = None
 
 
 class EventResponse(BaseModel):
@@ -300,6 +310,7 @@ def create_app(
     vector_index: VectorIndex | None = None,
     worker_supervisor: object | None = None,
 ) -> FastAPI:
+    init_otel(config.features.enable_otel)
     db_owned = db_manager is None
     db = db_manager or DatabaseManager(config.database)
     retrieval = RetrievalService(
@@ -329,6 +340,11 @@ def create_app(
     )
     retention = RetentionManager(
         config.storage, config.retention, db, Path(config.capture.data_dir)
+    )
+    index_pruner = IndexPruner(
+        db,
+        vector_index=getattr(retrieval, "_vector", None),
+        spans_index=getattr(retrieval, "_spans_v2", None),
     )
     media_store = MediaStore(config.capture, config.encryption)
     log = get_logger("api")
@@ -691,9 +707,10 @@ def create_app(
             raise HTTPException(status_code=422, detail="Invalid metadata JSON")
 
         observation_id = parsed.observation_id or str(uuid4())
-        captured_at = parsed.captured_at or dt.datetime.now(dt.timezone.utc)
+        captured_at = parsed.captured_at or utc_now()
         if captured_at.tzinfo is None:
             captured_at = captured_at.replace(tzinfo=dt.timezone.utc)
+        monotonic_ts = monotonic_now()
         app_name = parsed.app_name or "unknown"
         window_title = parsed.window_title or "unknown"
         monitor_id = parsed.monitor_id or "unknown"
@@ -711,14 +728,18 @@ def create_app(
             exclude_window_title_regex=config.privacy.exclude_window_title_regex,
         ):
             _record_skipped_capture(
-                db,
-                observation_id,
-                captured_at,
-                app_name,
-                window_title,
-                monitor_id,
-                parsed.is_fullscreen,
-                "privacy_filter",
+                db=db,
+                config=config,
+                observation_id=observation_id,
+                captured_at=captured_at,
+                monotonic_ts=monotonic_ts,
+                app_name=app_name,
+                window_title=window_title,
+                monitor_id=monitor_id,
+                is_fullscreen=parsed.is_fullscreen,
+                reason="privacy_filter",
+                excluded=True,
+                masked_regions_applied=bool(config.privacy.exclude_regions),
             )
             return IngestResponse(observation_id=observation_id, status="skipped")
 
@@ -736,34 +757,89 @@ def create_app(
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Invalid image payload") from exc
 
+        masked_regions_applied = False
+        if config.privacy.exclude_regions and monitor_id:
+            masked_regions_applied = apply_exclude_region_masks(
+                image_array,
+                monitor_id=monitor_id,
+                roi_origin_x=0,
+                roi_origin_y=0,
+                exclude_regions=config.privacy.exclude_regions,
+            )
+
         path = media_store.write_fullscreen(image_array, captured_at, observation_id)
         if path is None:
             _record_skipped_capture(
-                db,
-                observation_id,
-                captured_at,
-                app_name,
-                window_title,
-                monitor_id,
-                parsed.is_fullscreen,
-                "disk_quota",
+                db=db,
+                config=config,
+                observation_id=observation_id,
+                captured_at=captured_at,
+                monotonic_ts=monotonic_ts,
+                app_name=app_name,
+                window_title=window_title,
+                monitor_id=monitor_id,
+                is_fullscreen=parsed.is_fullscreen,
+                reason="disk_quota",
+                excluded=False,
+                masked_regions_applied=masked_regions_applied,
             )
             return IngestResponse(observation_id=observation_id, status="skipped")
 
-        def _write(session) -> None:
-            session.add(
-                CaptureRecord(
-                    id=observation_id,
-                    captured_at=captured_at,
-                    image_path=str(path),
-                    focus_path=None,
-                    foreground_process=app_name,
-                    foreground_window=window_title,
-                    monitor_id=monitor_id,
-                    is_fullscreen=parsed.is_fullscreen,
-                    ocr_status="pending",
-                )
+        record_kwargs = None
+        if config.features.enable_frame_record_v1:
+            frame_hash = None
+            if config.features.enable_frame_hash:
+                try:
+                    from ..image_utils import hash_rgb_image
+
+                    frame_hash = hash_rgb_image(image_array)
+                except Exception:
+                    frame_hash = None
+            privacy_flags = build_privacy_flags(
+                config.privacy,
+                excluded=False,
+                masked_regions_applied=masked_regions_applied,
+                offline=config.offline,
             )
+            frame = build_frame_record_v1(
+                frame_id=observation_id,
+                event_id=observation_id,
+                captured_at=captured_at,
+                monotonic_ts=monotonic_ts,
+                monitor_id=monitor_id,
+                monitor_bounds=None,
+                app_name=app_name,
+                window_title=window_title,
+                image_path=str(path),
+                privacy_flags=privacy_flags,
+                frame_hash=frame_hash,
+            )
+            record_kwargs = capture_record_kwargs(
+                frame=frame,
+                captured_at=captured_at,
+                image_path=str(path),
+                focus_path=None,
+                foreground_process=app_name,
+                foreground_window=window_title,
+                monitor_id=monitor_id,
+                is_fullscreen=parsed.is_fullscreen,
+                ocr_status="pending",
+            )
+        if record_kwargs is None:
+            record_kwargs = {
+                "id": observation_id,
+                "captured_at": captured_at,
+                "image_path": str(path),
+                "focus_path": None,
+                "foreground_process": app_name,
+                "foreground_window": window_title,
+                "monitor_id": monitor_id,
+                "is_fullscreen": parsed.is_fullscreen,
+                "ocr_status": "pending",
+            }
+
+        def _write(session) -> None:
+            session.add(CaptureRecord(**record_kwargs))
 
         db.transaction(_write)
         return IngestResponse(observation_id=observation_id, status="ok")
@@ -851,7 +927,7 @@ def create_app(
         _validate_query(request.query, config)
         offset, limit = _resolve_retrieve_paging(request, config)
         _record_query_history(db, request.query)
-        evidence, events = _build_evidence(
+        evidence, events, no_evidence, message = _build_evidence(
             retrieval,
             entities,
             db,
@@ -867,7 +943,9 @@ def create_app(
             evidence=[
                 _evidence_to_json(item, event_map.get(item.event_id), request.include_screenshots)
                 for item in evidence
-            ]
+            ],
+            no_evidence=no_evidence,
+            message=message,
         )
 
     @app.post("/api/context-pack")
@@ -875,7 +953,7 @@ def create_app(
         _validate_query(request.query, config)
         k = _cap_k(request.k, config)
         sanitized = _resolve_bool(request.sanitize, config.privacy.sanitize_default)
-        evidence, events = _build_evidence(
+        evidence, events, no_evidence, message = _build_evidence(
             retrieval,
             entities,
             db,
@@ -891,6 +969,34 @@ def create_app(
             thread_retrieval, request.query, request.time_range
         )
         aggregates = _merge_aggregates(aggregates, thread_aggregates)
+        if no_evidence and not evidence:
+            empty_pack = build_context_pack(
+                query=request.query,
+                evidence=[],
+                entity_tokens=[],
+                routing=_model_dump(routing_data),
+                filters={
+                    "time_range": request.time_range,
+                    "apps": request.filters.get("app") if request.filters else None,
+                    "domains": request.filters.get("domain") if request.filters else None,
+                },
+                sanitized=sanitized,
+                aggregates=aggregates,
+            )
+            payload = empty_pack.to_json()
+            text_pack = None
+            tron_pack = None
+            if request.pack_format == "tron":
+                tron_pack = empty_pack.to_text(extractive_only=False, format="tron")
+            else:
+                text_pack = empty_pack.to_text(extractive_only=False, format="json")
+            return ContextPackResponse(
+                pack=payload,
+                text=text_pack,
+                tron=tron_pack,
+                warnings=["no_evidence"],
+                message=message or _no_evidence_message(request.query, bool(request.time_range), None),
+            )
         pack = build_context_pack(
             query=request.query,
             evidence=evidence,
@@ -945,7 +1051,7 @@ def create_app(
         )
         time_only = is_time_only_expression(query_text)
         evidence_query = "" if time_only else query_text
-        evidence, events = await asyncio.to_thread(
+        evidence, events, no_evidence, message = await asyncio.to_thread(
             _build_evidence,
             retrieval,
             entities,
@@ -963,6 +1069,41 @@ def create_app(
             thread_retrieval, query_text, resolved_time_range
         )
         aggregates = _merge_aggregates(aggregates, thread_aggregates)
+        if no_evidence or not evidence:
+            empty_pack = build_context_pack(
+                query=query_text,
+                evidence=[],
+                entity_tokens=[],
+                routing=_model_dump(routing_data),
+                filters={
+                    "time_range": resolved_time_range,
+                    "apps": request.filters.get("app") if request.filters else None,
+                    "domains": request.filters.get("domain") if request.filters else None,
+                },
+                sanitized=sanitized,
+                aggregates=aggregates,
+            )
+            notice = message or _no_evidence_message(query_text, bool(resolved_time_range), None)
+            response_json, response_tron = _build_answer_payload(
+                notice,
+                [],
+                warnings=["no_evidence"],
+                used_llm=False,
+                context_pack=empty_pack.to_json(),
+                output_format=output_format,
+            )
+            return AnswerResponse(
+                answer=notice,
+                citations=[],
+                used_context_pack=empty_pack.to_json(),
+                latency_ms=0.0,
+                response_json=response_json,
+                response_tron=response_tron,
+                context_pack_tron=None,
+                prompt_strategy=None,
+                no_evidence=True,
+                message=notice,
+            )
         pack = build_context_pack(
             query=query_text,
             evidence=evidence,
@@ -984,7 +1125,7 @@ def create_app(
         )
         pack_text = pack_tron_text or pack_json_text
         context_pack_tron = pack_tron_text if context_pack_format == "tron" else None
-        start = dt.datetime.now(dt.timezone.utc)
+        start = monotonic_now()
         graph_attempted = False
         graph_used_llm = False
         prompt_strategy_info: PromptStrategyInfo | None = None
@@ -1152,7 +1293,7 @@ def create_app(
                     context_pack=pack.to_json(),
                     output_format=output_format,
                 )
-        latency = (dt.datetime.now(dt.timezone.utc) - start).total_seconds() * 1000
+        latency = elapsed_ms(start)
         return AnswerResponse(
             answer=answer_text,
             citations=citations,
@@ -1162,6 +1303,8 @@ def create_app(
             response_tron=response_tron,
             context_pack_tron=context_pack_tron,
             prompt_strategy=prompt_strategy_info,
+            no_evidence=False,
+            message=None,
         )
 
     @app.get("/api/highlights")
@@ -1290,6 +1433,7 @@ def create_app(
             end_utc=request.end_utc,
             process=request.process,
             window_title=request.window_title,
+            index_pruner=index_pruner if config.features.enable_retention_prune else None,
         )
         return DeleteRangeResponse(
             deleted_captures=counts.deleted_captures,
@@ -1303,7 +1447,11 @@ def create_app(
         now = dt.datetime.now(dt.timezone.utc)
         start = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
         counts = delete_range_records(
-            db, Path(config.capture.data_dir), start_utc=start, end_utc=now
+            db,
+            Path(config.capture.data_dir),
+            start_utc=start,
+            end_utc=now,
+            index_pruner=index_pruner if config.features.enable_retention_prune else None,
         )
         return DeleteRangeResponse(
             deleted_captures=counts.deleted_captures,
@@ -1385,30 +1533,69 @@ def _require_api_key(request: Request, config: AppConfig) -> None:
 
 
 def _record_skipped_capture(
+    *,
     db: DatabaseManager,
+    config: AppConfig,
     observation_id: str,
     captured_at: dt.datetime,
+    monotonic_ts: float,
     app_name: str,
     window_title: str,
     monitor_id: str,
     is_fullscreen: bool,
     reason: str,
+    excluded: bool,
+    masked_regions_applied: bool,
 ) -> None:
-    def _write(session) -> None:
-        session.add(
-            CaptureRecord(
-                id=observation_id,
-                captured_at=captured_at,
-                image_path=None,
-                focus_path=None,
-                foreground_process=app_name,
-                foreground_window=window_title,
-                monitor_id=monitor_id,
-                is_fullscreen=is_fullscreen,
-                ocr_status="skipped",
-                ocr_last_error=reason,
-            )
+    record_kwargs = None
+    if config.features.enable_frame_record_v1:
+        privacy_flags = build_privacy_flags(
+            config.privacy,
+            excluded=excluded,
+            masked_regions_applied=masked_regions_applied,
+            offline=config.offline,
         )
+        frame = build_frame_record_v1(
+            frame_id=observation_id,
+            event_id=observation_id,
+            captured_at=captured_at,
+            monotonic_ts=monotonic_ts,
+            monitor_id=monitor_id,
+            monitor_bounds=None,
+            app_name=app_name,
+            window_title=window_title,
+            image_path=None,
+            privacy_flags=privacy_flags,
+            frame_hash=None,
+        )
+        record_kwargs = capture_record_kwargs(
+            frame=frame,
+            captured_at=captured_at,
+            image_path=None,
+            focus_path=None,
+            foreground_process=app_name,
+            foreground_window=window_title,
+            monitor_id=monitor_id,
+            is_fullscreen=is_fullscreen,
+            ocr_status="skipped",
+            ocr_last_error=reason,
+        )
+    if record_kwargs is None:
+        record_kwargs = {
+            "id": observation_id,
+            "captured_at": captured_at,
+            "image_path": None,
+            "focus_path": None,
+            "foreground_process": app_name,
+            "foreground_window": window_title,
+            "monitor_id": monitor_id,
+            "is_fullscreen": is_fullscreen,
+            "ocr_status": "skipped",
+            "ocr_last_error": reason,
+        }
+
+    def _write(session) -> None:
+        session.add(CaptureRecord(**record_kwargs))
 
     db.transaction(_write)
 
@@ -1498,19 +1685,31 @@ def _build_evidence(
     k: int,
     sanitized: bool,
     offset: int = 0,
-) -> tuple[list[EvidenceItem], list[EventRecord]]:
+) -> tuple[list[EvidenceItem], list[EventRecord], bool, str | None]:
     retrieve_filters = None
     if filters:
         retrieve_filters = RetrieveFilters(apps=filters.get("app"), domains=filters.get("domain"))
-    results = retrieval.retrieve(query, time_range, retrieve_filters, limit=k, offset=offset)
+    batch = retrieval.retrieve(query, time_range, retrieve_filters, limit=k, offset=offset)
+    results = list(batch.results)
+    no_evidence = bool(batch.no_evidence)
+    reason = batch.reason
     if not results and time_range and not query:
-        results = retrieval.retrieve("", time_range, retrieve_filters, limit=k, offset=offset)
+        batch = retrieval.retrieve("", time_range, retrieve_filters, limit=k, offset=offset)
+        results = list(batch.results)
+        no_evidence = bool(batch.no_evidence)
+        reason = batch.reason
+    results = [result for result in results if not getattr(result, "non_citable", False)]
+    if not results:
+        return [], [], True, _no_evidence_message(query, bool(time_range), reason)
     evidence: list[EvidenceItem] = []
     events: list[EventRecord] = []
     for idx, result in enumerate(results, start=1):
         event = result.event
         events.append(event)
-        snippet, snippet_offset = _snippet_for_query(event.ocr_text, query)
+        snippet = result.snippet or ""
+        snippet_offset = result.snippet_offset or 0
+        if not snippet:
+            snippet, snippet_offset = _snippet_for_query(event.ocr_text, query)
         spans_data = _fetch_spans(db, event.event_id, result.matched_span_keys)
         spans = _spans_for_event(
             spans_data,
@@ -1543,9 +1742,27 @@ def _build_evidence(
                 text=snippet,
                 screenshot_path=event.screenshot_path,
                 screenshot_hash=event.screenshot_hash,
+                retrieval={
+                    "engine": getattr(result, "engine", "hybrid"),
+                    "rank": getattr(result, "rank", idx),
+                    "rank_gap": getattr(result, "rank_gap", 0.0),
+                    "lexical_score": getattr(result, "lexical_score", 0.0),
+                    "vector_score": getattr(result, "vector_score", 0.0),
+                    "sparse_score": getattr(result, "sparse_score", 0.0),
+                    "late_score": getattr(result, "late_score", 0.0),
+                    "rerank_score": getattr(result, "rerank_score", None),
+                    "matched_spans": getattr(result, "matched_span_keys", []),
+                    "snippet_offset": getattr(result, "snippet_offset", None),
+                    "bbox": getattr(result, "bbox", None),
+                    "non_citable": getattr(result, "non_citable", False),
+                    "ts_start": event.ts_start.isoformat(),
+                },
             )
         )
-    return evidence, events
+    if not evidence and no_evidence:
+        message = _no_evidence_message(query, bool(time_range), reason)
+        return [], [], True, message
+    return evidence, events, no_evidence, None
 
 
 def _build_aggregates(
@@ -1745,6 +1962,14 @@ def _snippet_for_query(text: str, query: str, window: int = 200) -> tuple[str, i
     return text[start:end], start
 
 
+def _no_evidence_message(query: str, has_time_range: bool, reason: str | None) -> str:
+    _ = query
+    _ = reason
+    if has_time_range:
+        return "No evidence found in the selected time range. Try expanding the time range."
+    return "No evidence found. Try rephrasing the query or adding a time range."
+
+
 def _spans_for_event(
     spans: list[dict],
     snippet: str,
@@ -1898,6 +2123,8 @@ def _evidence_to_json(
         ],
         "text": item.text,
     }
+    if item.retrieval:
+        payload["retrieval"] = item.retrieval
     if include_screenshots and event:
         payload["screenshot_path"] = event.screenshot_path
         payload["focus_path"] = event.focus_path

@@ -9,6 +9,8 @@ from typing import Optional
 
 from loguru import logger
 
+from .security.redaction import redact_mapping, redact_text
+
 
 class LoggerAdapter:
     def __init__(self, base_logger):
@@ -42,13 +44,25 @@ class LoggerAdapter:
 
 
 def _prepare_message(message, args):
-    if args and isinstance(message, str) and "%" in message:
-        try:
-            message = message % args
-            return message, ()
-        except Exception:
-            return message, args
-    return message, args
+    redacted_args = tuple(
+        redact_text(arg) if isinstance(arg, str) else arg for arg in (args or ())
+    )
+    if args and isinstance(message, str):
+        if "%" in message:
+            try:
+                message = message % redacted_args
+                return redact_text(message), ()
+            except Exception:
+                return redact_text(message), redacted_args
+        if "{" in message:
+            try:
+                message = message.format(*redacted_args)
+                return redact_text(message), ()
+            except Exception:
+                return redact_text(message), redacted_args
+    if isinstance(message, str):
+        return redact_text(message), redacted_args
+    return message, redacted_args
 
 
 def _default_log_dir() -> Path:
@@ -68,7 +82,10 @@ def configure_logging(log_dir: Path | str | None = None, level: str = "INFO") ->
     """Configure Loguru sinks for console and optional file output."""
 
     logger.remove()
-    logger.configure(extra={"component": "app"})
+    logger.configure(
+        extra={"component": "app"},
+        patcher=lambda record: _redact_record(record),
+    )
 
     log_format = (
         "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
@@ -110,6 +127,14 @@ def configure_logging(log_dir: Path | str | None = None, level: str = "INFO") ->
             diagnose=False,
             format=log_format,
         )
+
+
+def _redact_record(record: dict) -> None:
+    if "message" in record and isinstance(record["message"], str):
+        record["message"] = redact_text(record["message"])
+    extra = record.get("extra")
+    if isinstance(extra, dict):
+        record["extra"] = redact_mapping(extra)
 
 
 def get_logger(name: Optional[str] = None):

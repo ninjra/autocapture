@@ -55,6 +55,13 @@ privacy:
     - "(?i)user account control"
     - "(?i)credential(s)?"
   exclude_regions: []
+features:
+  enable_frame_record_v1: true
+  enable_frame_hash: true
+  enable_normalized_indexing: true
+  enable_thresholding: true
+  enable_retention_prune: false
+  enable_otel: false
 output:
   format: "text"
   context_pack_format: "json"
@@ -278,6 +285,11 @@ retrieval:
   sparse_enabled: false
   late_enabled: false
   fusion_enabled: false
+  lexical_min_score: 0.15
+  dense_min_score: 0.15
+  rerank_min_score: 0.15
+  sparse_min_score: 0.1
+  late_min_score: 0.1
   fusion_rewrites: 4
   fusion_rrf_k: 60
   fusion_confidence_min: 0.65

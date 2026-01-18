@@ -54,6 +54,8 @@ black = "^24.3.0"
 ruff = "^0.3.4"
 pyinstaller = "^6.6.0"
 pytest = "^8.2.0"
+opentelemetry-api = "^1.24.0"
+opentelemetry-sdk = "^1.24.0"
 
 [tool.poetry.extras]
 ui = ["pyside6"]

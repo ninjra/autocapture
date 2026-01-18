@@ -80,7 +80,9 @@ def run_eval(
 
     for item in items:
         query = item["query"]
-        evidence, events = _build_evidence(retrieval, entities, query, limit=5, sanitized=True)
+        evidence, events, _no_evidence = _build_evidence(
+            retrieval, entities, query, limit=5, sanitized=True
+        )
         pack = build_context_pack(
             query=query,
             evidence=evidence,
@@ -170,14 +172,18 @@ def _build_evidence(
     *,
     limit: int,
     sanitized: bool,
-) -> tuple[list[EvidenceItem], list[object]]:
-    results = retrieval.retrieve(query, None, None, limit=limit)
+) -> tuple[list[EvidenceItem], list[object], bool]:
+    batch = retrieval.retrieve(query, None, None, limit=limit)
+    results = list(batch.results)
     evidence: list[EvidenceItem] = []
     events: list[object] = []
     for idx, result in enumerate(results, start=1):
         event = result.event
         events.append(event)
-        snippet, snippet_offset = _snippet_for_query(event.ocr_text or "", query)
+        snippet = result.snippet or ""
+        snippet_offset = result.snippet_offset or 0
+        if not snippet:
+            snippet, snippet_offset = _snippet_for_query(event.ocr_text or "", query)
         spans = []
         if snippet:
             spans.append(
@@ -213,7 +219,7 @@ def _build_evidence(
                 screenshot_hash=event.screenshot_hash,
             )
         )
-    return evidence, events
+    return evidence, events, bool(batch.no_evidence)
 
 
 def _snippet_for_query(text: str, query: str, window: int = 200) -> tuple[str, int]:

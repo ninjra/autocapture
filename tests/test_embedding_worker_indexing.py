@@ -28,8 +28,10 @@ class FakeEmbedder:
 class FakeIndex:
     def __init__(self) -> None:
         self.fail = True
+        self.items: list[SpanEmbeddingUpsert] = []
 
     def upsert_spans(self, items: list[SpanEmbeddingUpsert]):
+        self.items = items
         if self.fail:
             raise RuntimeError("index down")
 
@@ -188,3 +190,76 @@ def test_embedding_worker_reclaims_stale_processing(tmp_path) -> None:
             select(EmbeddingRecord).where(EmbeddingRecord.capture_id == "cap-2")
         ).scalar_one()
         assert record.status == "done"
+
+
+def test_vector_payload_includes_frame_provenance(tmp_path) -> None:
+    config = AppConfig(
+        database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"),
+        embed=EmbedConfig(text_model="fake-model"),
+    )
+    db = DatabaseManager(config.database)
+    now = dt.datetime.now(dt.timezone.utc)
+    with db.session() as session:
+        session.add(
+            CaptureRecord(
+                id="cap-3",
+                captured_at=now,
+                image_path=None,
+                foreground_process="test",
+                foreground_window="test",
+                monitor_id="1",
+                is_fullscreen=False,
+                ocr_status="done",
+                frame_hash="frame-hash",
+            )
+        )
+        session.flush()
+        session.add(
+            EventRecord(
+                event_id="cap-3",
+                ts_start=now,
+                ts_end=None,
+                app_name="test",
+                window_title="test",
+                url=None,
+                domain=None,
+                screenshot_path=None,
+                screenshot_hash="hash",
+                frame_hash="frame-hash",
+                ocr_text="hello",
+                embedding_vector=None,
+                embedding_status="done",
+                embedding_model="fake-model",
+                tags={},
+            )
+        )
+        span = OCRSpanRecord(
+            capture_id="cap-3",
+            span_key="S1",
+            start=0,
+            end=5,
+            text="hello",
+            confidence=0.9,
+            bbox={},
+        )
+        session.add(span)
+        session.flush()
+        session.add(
+            EmbeddingRecord(
+                capture_id="cap-3",
+                vector=None,
+                model="fake-model",
+                status="pending",
+                span_key="S1",
+            )
+        )
+
+    worker = EmbeddingWorker(config, db_manager=db, embedder=FakeEmbedder())
+    fake_index = FakeIndex()
+    fake_index.fail = False
+    worker._vector_index = fake_index
+    worker.process_batch()
+    assert fake_index.items
+    payload = fake_index.items[0].payload
+    assert payload.get("frame_id") == "cap-3"
+    assert payload.get("frame_hash") == "frame-hash"

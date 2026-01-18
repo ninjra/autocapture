@@ -82,8 +82,8 @@ def test_time_only_retrieval_returns_range(tmp_path) -> None:
         dt.datetime(2026, 1, 15, 17, 0, tzinfo=dt.timezone.utc),
         dt.datetime(2026, 1, 15, 18, 0, tzinfo=dt.timezone.utc),
     )
-    results = retrieval.retrieve("", time_range, None, limit=10)
-    assert [item.event.event_id for item in results] == ["E1"]
+    batch = retrieval.retrieve("", time_range, None, limit=10)
+    assert [item.event.event_id for item in batch.results] == ["E1"]
 
 
 def test_resolve_time_range_for_query_uses_timezone_override() -> None:

@@ -25,12 +25,14 @@ from .indexing.vector_index import VectorIndex
 from .logging_utils import get_logger
 from .media.store import MediaStore
 from .observability.metrics import MetricsServer
+from .observability.otel import init_otel
 from .promptops import PromptOpsRunner
 from .settings_store import update_settings
 from .storage.database import DatabaseManager
 from .storage.retention import RetentionManager
 from .tracking import HostVectorTracker
 from .worker.supervisor import WorkerSupervisor
+from .memory.router import ProviderRouter
 from .qdrant.sidecar import QdrantSidecar
 from .runtime_governor import RuntimeGovernor, RuntimeMode
 from .gpu_lease import get_global_gpu_lease
@@ -192,6 +194,8 @@ class AppRuntime:
             capture_config=config.capture,
             worker_config=config.worker,
             privacy_config=config.privacy,
+            offline=config.offline,
+            feature_flags=config.features,
             on_ocr_observation=self._on_ocr_observation,
             on_vision_observation=self._on_vision_observation,
             vision_sample_rate=getattr(config.capture, "vision_sample_rate", 0.0),
@@ -232,6 +236,16 @@ class AppRuntime:
         self._promptops_scheduler: PromptOpsScheduler | None = None
         self._highlights_scheduler: HighlightsScheduler | None = None
         self._fullscreen_paused = False
+        self._provider_router = ProviderRouter(
+            config.routing,
+            config.llm,
+            config=config,
+            offline=config.offline,
+            privacy=config.privacy,
+        )
+        self._provider_router.select_embedding()
+        self._provider_router.select_ocr()
+        self._provider_router.select_reranker()
         if config.promptops.enabled:
             self._promptops_runner = PromptOpsRunner(config, self._db)
             self._promptops_scheduler = PromptOpsScheduler(
@@ -249,6 +263,7 @@ class AppRuntime:
             self._running = True
 
         self._log.info("Runtime starting")
+        init_otel(self._config.features.enable_otel)
         self._qdrant_sidecar.start()
         if self._tracker:
             self._tracker.start()

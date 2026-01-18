@@ -7,7 +7,7 @@ from typing import Iterable
 
 import re
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 from sqlalchemy.exc import OperationalError
 
 from ..logging_utils import get_logger
@@ -66,7 +66,7 @@ class LexicalIndex:
                     ),
                     {
                         "event_id": event.event_id,
-                        "ocr_text": event.ocr_text or "",
+                        "ocr_text": event.ocr_text_normalized or event.ocr_text or "",
                         "window_title": event.window_title or "",
                         "app_name": event.app_name or "",
                         "domain": event.domain or "",
@@ -86,6 +86,22 @@ class LexicalIndex:
     def bulk_upsert(self, events: Iterable[EventRecord]) -> None:
         for event in events:
             self.upsert_event(event)
+
+    def delete_events(self, event_ids: Iterable[str]) -> int:
+        ids = [str(item) for item in event_ids if item]
+        if not ids:
+            return 0
+        engine = self._db.engine
+        if engine.dialect.name != "sqlite":
+            return 0
+        deleted = 0
+        with engine.begin() as conn:
+            stmt = text("DELETE FROM event_fts WHERE event_id IN :event_ids").bindparams(
+                bindparam("event_ids", expanding=True)
+            )
+            result = conn.execute(stmt, {"event_ids": ids})
+            deleted = int(result.rowcount or 0)
+        return deleted
 
     def upsert_agent_text(self, event_id: str, agent_text: str) -> None:
         engine = self._db.engine
@@ -132,12 +148,12 @@ class LexicalIndex:
                 rows = conn.execute(
                     text(
                         "SELECT event_id, ts_rank_cd("
-                        "to_tsvector('english', coalesce(ocr_text,'') || ' ' || "
+                        "to_tsvector('english', coalesce(ocr_text_normalized, ocr_text,'') || ' ' || "
                         "coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' || "
                         "coalesce(domain,'') || ' ' || coalesce(url,'')), "
                         "plainto_tsquery('english', :query)) AS rank "
                         "FROM events "
-                        "WHERE to_tsvector('english', coalesce(ocr_text,'') || ' ' || "
+                        "WHERE to_tsvector('english', coalesce(ocr_text_normalized, ocr_text,'') || ' ' || "
                         "coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' || "
                         "coalesce(domain,'') || ' ' || coalesce(url,'')) @@ "
                         "plainto_tsquery('english', :query) "

@@ -21,8 +21,10 @@ from ..indexing.vector_index import VectorHit, VectorIndex
 from ..indexing.spans_v2 import SpansV2Index
 from ..logging_utils import get_logger
 from ..observability.metrics import retrieval_latency_ms, vector_search_failures_total
+from ..observability.otel import otel_span, record_histogram
 from ..storage.database import DatabaseManager
-from ..storage.models import EventRecord, RetrievalTraceRecord
+from ..storage.models import EventRecord, OCRSpanRecord, RetrievalTraceRecord
+from ..time_utils import elapsed_ms, monotonic_now
 from .reranker import CrossEncoderReranker
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
 
@@ -34,7 +36,7 @@ class RetrieveFilters:
 
 
 @dataclass(frozen=True)
-class RetrievedEvent:
+class RetrievalResult:
     event: EventRecord
     score: float
     matched_span_keys: list[str] = field(default_factory=list)
@@ -42,9 +44,28 @@ class RetrievedEvent:
     vector_score: float = 0.0
     sparse_score: float = 0.0
     late_score: float = 0.0
+    rerank_score: float | None = None
     engine: str = "hybrid"
     rank: int = 0
     rank_gap: float = 0.0
+    snippet: str | None = None
+    snippet_offset: int | None = None
+    bbox: list[int] | None = None
+    non_citable: bool = False
+    dedupe_group_id: str | None = None
+    frame_hash: str | None = None
+    frame_id: str | None = None
+    event_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RetrievalBatch:
+    results: list[RetrievalResult]
+    no_evidence: bool = False
+    reason: str | None = None
+
+
+RetrievedEvent = RetrievalResult
 
 
 class RetrievalService:
@@ -94,15 +115,17 @@ class RetrievalService:
         limit: int = 12,
         offset: int = 0,
         mode: str | None = None,
-    ) -> list[RetrievedEvent]:
+    ) -> RetrievalBatch:
         query = query.strip()
         if len(query) < 2:
             if time_range:
-                return self._retrieve_time_range(time_range, filters, limit, offset)
-            return []
+                results = self._retrieve_time_range(time_range, filters, limit, offset)
+                results = self._decorate_results("", results)
+                return RetrievalBatch(results=results, no_evidence=not results)
+            return RetrievalBatch(results=[], no_evidence=True, reason="query_too_short")
         limit = max(1, limit)
         offset = max(0, offset)
-        start = dt.datetime.now(dt.timezone.utc)
+        start_ts = monotonic_now()
         mode_value = (mode or "auto").strip().lower()
 
         candidate_limit = (limit + offset) * 3
@@ -140,12 +163,21 @@ class RetrievalService:
 
         results = self._rerank_results(query, results)
         results = _assign_ranks(results)
+        if self._config.features.enable_thresholding:
+            results = _apply_thresholds(results, self._config.retrieval)
         results = results[offset : offset + limit]
-        latency = (dt.datetime.now(dt.timezone.utc) - start).total_seconds() * 1000
+        results = self._decorate_results(query, results)
+        latency = elapsed_ms(start_ts)
         retrieval_latency_ms.observe(latency)
         if self._config.retrieval.traces_enabled:
             self._persist_trace(query, rewrites, results)
-        return results
+        if not results:
+            return RetrievalBatch(
+                results=[],
+                no_evidence=True,
+                reason="no_results",
+            )
+        return RetrievalBatch(results=results, no_evidence=False)
 
     def list_events(self, limit: int = 100) -> Iterable[EventRecord]:
         with self._db.session() as session:
@@ -167,7 +199,16 @@ class RetrievalService:
                 stmt = stmt.where(EventRecord.domain.in_(filters.domains))
             stmt = stmt.order_by(EventRecord.ts_start.desc()).offset(offset).limit(limit)
             rows = session.execute(stmt).scalars().all()
-        return [RetrievedEvent(event=row, score=0.4) for row in rows]
+        return [
+            RetrievedEvent(
+                event=row,
+                score=0.4,
+                event_id=row.event_id,
+                frame_id=row.event_id,
+                frame_hash=getattr(row, "frame_hash", None) or row.screenshot_hash,
+            )
+            for row in rows
+        ]
 
     def _retrieve_candidates(
         self,
@@ -178,7 +219,14 @@ class RetrievalService:
         *,
         engine: str,
     ) -> list[RetrievedEvent]:
-        lexical_hits = self._lexical.search(query, limit=limit)
+        lexical_start = time.monotonic()
+        with otel_span("index_lexical", {"stage_name": "index_lexical"}):
+            lexical_hits = self._lexical.search(query, limit=limit)
+        record_histogram(
+            "index_lexical_ms",
+            (time.monotonic() - lexical_start) * 1000,
+            {"stage_name": "index_lexical"},
+        )
         lexical_scores = {hit.event_id: hit.score for hit in lexical_hits}
         dense_hits: list[VectorHit] = []
         sparse_hits: list[VectorHit] = []
@@ -200,18 +248,32 @@ class RetrievalService:
         if dense_vector is not None:
             try:
                 if self._spans_v2 and self._config.retrieval.use_spans_v2:
-                    dense_hits = self._spans_v2.search_dense(
-                        dense_vector,
-                        limit,
-                        filters=filters_v2,
-                        embedding_model=self._embedder.model_name,
+                    vector_start = time.monotonic()
+                    with otel_span("vector_search", {"stage_name": "vector_search"}):
+                        dense_hits = self._spans_v2.search_dense(
+                            dense_vector,
+                            limit,
+                            filters=filters_v2,
+                            embedding_model=self._embedder.model_name,
+                        )
+                    record_histogram(
+                        "vector_search_ms",
+                        (time.monotonic() - vector_start) * 1000,
+                        {"stage_name": "vector_search"},
                     )
                 else:
-                    dense_hits = self._vector.search(
-                        dense_vector,
-                        limit,
-                        filters=filters_map,
-                        embedding_model=self._embedder.model_name,
+                    vector_start = time.monotonic()
+                    with otel_span("vector_search", {"stage_name": "vector_search"}):
+                        dense_hits = self._vector.search(
+                            dense_vector,
+                            limit,
+                            filters=filters_map,
+                            embedding_model=self._embedder.model_name,
+                        )
+                    record_histogram(
+                        "vector_search_ms",
+                        (time.monotonic() - vector_start) * 1000,
+                        {"stage_name": "vector_search"},
                     )
             except Exception as exc:
                 vector_search_failures_total.inc()
@@ -271,11 +333,14 @@ class RetrievalService:
                 RetrievedEvent(
                     event=event,
                     score=score,
-                    matched_span_keys=span_hits.get(event.event_id, []),
+                    matched_span_keys=sorted(set(span_hits.get(event.event_id, []))),
                     lexical_score=lex,
                     vector_score=dense,
                     sparse_score=sparse,
                     engine=engine,
+                    frame_hash=getattr(event, "frame_hash", None) or event.screenshot_hash,
+                    frame_id=event.event_id,
+                    event_id=event.event_id,
                 )
             )
 
@@ -313,6 +378,9 @@ class RetrievalService:
                     sparse_score=item.sparse_score,
                     late_score=late,
                     engine="late_rerank",
+                    frame_hash=item.frame_hash,
+                    frame_id=item.frame_id,
+                    event_id=item.event_id,
                 )
             )
         reranked.sort(key=lambda item: item.score, reverse=True)
@@ -335,7 +403,18 @@ class RetrievalService:
                 stmt = stmt.where(EventRecord.domain.in_(filters.domains))
             stmt = stmt.order_by(EventRecord.ts_start.desc()).limit(limit)
             rows = session.execute(stmt).scalars().all()
-        return [RetrievedEvent(event=row, score=0.5, engine="fallback") for row in rows]
+        return [
+            RetrievedEvent(
+                event=row,
+                score=0.4,
+                lexical_score=0.4,
+                engine="fallback",
+                frame_hash=getattr(row, "frame_hash", None) or row.screenshot_hash,
+                frame_id=row.event_id,
+                event_id=row.event_id,
+            )
+            for row in rows
+        ]
 
     def _persist_trace(
         self, query: str, rewrites: list[str], results: list[RetrievedEvent]
@@ -442,12 +521,57 @@ class RetrievalService:
                 vector_score=item.vector_score,
                 sparse_score=item.sparse_score,
                 late_score=item.late_score,
+                rerank_score=float(score),
                 engine="rerank",
+                frame_hash=item.frame_hash,
+                frame_id=item.frame_id,
+                event_id=item.event_id,
             )
             for item, score in zip(head, scores, strict=True)
         ]
         reranked.sort(key=lambda item: item.score, reverse=True)
         return reranked + tail
+
+    def _decorate_results(
+        self, query: str, results: list[RetrievedEvent]
+    ) -> list[RetrievedEvent]:
+        if not results:
+            return results
+        event_ids = [result.event.event_id for result in results]
+        spans_by_event = _load_spans(self._db, event_ids)
+        decorated: list[RetrievedEvent] = []
+        for item in results:
+            event = item.event
+            text = event.ocr_text or ""
+            snippet, offset = _snippet_for_query(text, query)
+            spans = spans_by_event.get(event.event_id, [])
+            matched = _select_span(spans, item.matched_span_keys, query)
+            bbox = _span_bbox(matched.bbox) if matched is not None else None
+            non_citable = bbox is None
+            decorated.append(
+                RetrievedEvent(
+                    event=event,
+                    score=item.score,
+                    matched_span_keys=item.matched_span_keys,
+                    lexical_score=item.lexical_score,
+                    vector_score=item.vector_score,
+                    sparse_score=item.sparse_score,
+                    late_score=item.late_score,
+                    rerank_score=item.rerank_score,
+                    engine=item.engine,
+                    rank=item.rank,
+                    rank_gap=item.rank_gap,
+                    snippet=snippet,
+                    snippet_offset=offset if snippet else None,
+                    bbox=bbox,
+                    non_citable=non_citable,
+                    dedupe_group_id=item.dedupe_group_id,
+                    frame_hash=item.frame_hash,
+                    frame_id=item.frame_id or event.event_id,
+                    event_id=item.event_id or event.event_id,
+                )
+            )
+        return decorated
 
     def _get_reranker(self) -> CrossEncoderReranker | None:
         if self._config.routing.reranker != "enabled" or not self._config.reranker.enabled:
@@ -548,9 +672,13 @@ def _assign_ranks(results: list[RetrievedEvent]) -> list[RetrievedEvent]:
                 vector_score=item.vector_score,
                 sparse_score=item.sparse_score,
                 late_score=item.late_score,
+                rerank_score=item.rerank_score,
                 engine=item.engine,
                 rank=idx,
                 rank_gap=rank_gap,
+                frame_hash=item.frame_hash,
+                frame_id=item.frame_id,
+                event_id=item.event_id,
             )
         )
         prev_score = item.score
@@ -578,7 +706,11 @@ def _rrf_fuse(results_lists: list[list[RetrievedEvent]], rrf_k: int) -> list[Ret
                     vector_score=max(existing.vector_score, item.vector_score),
                     sparse_score=max(existing.sparse_score, item.sparse_score),
                     late_score=max(existing.late_score, item.late_score),
+                    rerank_score=existing.rerank_score,
                     engine="fusion",
+                    frame_hash=existing.frame_hash,
+                    frame_id=existing.frame_id,
+                    event_id=existing.event_id,
                 )
     fused: list[RetrievedEvent] = []
     for event_id, score in scores.items():
@@ -592,7 +724,11 @@ def _rrf_fuse(results_lists: list[list[RetrievedEvent]], rrf_k: int) -> list[Ret
                 vector_score=base.vector_score,
                 sparse_score=base.sparse_score,
                 late_score=base.late_score,
+                rerank_score=base.rerank_score,
                 engine="fusion",
+                frame_hash=base.frame_hash,
+                frame_id=base.frame_id,
+                event_id=base.event_id,
             )
         )
     fused.sort(key=lambda item: item.score, reverse=True)
@@ -620,3 +756,108 @@ def _tokenize_query(query: str) -> list[str]:
     stopwords = {"the", "a", "an", "and", "or", "to", "of", "in", "on", "for"}
     filtered = [token.lower() for token in tokens if token.lower() not in stopwords]
     return filtered or [token.lower() for token in tokens]
+
+
+def _apply_thresholds(
+    results: list[RetrievedEvent], config
+) -> list[RetrievedEvent]:
+    if not results:
+        return results
+    filtered: list[RetrievedEvent] = []
+    for item in results:
+        checks: list[bool] = []
+        if item.lexical_score is not None:
+            checks.append(item.lexical_score >= config.lexical_min_score)
+        if item.vector_score is not None:
+            checks.append(item.vector_score >= config.dense_min_score)
+        if item.rerank_score is not None:
+            checks.append(item.rerank_score >= config.rerank_min_score)
+        if item.sparse_score is not None:
+            checks.append(item.sparse_score >= getattr(config, "sparse_min_score", 0.0))
+        if item.late_score is not None:
+            checks.append(item.late_score >= getattr(config, "late_min_score", 0.0))
+        if checks and not any(checks):
+            continue
+        filtered.append(item)
+    return filtered
+
+
+def _load_spans(db: DatabaseManager, event_ids: list[str]) -> dict[str, list[OCRSpanRecord]]:
+    if not event_ids:
+        return {}
+    with db.session() as session:
+        rows = (
+            session.execute(
+                select(OCRSpanRecord)
+                .where(OCRSpanRecord.capture_id.in_(event_ids))
+                .order_by(OCRSpanRecord.start.asc())
+            )
+            .scalars()
+            .all()
+        )
+    spans_by_event: dict[str, list[OCRSpanRecord]] = {}
+    for row in rows:
+        spans_by_event.setdefault(row.capture_id, []).append(row)
+    return spans_by_event
+
+
+def _select_span(
+    spans: list[OCRSpanRecord], matched_keys: list[str], query: str
+) -> OCRSpanRecord | None:
+    if not spans:
+        return None
+    matched_set = {str(key) for key in matched_keys if key}
+    if matched_set:
+        for span in spans:
+            if str(span.span_key) in matched_set:
+                return span
+    lowered = (query or "").lower().strip()
+    if lowered:
+        for span in spans:
+            if lowered in (span.text or "").lower():
+                return span
+    return spans[0]
+
+
+def _span_bbox(raw: object) -> list[int] | None:
+    if raw is None:
+        return None
+    coords: list[float] = []
+    if isinstance(raw, dict):
+        for key in ("x0", "y0", "x1", "y1"):
+            value = raw.get(key)
+            if value is None:
+                return None
+            try:
+                coords.append(float(value))
+            except (TypeError, ValueError):
+                return None
+    elif isinstance(raw, list):
+        coords = [float(val) for val in raw if isinstance(val, (int, float))]
+    else:
+        return None
+    if len(coords) >= 8:
+        xs = coords[0::2]
+        ys = coords[1::2]
+        if not xs or not ys:
+            return None
+        x0, x1 = int(min(xs)), int(max(xs))
+        y0, y1 = int(min(ys)), int(max(ys))
+        return [x0, y0, x1, y1]
+    if len(coords) >= 4:
+        x0, y0, x1, y1 = [int(val) for val in coords[:4]]
+        return [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
+    return None
+
+
+def _snippet_for_query(text: str, query: str, window: int = 200) -> tuple[str, int]:
+    if not text:
+        return "", 0
+    lower = text.lower()
+    q = (query or "").lower()
+    idx = lower.find(q) if q else -1
+    if idx == -1:
+        return text[: min(400, len(text))], 0
+    start = max(idx - window, 0)
+    end = min(idx + len(q) + window, len(text))
+    return text[start:end], start

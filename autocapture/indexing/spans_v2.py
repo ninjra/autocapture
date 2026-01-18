@@ -74,6 +74,15 @@ class SpansV2Index:
             return []
         return self._backend.search_late(vectors, k, filters=filters)
 
+    def delete_event_ids(self, event_ids: list[str]) -> int:
+        if not self._backend:
+            return 0
+        try:
+            return self._backend.delete_event_ids(event_ids)
+        except Exception as exc:  # pragma: no cover - best effort
+            self._log.warning("Spans v2 deletion failed: {}", exc)
+            return 0
+
 
 class QdrantSpansV2Backend:
     def __init__(self, config: AppConfig, dim: int) -> None:
@@ -252,6 +261,26 @@ class QdrantSpansV2Backend:
             )
 
         return _hits_from_results(self._run(_search))
+
+    def delete_event_ids(self, event_ids: list[str]) -> int:
+        if not event_ids:
+            return 0
+        self._ensure_collection()
+        from qdrant_client.http import models
+
+        filter_obj = _build_filter(
+            models, {"capture_id": list(event_ids)}, embedding_model=None
+        )
+
+        def _delete() -> None:
+            self._client.delete(collection_name=self._collection, points_selector=filter_obj)
+
+        try:
+            self._run(_delete)
+        except Exception as exc:
+            self._log.warning("Spans v2 delete failed: {}", exc)
+            return 0
+        return len(event_ids)
 
 
 def _build_filter(models, filters: dict | None, *, embedding_model: str | None):

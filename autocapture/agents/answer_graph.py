@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
-
-from sqlalchemy import select
 
 from ..config import AppConfig
 from ..logging_utils import get_logger
@@ -20,10 +19,11 @@ from ..memory.time_intent import (
     resolve_timezone,
 )
 from ..memory.threads import ThreadRetrievalService
-from ..memory.retrieval import RetrieveFilters, RetrievalService, RetrievedEvent
+from ..memory.retrieval import RetrieveFilters, RetrievalService
 from ..model_ops import StageRouter
 from ..storage.models import EventRecord
 from ..memory.verification import Claim, RulesVerifier
+from ..observability.otel import otel_span, record_histogram
 
 
 @dataclass
@@ -102,7 +102,7 @@ class AnswerGraph:
         draft_k = self._config.retrieval.speculative_draft_k if speculative else k
         final_k = self._config.retrieval.speculative_final_k if speculative else k
         retrieval_mode = "baseline" if speculative else None
-        evidence, events = self._build_evidence(
+        evidence, events, no_evidence = self._build_evidence(
             retrieve_query,
             resolved_time_range,
             filters,
@@ -116,8 +116,31 @@ class AnswerGraph:
             resolved_time_range,
         )
         aggregates = _merge_aggregates(aggregates, thread_aggregates)
-        if not evidence:
+        if not evidence or no_evidence:
             warnings.append("no_evidence")
+            empty_pack = build_context_pack(
+                query=query,
+                evidence=[],
+                entity_tokens=[],
+                routing=routing,
+                filters={
+                    "time_range": resolved_time_range,
+                    "apps": filters.get("app") if filters else None,
+                    "domains": filters.get("domain") if filters else None,
+                },
+                sanitized=sanitized,
+                aggregates=aggregates,
+            )
+            return _build_graph_result(
+                _no_evidence_message(query, resolved_time_range is not None),
+                [],
+                empty_pack.to_json(),
+                warnings,
+                used_llm=False,
+                output_format=output_format,
+                context_pack_tron=None,
+                prompt_strategy=None,
+            )
         if (
             not time_only
             and self._should_refine(evidence)
@@ -142,7 +165,7 @@ class AnswerGraph:
                 not refined_query and resolved_time_range is not None
             ):
                 retrieve_query = refined_query
-                evidence, events = self._build_evidence(
+                evidence, events, no_evidence = self._build_evidence(
                     refined_query,
                     resolved_time_range,
                     filters,
@@ -150,6 +173,31 @@ class AnswerGraph:
                     sanitized,
                     retrieval_mode=retrieval_mode,
                 )
+                if no_evidence or not evidence:
+                    warnings.append("no_evidence")
+                    empty_pack = build_context_pack(
+                        query=query,
+                        evidence=[],
+                        entity_tokens=[],
+                        routing=routing,
+                        filters={
+                            "time_range": resolved_time_range,
+                            "apps": filters.get("app") if filters else None,
+                            "domains": filters.get("domain") if filters else None,
+                        },
+                        sanitized=sanitized,
+                        aggregates=aggregates,
+                    )
+                    return _build_graph_result(
+                        _no_evidence_message(query, resolved_time_range is not None),
+                        [],
+                        empty_pack.to_json(),
+                        warnings,
+                        used_llm=False,
+                        output_format=output_format,
+                        context_pack_tron=None,
+                        prompt_strategy=None,
+                    )
         pack = build_context_pack(
             query=query,
             evidence=evidence,
@@ -219,11 +267,18 @@ class AnswerGraph:
                     warnings,
                     stage="draft_generate",
                 )
-                draft_text = await draft_provider.generate_answer(
-                    system_prompt,
-                    draft_query,
-                    draft_pack,
-                    temperature=draft_decision.temperature,
+                draft_start = time.monotonic()
+                with otel_span("answer_generate", {"stage_name": "answer_generate"}):
+                    draft_text = await draft_provider.generate_answer(
+                        system_prompt,
+                        draft_query,
+                        draft_pack,
+                        temperature=draft_decision.temperature,
+                    )
+                record_histogram(
+                    "answer_generate_ms",
+                    (time.monotonic() - draft_start) * 1000,
+                    {"stage_name": "answer_generate"},
                 )
                 draft_citations = _extract_citations(draft_text)
                 draft_valid = _verify_answer(draft_text, draft_citations, evidence)
@@ -244,7 +299,7 @@ class AnswerGraph:
             )
 
         if speculative:
-            evidence, events = self._build_evidence(
+            evidence, events, no_evidence = self._build_evidence(
                 retrieve_query,
                 resolved_time_range,
                 filters,
@@ -252,7 +307,7 @@ class AnswerGraph:
                 sanitized,
                 retrieval_mode="deep",
             )
-            if not evidence:
+            if not evidence or no_evidence:
                 warnings.append("no_evidence_deep")
             pack = build_context_pack(
                 query=query,
@@ -295,11 +350,18 @@ class AnswerGraph:
                 warnings,
                 stage="final_answer",
             )
-            answer_text = await final_provider.generate_answer(
-                system_prompt,
-                final_query,
-                final_pack,
-                temperature=final_decision.temperature,
+            answer_start = time.monotonic()
+            with otel_span("answer_generate", {"stage_name": "answer_generate"}):
+                answer_text = await final_provider.generate_answer(
+                    system_prompt,
+                    final_query,
+                    final_pack,
+                    temperature=final_decision.temperature,
+                )
+            record_histogram(
+                "answer_generate_ms",
+                (time.monotonic() - answer_start) * 1000,
+                {"stage_name": "answer_generate"},
             )
             prompt_strategy_payload = _prompt_strategy_payload(final_provider)
             citations = _extract_citations(answer_text)
@@ -339,33 +401,30 @@ class AnswerGraph:
         k: int,
         sanitized: bool,
         retrieval_mode: str | None = None,
-    ):
+    ) -> tuple[list[EvidenceItem], list[EventRecord], bool]:
         retrieve_filters = None
         if filters:
             retrieve_filters = RetrieveFilters(
                 apps=filters.get("app"), domains=filters.get("domain")
             )
-        results = self._retrieval.retrieve(
+        batch = self._retrieval.retrieve(
             query, time_range, retrieve_filters, limit=k, mode=retrieval_mode
         )
-        if not results:
-            with self._retrieval._db.session() as session:  # type: ignore[attr-defined]
-                stmt = select(EventRecord).where(EventRecord.ocr_text.ilike(f"%{query}%"))
-                if time_range:
-                    stmt = stmt.where(EventRecord.ts_start.between(*time_range))
-                events = session.execute(stmt).scalars().all()
-            results = [RetrievedEvent(event=event, score=0.5) for event in events[:k]]
+        results = list(batch.results)
+        no_evidence = bool(batch.no_evidence)
         if not results and time_range and not query:
-            results = self._retrieval.retrieve("", time_range, retrieve_filters, limit=k)
+            batch = self._retrieval.retrieve("", time_range, retrieve_filters, limit=k)
+            results = list(batch.results)
+            no_evidence = bool(batch.no_evidence)
+        results = [item for item in results if not item.non_citable]
         if not results:
-            fallback_events = list(self._retrieval.list_events(limit=k))
-            results = [RetrievedEvent(event=event, score=0.3) for event in fallback_events]
+            return [], [], True
         evidence: list[EvidenceItem] = []
-        events = []
+        events: list[EventRecord] = []
         for idx, result in enumerate(results, start=1):
             event = result.event
             events.append(event)
-            snippet = (event.ocr_text or "")[:500]
+            snippet = result.snippet or (event.ocr_text or "")[:500]
             app_name = event.app_name
             title = event.window_title
             domain = event.domain
@@ -397,12 +456,14 @@ class AnswerGraph:
                         "vector_score": getattr(result, "vector_score", 0.0),
                         "sparse_score": getattr(result, "sparse_score", 0.0),
                         "late_score": getattr(result, "late_score", 0.0),
+                        "rerank_score": getattr(result, "rerank_score", None),
                         "matched_spans": getattr(result, "matched_span_keys", []),
                         "ts_start": event.ts_start.isoformat(),
+                        "non_citable": getattr(result, "non_citable", False),
                     },
                 )
             )
-        return evidence, events
+        return evidence, events, no_evidence
 
     def _normalize_query(self, query: str) -> str:
         return query.strip()
@@ -429,11 +490,18 @@ class AnswerGraph:
                 "query_refine", routing_override=routing_override
             )
             context = self._build_refinement_context(evidence)
-            response = await provider.generate_answer(
-                prompt.system_prompt,
-                query,
-                context,
-                temperature=decision.temperature,
+            refine_start = time.monotonic()
+            with otel_span("answer_generate", {"stage_name": "answer_generate"}):
+                response = await provider.generate_answer(
+                    prompt.system_prompt,
+                    query,
+                    context,
+                    temperature=decision.temperature,
+                )
+            record_histogram(
+                "answer_generate_ms",
+                (time.monotonic() - refine_start) * 1000,
+                {"stage_name": "answer_generate"},
             )
             refined = _parse_refined_query(response)
             if refined:
@@ -686,6 +754,13 @@ def _prompt_strategy_payload(provider: object) -> dict | None:
     if hasattr(metadata, "to_dict"):
         return metadata.to_dict()
     return None
+
+
+def _no_evidence_message(query: str, has_time_range: bool) -> str:
+    _ = query
+    if has_time_range:
+        return "No evidence found in the selected time range. Try expanding the time range."
+    return "No evidence found. Try rephrasing the query or adding a time range."
 
 
 def _build_graph_result(

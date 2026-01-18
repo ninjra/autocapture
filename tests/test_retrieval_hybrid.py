@@ -134,7 +134,8 @@ def test_hybrid_retrieval_prioritizes_relevant_event(tmp_path: Path) -> None:
         [VectorHit(event_id="EOLD", span_key="S1", score=0.9)]
     )  # type: ignore[attr-defined]
 
-    results = retrieval.retrieve("roadmap", None, None, limit=2)
+    batch = retrieval.retrieve("roadmap", None, None, limit=2)
+    results = batch.results
     assert results
     assert results[0].event.event_id == "EOLD"
 
@@ -193,7 +194,8 @@ def test_reranker_overrides_hybrid_scores(tmp_path: Path) -> None:
         ]
     )  # type: ignore[attr-defined]
 
-    results = retrieval.retrieve("roadmap", None, None, limit=2)
+    batch = retrieval.retrieve("roadmap", None, None, limit=2)
+    results = batch.results
     assert results
     assert results[0].event.event_id == "ENEW"
 
@@ -256,6 +258,7 @@ def test_retrieve_offset_applies_to_fallback_query(tmp_path: Path) -> None:
     retrieval._lexical = FakeLexical([])  # type: ignore[attr-defined]
     retrieval._vector = FakeVector([])  # type: ignore[attr-defined]
 
-    results = retrieval.retrieve("alpha", None, None, limit=1, offset=1)
+    batch = retrieval.retrieve("alpha", None, None, limit=1, offset=1)
+    results = batch.results
     assert results
     assert results[0].event.event_id == "E2"
