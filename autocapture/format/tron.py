@@ -12,7 +12,7 @@ _CLASS_DEF_RE = re.compile(r"^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{([^}]*)\}\
 _PREFERRED_FIELD_ORDER = {
     "ContextPack": ["version", "query", "generated_at", "evidence", "warnings"],
     "EvidenceItem": ["id", "ts_start", "ts_end", "source", "title", "text", "meta"],
-    "EvidenceSpan": ["span_id", "start", "end", "conf"],
+    "EvidenceSpan": ["span_id", "start", "end", "conf", "bbox", "bbox_norm"],
 }
 
 _LIST_CLASS_BY_KEY = {

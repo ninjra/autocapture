@@ -17,6 +17,8 @@ class EvidenceSpan:
     start: int
     end: int
     conf: float
+    bbox: list[int] | None = None
+    bbox_norm: list[float] | None = None
 
 
 @dataclass(frozen=True)
@@ -111,6 +113,8 @@ class ContextPack:
                                 "start": span.start,
                                 "end": span.end,
                                 "conf": span.conf,
+                                "bbox": span.bbox,
+                                "bbox_norm": span.bbox_norm,
                             }
                             for span in item.spans
                         ],
@@ -128,7 +132,7 @@ class ContextPack:
             from ..format.tron import encode_tron
 
             return encode_tron(payload)
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+        return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
     def to_tron(self) -> str:
         return self.to_text(extractive_only=False, format="tron")

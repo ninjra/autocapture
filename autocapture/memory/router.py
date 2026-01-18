@@ -58,7 +58,11 @@ class ProviderRouter:
         self._secrets = EnvSecretStore()
 
     def select_llm(self) -> tuple[LLMProvider, RoutingDecision]:
-        if self._routing.llm == "openai" and not self._privacy.cloud_enabled:
+        if (
+            self._routing.llm == "openai"
+            and not self._privacy.cloud_enabled
+            and not self._offline
+        ):
             raise RuntimeError(
                 "Cloud provider blocked. Enable a cloud profile (privacy.cloud_enabled=true) "
                 "to allow OpenAI usage."

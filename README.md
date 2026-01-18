@@ -12,6 +12,15 @@ A local-first desktop recall app for Windows 11 that runs as a single binary: tr
 - **Stage-routed LLM pipeline** with query refinement, draft generation, and final answer stages (local-first defaults).
 - **Optional DiffusionVL local server** (`tools/diffusionvl_server.py`) for OpenAI-compatible VLM hosting.
 
+## Phase 3 Highlights (SPEC-4)
+
+- **Runtime governor + fullscreen hard pause** with GPU lease release and auto-resume.
+- **Hybrid retrieval v2**: multi-query + RRF fusion, sparse retrieval, and late-interaction reranking (flagged).
+- **Region-level citations**: span bboxes included in context packs and optional overlay rendering.
+- **PP-Structure layout** (optional): `ocr.paddle_ppstructure_*` for local PaddleOCR layouts.
+
+See `docs/PHASE3.md` for the full requirement mapping and rollout flags.
+
 ## Repository Layout
 
 ```text

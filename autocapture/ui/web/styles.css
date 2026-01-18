@@ -135,6 +135,20 @@ main {
   font-size: 12px;
 }
 
+.thread .msg .citation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.thread .msg .citation-actions button {
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: #1d4ed8;
+  font-size: 12px;
+}
+
 form {
   display: flex;
   gap: 12px;

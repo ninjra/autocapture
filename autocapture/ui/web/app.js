@@ -53,7 +53,7 @@ function appendMessage(author, text) {
   thread.scrollTop = thread.scrollHeight;
 }
 
-function appendAssistantMessage(answer, citations) {
+function appendAssistantMessage(answer, citations, contextPack) {
   const div = document.createElement('div');
   div.className = 'msg';
   const strong = document.createElement('strong');
@@ -67,9 +67,71 @@ function appendAssistantMessage(answer, citations) {
     citationText.className = 'citations';
     citationText.textContent = `Citations: ${citations.join(', ')}`;
     div.appendChild(citationText);
+    if (contextPack && Array.isArray(contextPack.evidence)) {
+      const actions = document.createElement('div');
+      actions.className = 'citation-actions';
+      citations.forEach((cite) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = `Overlay ${cite}`;
+        btn.addEventListener('click', () => {
+          showCitationOverlay(cite, contextPack);
+        });
+        actions.appendChild(btn);
+      });
+      div.appendChild(actions);
+    }
   }
   thread.appendChild(div);
   thread.scrollTop = thread.scrollHeight;
+}
+
+async function showCitationOverlay(citationId, contextPack) {
+  const evidenceList = Array.isArray(contextPack.evidence) ? contextPack.evidence : [];
+  const item = evidenceList.find((entry) => entry && entry.id === citationId);
+  if (!item || !item.meta) {
+    appendAssistantMessage('No overlay available for that citation.', []);
+    return;
+  }
+  const eventId = item.meta.event_id;
+  const spans = Array.isArray(item.meta.spans) ? item.meta.spans : [];
+  const bboxes = [];
+  let useNorm = false;
+  spans.forEach((span) => {
+    if (Array.isArray(span.bbox_norm) && span.bbox_norm.length >= 4) {
+      bboxes.push(span.bbox_norm);
+      useNorm = true;
+      return;
+    }
+    if (Array.isArray(span.bbox) && span.bbox.length >= 4) {
+      bboxes.push(span.bbox);
+    }
+  });
+  if (!eventId || bboxes.length === 0) {
+    appendAssistantMessage('No overlay regions available for that citation.', []);
+    return;
+  }
+  let response;
+  try {
+    response = await apiFetch('/api/citations/overlay', {
+      method: 'POST',
+      body: JSON.stringify({
+        event_id: eventId,
+        bboxes,
+        bbox_format: useNorm ? 'norm' : 'px'
+      })
+    });
+  } catch (err) {
+    appendAssistantMessage('Failed to fetch overlay from the API.', []);
+    return;
+  }
+  if (!response.ok) {
+    appendAssistantMessage('Overlay request failed.', []);
+    return;
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, '_blank');
 }
 
 function rangeToTuple(rangeKey) {
@@ -121,7 +183,7 @@ chatForm.addEventListener('submit', async (event) => {
     appendAssistantMessage(`Error: ${detail}.`, []);
     return;
   }
-  appendAssistantMessage(data.answer || '', data.citations || []);
+  appendAssistantMessage(data.answer || '', data.citations || [], data.used_context_pack || null);
   if (safeModeIndicator) {
     const strategy = data.prompt_strategy;
     if (!strategy) {

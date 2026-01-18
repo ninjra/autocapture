@@ -27,6 +27,11 @@ security:
   local_unlock_enabled: true
   session_ttl_seconds: 300
   provider: "windows_hello"
+templates:
+  enabled: true
+  log_provenance: true
+ui:
+  overlay_citations_enabled: false
 offline: true
 privacy:
   cloud_enabled: false
@@ -204,6 +209,8 @@ capture:
   # data_dir: "%LOCALAPPDATA%/Autocapture/data"       # optional override
   encoder: "nvenc_webp"
   record_video: false
+  multi_monitor_enabled: true
+  hdr_enabled: false
   layout_mode: "virtual_desktop"
   video_bitrate: "8M"
   video_preset: "p4"
@@ -235,6 +242,10 @@ ocr:
     - "CPUExecutionProvider"
   languages: ["en"]
   output_format: "json"
+  layout_enabled: true
+  paddle_ppstructure_enabled: false
+  paddle_ppstructure_model_dir: null
+  paddle_ppstructure_use_gpu: false
 vision_extract:
   engine: "vlm"
   fallback_engine: "rapidocr-onnxruntime"
@@ -281,10 +292,13 @@ reranker:
   disable_in_fullscreen: true
   force_cpu_in_active: true
 retrieval:
+  v2_enabled: false
   use_spans_v2: false
   sparse_enabled: false
   late_enabled: false
   fusion_enabled: false
+  multi_query_enabled: true
+  rrf_enabled: true
   lexical_min_score: 0.15
   dense_min_score: 0.15
   rerank_min_score: 0.15
@@ -300,6 +314,9 @@ retrieval:
   late_text_max_chars: 200
   late_candidate_k: 100
   late_rerank_k: 50
+  late_stage1_enabled: false
+  late_stage1_max_days: 7
+  late_stage1_k: 50
   rewrite_max_chars: 200
   speculative_enabled: false
   speculative_draft_k: 6

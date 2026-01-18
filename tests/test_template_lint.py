@@ -15,5 +15,15 @@ def test_lint_rejects_dunder() -> None:
         lint_template_text("{{ __class__ }}")
 
 
+def test_lint_rejects_namespace_helper() -> None:
+    with pytest.raises(ValueError):
+        lint_template_text("{{ namespace() }}")
+
+
+def test_lint_rejects_attribute_access() -> None:
+    with pytest.raises(ValueError):
+        lint_template_text("{{ user.name }}")
+
+
 def test_lint_allows_simple_text() -> None:
     lint_template_text("Plain prompt with {{ variable }}")

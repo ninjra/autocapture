@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -13,6 +14,7 @@ import yaml
 from sqlalchemy import select
 
 from ..storage.database import DatabaseManager
+from ..logging_utils import get_logger
 from ..storage.models import PromptLibraryRecord
 from ..security.template_lint import lint_template_text
 from ..paths import resource_root
@@ -30,24 +32,44 @@ class PromptTemplate:
 
 
 class PromptRegistry:
-    def __init__(self, prompts_dir: Optional[Path] = None, package: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        prompts_dir: Optional[Path] = None,
+        package: Optional[str] = None,
+        *,
+        hardening_enabled: bool = True,
+        log_provenance: bool = True,
+    ) -> None:
         self._prompts_dir = prompts_dir
         self._package = package
         self._cache: dict[str, PromptTemplate] = {}
+        self._hardening_enabled = hardening_enabled
+        self._log_provenance = log_provenance
+        self._log = get_logger("prompts")
 
     def load(self) -> None:
         if self._prompts_dir and self._prompts_dir.exists():
             if not _is_trusted_prompt_path(self._prompts_dir):
                 raise ValueError(f"Untrusted prompt path: {self._prompts_dir}")
             for path in self._prompts_dir.glob("*.yaml"):
-                template = _parse_prompt(path.read_text(encoding="utf-8"))
+                raw = path.read_text(encoding="utf-8")
+                template = _parse_prompt(raw, hardening_enabled=self._hardening_enabled)
                 self._cache[template.name] = template
+                self._maybe_log_provenance(
+                    template, source=str(path), raw=raw, version=template.version
+                )
         if self._package:
             for entry in resources.files(self._package).iterdir():
                 if entry.name.endswith(".yaml"):
                     payload = entry.read_text(encoding="utf-8")
-                    template = _parse_prompt(payload)
+                    template = _parse_prompt(payload, hardening_enabled=self._hardening_enabled)
                     self._cache[template.name] = template
+                    self._maybe_log_provenance(
+                        template,
+                        source=f"{self._package}:{entry.name}",
+                        raw=payload,
+                        version=template.version,
+                    )
 
     def get(self, name: str) -> PromptTemplate:
         if not self._cache:
@@ -62,19 +84,44 @@ class PromptRegistry:
         return self._cache.values()
 
     @classmethod
-    def from_package(cls, package: str) -> "PromptRegistry":
-        return cls(package=package)
+    def from_package(
+        cls,
+        package: str,
+        *,
+        hardening_enabled: bool = True,
+        log_provenance: bool = True,
+    ) -> "PromptRegistry":
+        return cls(
+            package=package,
+            hardening_enabled=hardening_enabled,
+            log_provenance=log_provenance,
+        )
+
+    def _maybe_log_provenance(
+        self, template: PromptTemplate, *, source: str, raw: str, version: str
+    ) -> None:
+        if not self._log_provenance:
+            return
+        digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        self._log.info(
+            "Loaded prompt template {}:{} from {} (sha256={})",
+            template.name,
+            version,
+            source,
+            digest,
+        )
 
 
-def _parse_prompt(raw: str) -> PromptTemplate:
+def _parse_prompt(raw: str, *, hardening_enabled: bool) -> PromptTemplate:
     payload = yaml.safe_load(raw)
     name = payload["name"]
     system_prompt = payload["system_prompt"]
     raw_template = payload.get("raw_template", payload["system_prompt"])
     derived_template = payload.get("derived_template", payload["system_prompt"])
-    lint_template_text(system_prompt, label=f"prompt:{name}:system_prompt")
-    lint_template_text(raw_template, label=f"prompt:{name}:raw_template")
-    lint_template_text(derived_template, label=f"prompt:{name}:derived_template")
+    if hardening_enabled:
+        lint_template_text(system_prompt, label=f"prompt:{name}:system_prompt")
+        lint_template_text(raw_template, label=f"prompt:{name}:raw_template")
+        lint_template_text(derived_template, label=f"prompt:{name}:derived_template")
     return PromptTemplate(
         name=name,
         version=payload["version"],

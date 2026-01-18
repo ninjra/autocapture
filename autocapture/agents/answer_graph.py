@@ -11,7 +11,7 @@ from typing import Any
 from ..config import AppConfig
 from ..logging_utils import get_logger
 from ..memory.compression import CompressedAnswer, extractive_answer
-from ..memory.context_pack import EvidenceItem, build_context_pack, build_evidence_payload
+from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack, build_evidence_payload
 from ..memory.time_intent import (
     is_time_only_expression,
     resolve_time_intent,
@@ -102,7 +102,7 @@ class AnswerGraph:
         draft_k = self._config.retrieval.speculative_draft_k if speculative else k
         final_k = self._config.retrieval.speculative_final_k if speculative else k
         retrieval_mode = "baseline" if speculative else None
-        evidence, events, no_evidence = self._build_evidence(
+        evidence_result = self._build_evidence(
             retrieve_query,
             resolved_time_range,
             filters,
@@ -110,6 +110,7 @@ class AnswerGraph:
             sanitized,
             retrieval_mode=retrieval_mode,
         )
+        evidence, events, no_evidence = _unpack_evidence_result(evidence_result)
         thread_aggregates = _build_thread_aggregates(
             self._thread_retrieval,
             normalized_query,
@@ -147,6 +148,9 @@ class AnswerGraph:
             and self._config.model_stages.query_refine.enabled
             and not speculative
         ):
+            base_evidence = evidence
+            base_events = events
+            base_no_evidence = no_evidence
             refined = await self._refine_query(
                 normalized_query, evidence, routing_override=routing_override
             )
@@ -165,7 +169,7 @@ class AnswerGraph:
                 not refined_query and resolved_time_range is not None
             ):
                 retrieve_query = refined_query
-                evidence, events, no_evidence = self._build_evidence(
+                refined_result = self._build_evidence(
                     refined_query,
                     resolved_time_range,
                     filters,
@@ -173,31 +177,12 @@ class AnswerGraph:
                     sanitized,
                     retrieval_mode=retrieval_mode,
                 )
+                evidence, events, no_evidence = _unpack_evidence_result(refined_result)
                 if no_evidence or not evidence:
-                    warnings.append("no_evidence")
-                    empty_pack = build_context_pack(
-                        query=query,
-                        evidence=[],
-                        entity_tokens=[],
-                        routing=routing,
-                        filters={
-                            "time_range": resolved_time_range,
-                            "apps": filters.get("app") if filters else None,
-                            "domains": filters.get("domain") if filters else None,
-                        },
-                        sanitized=sanitized,
-                        aggregates=aggregates,
-                    )
-                    return _build_graph_result(
-                        _no_evidence_message(query, resolved_time_range is not None),
-                        [],
-                        empty_pack.to_json(),
-                        warnings,
-                        used_llm=False,
-                        output_format=output_format,
-                        context_pack_tron=None,
-                        prompt_strategy=None,
-                    )
+                    warnings.append("no_evidence_refined")
+                    evidence = base_evidence
+                    events = base_events
+                    no_evidence = base_no_evidence
         pack = build_context_pack(
             query=query,
             evidence=evidence,
@@ -299,7 +284,7 @@ class AnswerGraph:
             )
 
         if speculative:
-            evidence, events, no_evidence = self._build_evidence(
+            deep_result = self._build_evidence(
                 retrieve_query,
                 resolved_time_range,
                 filters,
@@ -307,6 +292,7 @@ class AnswerGraph:
                 sanitized,
                 retrieval_mode="deep",
             )
+            evidence, events, no_evidence = _unpack_evidence_result(deep_result)
             if not evidence or no_evidence:
                 warnings.append("no_evidence_deep")
             pack = build_context_pack(
@@ -425,6 +411,21 @@ class AnswerGraph:
             event = result.event
             events.append(event)
             snippet = result.snippet or (event.ocr_text or "")[:500]
+            frame_size = _frame_size_from_tags(event.tags)
+            spans: list[EvidenceSpan] = []
+            if result.bbox:
+                bbox_norm = _bbox_norm(result.bbox, frame_size)
+                span_id = result.matched_span_keys[0] if result.matched_span_keys else "S0"
+                spans.append(
+                    EvidenceSpan(
+                        span_id=str(span_id),
+                        start=0,
+                        end=len(snippet),
+                        conf=0.5,
+                        bbox=result.bbox,
+                        bbox_norm=bbox_norm,
+                    )
+                )
             app_name = event.app_name
             title = event.window_title
             domain = event.domain
@@ -444,7 +445,7 @@ class AnswerGraph:
                     title=title,
                     domain=domain,
                     score=result.score,
-                    spans=[],
+                    spans=spans,
                     text=snippet,
                     screenshot_path=event.screenshot_path,
                     screenshot_hash=event.screenshot_hash,
@@ -747,6 +748,23 @@ def _merge_aggregates(existing: dict | None, incoming: dict | None) -> dict:
     return merged
 
 
+def _unpack_evidence_result(
+    result: tuple[list[EvidenceItem], list[EventRecord], bool]
+    | tuple[list[EvidenceItem], list[EventRecord]]
+    | None
+) -> tuple[list[EvidenceItem], list[EventRecord], bool]:
+    if not result:
+        return [], [], True
+    if isinstance(result, tuple):
+        if len(result) == 3:
+            evidence, events, no_evidence = result
+            return list(evidence), list(events), bool(no_evidence)
+        if len(result) == 2:
+            evidence, events = result
+            return list(evidence), list(events), not bool(evidence)
+    return [], [], True
+
+
 def _prompt_strategy_payload(provider: object) -> dict | None:
     metadata = getattr(provider, "last_prompt_metadata", None)
     if metadata is None:
@@ -754,6 +772,55 @@ def _prompt_strategy_payload(provider: object) -> dict | None:
     if hasattr(metadata, "to_dict"):
         return metadata.to_dict()
     return None
+
+
+def _frame_size_from_tags(tags: dict | None) -> tuple[int, int] | None:
+    if not isinstance(tags, dict):
+        return None
+    meta = tags.get("capture_meta")
+    if not isinstance(meta, dict):
+        return None
+    width = meta.get("frame_width")
+    height = meta.get("frame_height")
+    try:
+        width_val = int(width)
+        height_val = int(height)
+    except (TypeError, ValueError):
+        return None
+    if width_val <= 0 or height_val <= 0:
+        return None
+    return width_val, height_val
+
+
+def _bbox_norm(
+    bbox: list[int] | None, frame_size: tuple[int, int] | None
+) -> list[float] | None:
+    if not bbox or not frame_size:
+        return None
+    width, height = frame_size
+    if width <= 0 or height <= 0:
+        return None
+    if len(bbox) >= 8:
+        xs = bbox[0::2]
+        ys = bbox[1::2]
+        if not xs or not ys:
+            return None
+        x0, x1 = min(xs), max(xs)
+        y0, y1 = min(ys), max(ys)
+    elif len(bbox) >= 4:
+        x0, y0, x1, y1 = bbox[:4]
+    else:
+        return None
+    x0 = max(0, min(width, x0))
+    x1 = max(0, min(width, x1))
+    y0 = max(0, min(height, y0))
+    y1 = max(0, min(height, y1))
+    return [
+        round(x0 / width, 6),
+        round(y0 / height, 6),
+        round(x1 / width, 6),
+        round(y1 / height, 6),
+    ]
 
 
 def _no_evidence_message(query: str, has_time_range: bool) -> str:
