@@ -945,6 +945,9 @@ class LLMConfig(BaseModel):
     provider: str = Field("ollama", description="ollama|openai|openai_compatible")
     ollama_url: str = Field("http://127.0.0.1:11434")
     ollama_model: str = Field("llama3")
+    ollama_keep_alive_s: float | None = Field(
+        None, ge=0.0, description="Optional Ollama keep_alive duration (seconds)."
+    )
     openai_api_key: Optional[str] = Field(None, description="OpenAI API key")
     openai_model: str = Field("gpt-4.1-mini")
     openai_compatible_base_url: Optional[str] = Field(
