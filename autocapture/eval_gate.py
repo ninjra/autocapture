@@ -133,10 +133,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
 def load_baseline(path: Path) -> dict[str, float]:
     data = json.loads(path.read_text(encoding="utf-8"))
     return {str(key): float(value) for key, value in data.items()}
@@ -220,3 +216,7 @@ def _seed_fixture_corpus(db: DatabaseManager) -> None:
 def _load_events(db: DatabaseManager) -> Iterable[EventRecord]:
     with db.session() as session:
         return list(session.query(EventRecord).all())
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
