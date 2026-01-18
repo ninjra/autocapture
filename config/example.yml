@@ -82,6 +82,7 @@ overlay_tracker:
     allow_browsers: ["chrome.exe", "msedge.exe"]
     allow_domains: []
     token_rules: []
+# Hard offline mode: blocks outbound network (loopback allowed) and disables cloud calls.
 offline: true
 privacy:
   cloud_enabled: false
@@ -138,6 +139,7 @@ llm:
   provider: "ollama"
   ollama_url: "http://127.0.0.1:11434"
   ollama_model: "llama3"
+  ollama_keep_alive_s: null
   openai_api_key: null
   openai_model: "gpt-4.1-mini"
   openai_compatible_base_url: null
@@ -388,11 +390,14 @@ worker:
   max_task_runtime_s: 900.0
 runtime:
   auto_pause:
+    enabled: true
     on_fullscreen: true
     mode: "hard"
+    fullscreen_hard_pause_enabled: true
     release_gpu: true
     poll_hz: 2
   qos:
+    enabled: true
     idle_grace_ms: 2000
     profile_active:
       ocr_workers: 1
@@ -401,6 +406,10 @@ runtime:
       vision_extract: false
       ui_grounding: false
       cpu_priority: "below_normal"
+      sleep_ms: null
+      max_batch: null
+      max_concurrency: null
+      gpu_policy: "allow_gpu"
     profile_idle:
       ocr_workers: 4
       embed_workers: 2
@@ -408,6 +417,10 @@ runtime:
       vision_extract: true
       ui_grounding: true
       cpu_priority: "normal"
+      sleep_ms: null
+      max_batch: null
+      max_concurrency: null
+      gpu_policy: "allow_gpu"
 retention:
   video_days: 3
   roi_days: 7
