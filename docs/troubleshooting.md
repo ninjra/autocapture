@@ -95,3 +95,9 @@ log file whenever something calls :func:`subprocess.Popen`, :func:`subprocess.ru
 or the Windows ``multiprocessing`` spawn helpers. Inspect the most recent entries in
 that log to identify which code path is requesting a new Python interpreter and
 adjust the configuration accordingly.
+
+## Overlay tracker
+
+- The overlay UI requires the tray app (`autocapture app`) so the Qt event loop is running.
+- If hotkeys do not fire, check for conflicts and update `overlay_tracker.hotkeys` in config.
+- If the overlay hides during fullscreen apps, set `overlay_tracker.ui.auto_hide_fullscreen=false`.

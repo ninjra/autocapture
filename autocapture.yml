@@ -31,6 +31,56 @@ templates:
   log_provenance: true
 ui:
   overlay_citations_enabled: false
+overlay_tracker:
+  enabled: false
+  platforms: ["windows"]
+  stale_after_hours: 48
+  hotness_half_life_minutes: 30
+  collectors:
+    foreground_enabled: true
+    input_enabled: true
+    fallback_foreground_poll_ms: 1000
+    input_poll_ms: 250
+    input_debounce_ms: 500
+  ui:
+    enabled: true
+    dock: "right"
+    width_px: 320
+    click_through_default: true
+    interactive_timeout_seconds: 10
+    refresh_ms: 1000
+    auto_hide_fullscreen: true
+  hotkeys:
+    toggle_overlay:
+      modifiers: ["ctrl", "shift"]
+      key: "O"
+    interactive_mode:
+      modifiers: ["ctrl", "shift"]
+      key: "I"
+    project_cycle:
+      modifiers: ["ctrl", "shift"]
+      key: "P"
+    toggle_running:
+      modifiers: ["ctrl", "shift"]
+      key: "R"
+    rename:
+      modifiers: ["ctrl", "shift"]
+      key: "N"
+    snooze:
+      modifiers: ["ctrl", "shift"]
+      key: "S"
+    snooze_minutes: [15, 60, 240]
+  policy:
+    deny_processes: []
+    max_window_title_length: 512
+  retention:
+    event_days: 14
+    event_cap: 200000
+  url_plugin:
+    enabled: false
+    allow_browsers: ["chrome.exe", "msedge.exe"]
+    allow_domains: []
+    token_rules: []
 offline: true
 privacy:
   cloud_enabled: false

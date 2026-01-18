@@ -31,6 +31,8 @@ from .settings_store import update_settings
 from .storage.database import DatabaseManager
 from .storage.retention import RetentionManager
 from .tracking import HostVectorTracker
+from .overlay_tracker import OverlayTrackerService
+from .modules import ModuleHost
 from .worker.supervisor import WorkerSupervisor
 from .memory.router import ProviderRouter
 from .qdrant.sidecar import QdrantSidecar
@@ -198,6 +200,12 @@ class AppRuntime:
             if config.tracking.enabled
             else None
         )
+        self._overlay_tracker = OverlayTrackerService(
+            config.overlay_tracker,
+            self._db,
+            sanitize=config.privacy.sanitize_default,
+        )
+        self._module_host = ModuleHost([self._overlay_tracker])
         self._raw_input = RawInputListener(
             idle_grace_ms=config.capture.hid.idle_grace_ms,
             on_activity=None,
@@ -296,6 +304,7 @@ class AppRuntime:
         self._qdrant_sidecar.start()
         if self._tracker:
             self._tracker.start()
+        self._module_host.start()
         self._orchestrator.start()
         self._runtime_governor.subscribe(self._on_runtime_mode_change)
         self._runtime_governor.start()
@@ -334,6 +343,7 @@ class AppRuntime:
             self._metrics.stop()
             if self._tracker:
                 self._tracker.stop()
+            self._module_host.stop()
             self._retention_scheduler.stop()
             if self._enrichment_scheduler:
                 self._enrichment_scheduler.stop()

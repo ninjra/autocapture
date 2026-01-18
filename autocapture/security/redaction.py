@@ -28,6 +28,12 @@ _SENSITIVE_KEYS = {
     "window_title",
     "query",
     "url",
+    "last_window_title_raw",
+    "last_browser_url_raw",
+    "raw_window_title",
+    "raw_browser_url",
+    "display_name",
+    "normalized_title",
 }
 
 

@@ -90,6 +90,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     promptops_sub.add_parser("status", help="Show latest PromptOps run.")
     promptops_sub.add_parser("list", help="List recent PromptOps runs.")
 
+    overlay = sub.add_parser("overlay-tracker", help="Overlay tracker utilities.")
+    overlay_sub = overlay.add_subparsers(dest="overlay_cmd", required=True)
+    overlay_sub.add_parser("status", help="Show overlay tracker status.")
+
     research = sub.add_parser("research", help="Research/model discovery utilities.")
     research_sub = research.add_subparsers(dest="research_cmd", required=True)
     scout = research_sub.add_parser("scout", help="Fetch model/paper updates and write report.")
@@ -230,6 +234,12 @@ def main(argv: list[str] | None = None) -> None:
             for run in runs:
                 logger.info("{} {} {}", run.run_id, run.status, run.pr_url or "")
             raise SystemExit(0)
+
+    if cmd == "overlay-tracker":
+        from .overlay_tracker.cli import overlay_status
+
+        if args.overlay_cmd == "status":
+            raise SystemExit(overlay_status(config))
 
     if cmd == "research":
         from .research.scout import append_report_log, run_scout, write_report

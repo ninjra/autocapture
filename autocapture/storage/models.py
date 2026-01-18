@@ -490,3 +490,122 @@ class ObservationRecord(Base):
     segment: Mapped[SegmentRecord | None] = relationship(
         "SegmentRecord", back_populates="observations"
     )
+
+
+class OverlayProjectRecord(Base):
+    __tablename__ = "overlay_projects"
+
+    __table_args__ = (UniqueConstraint("name", name="uq_overlay_projects_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(128))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class OverlayItemRecord(Base):
+    __tablename__ = "overlay_items"
+
+    __table_args__ = (
+        Index("ix_overlay_items_last_activity", "last_activity_at_utc"),
+        Index("ix_overlay_items_project_last_activity", "project_id", "last_activity_at_utc"),
+        Index("ix_overlay_items_snooze_until", "snooze_until_utc"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("overlay_projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    display_name: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    last_process_name: Mapped[str] = mapped_column(String(256))
+    last_window_title_raw: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    last_browser_url_raw: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    identity_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    identity_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    state: Mapped[str] = mapped_column(String(16), default="idle")
+    last_activity_at_utc: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    snooze_until_utc: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+    project: Mapped[OverlayProjectRecord] = relationship("OverlayProjectRecord")
+
+
+class OverlayItemIdentityRecord(Base):
+    __tablename__ = "overlay_item_identities"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "identity_type",
+            "identity_key",
+            name="uq_overlay_item_identities_key",
+        ),
+        Index("ix_overlay_item_identities_item", "item_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("overlay_items.id", ondelete="CASCADE"),
+        index=True,
+    )
+    identity_type: Mapped[str] = mapped_column(String(16))
+    identity_key: Mapped[str] = mapped_column(String(512))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+    item: Mapped[OverlayItemRecord] = relationship("OverlayItemRecord")
+
+
+class OverlayEventRecord(Base):
+    __tablename__ = "overlay_events"
+
+    __table_args__ = (
+        Index("ix_overlay_events_ts", "ts_utc"),
+        Index("ix_overlay_events_item_ts", "item_id", "ts_utc"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("overlay_items.id", ondelete="CASCADE"),
+        index=True,
+    )
+    project_id: Mapped[int] = mapped_column(
+        ForeignKey("overlay_projects.id", ondelete="CASCADE"),
+        index=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(32))
+    ts_utc: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    process_name: Mapped[str] = mapped_column(String(256))
+    raw_window_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    raw_browser_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    identity_type: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    identity_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    collector: Mapped[str] = mapped_column(String(32))
+    schema_version: Mapped[str] = mapped_column(String(16), default="v1")
+    app_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    item: Mapped[OverlayItemRecord] = relationship("OverlayItemRecord")
+    project: Mapped[OverlayProjectRecord] = relationship("OverlayProjectRecord")
+
+
+class OverlayKvRecord(Base):
+    __tablename__ = "overlay_kv"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
