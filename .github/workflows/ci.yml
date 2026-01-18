@@ -23,6 +23,8 @@ jobs:
         run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
       - name: Run CPU check
         run: make check
+      - name: Prompt template security gate
+        run: poetry run python -m autocapture.promptops.validate
 
   test:
     runs-on: ubuntu-latest
