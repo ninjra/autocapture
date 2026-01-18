@@ -36,7 +36,6 @@ else:
     class LASTINPUTINFO(ctypes.Structure):
         _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
 
-
     class InputActivityCollector:
         def __init__(
             self,

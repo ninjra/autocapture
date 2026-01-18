@@ -70,7 +70,7 @@ async def test_retrieve_context_pack_answer(
                 end=6,
                 text="Sample",
                 confidence=0.9,
-                bbox={},
+                bbox={"x0": 0, "y0": 0, "x1": 10, "y1": 10},
             )
         )
 

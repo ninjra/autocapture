@@ -56,7 +56,6 @@ else:
         DWORD,
     )
 
-
     class ForegroundHook:
         def __init__(
             self,
@@ -149,7 +148,6 @@ else:
 
             return _handler
 
-
     class ForegroundPoller:
         def __init__(
             self,
@@ -205,7 +203,6 @@ else:
                             pass
                 time.sleep(self._poll_s)
 
-
     class ForegroundCollector:
         def __init__(
             self,
@@ -244,7 +241,6 @@ else:
             self._hook.stop()
             self._poller.stop()
             self._status = "stopped"
-
 
     def _context_from_hwnd(hwnd: int, max_title_len: int) -> OverlayCollectorContext | None:
         user32 = ctypes.windll.user32

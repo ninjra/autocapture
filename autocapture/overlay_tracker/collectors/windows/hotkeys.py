@@ -52,14 +52,12 @@ else:
     WM_HOTKEY = 0x0312
     WM_QUIT = 0x0012
 
-
     @dataclass(slots=True)
     class HotkeyStatus:
         requested: str
         registered: str | None
         ok: bool
         error: str | None
-
 
     class HotkeyManager:
         def __init__(
@@ -174,7 +172,6 @@ else:
             for hotkey_id in range(1, self._last_hotkey_id):
                 self._user32.UnregisterHotKey(None, hotkey_id)
 
-
     def _fallback_variants(spec: OverlayHotkeySpec) -> list[tuple[int, int]]:
         modifiers = _parse_modifiers(spec.modifiers)
         vk = _parse_vk(spec.key)
@@ -198,7 +195,6 @@ else:
             unique.append(entry)
         return unique
 
-
     def _parse_modifiers(mods: list[str]) -> int:
         value = 0
         for mod in mods:
@@ -212,7 +208,6 @@ else:
             elif key == "win" or key == "windows":
                 value |= MOD_WIN
         return value
-
 
     def _parse_vk(key: str) -> int | None:
         label = key.strip().upper()
@@ -238,11 +233,9 @@ else:
         }
         return mapping.get(label)
 
-
     def _format_spec(spec: OverlayHotkeySpec) -> str:
         mods = "+".join(mod.upper() for mod in spec.modifiers) if spec.modifiers else ""
         return f"{mods}+{spec.key.upper()}" if mods else spec.key.upper()
-
 
     def _format_vk(modifiers: int, vk: int) -> str:
         parts: list[str] = []

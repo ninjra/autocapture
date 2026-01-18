@@ -601,6 +601,8 @@ class RetrievalService:
             matched = _select_span(spans, item.matched_span_keys, query)
             bbox = _span_bbox(matched.bbox) if matched is not None else None
             non_citable = bool(item.non_citable)
+            if matched is None or bbox is None:
+                non_citable = True
             decorated.append(
                 RetrievedEvent(
                     event=event,
