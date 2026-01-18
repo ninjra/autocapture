@@ -1,9 +1,9 @@
 {
   "frozen": {
     "autocapture/memory/context_pack.py": {
-      "frozen_at_utc": "2026-01-16T21:12:48Z",
-      "reason": "Update evidence payload metadata",
-      "sha256": "359588496f4717c76a1c20cd221fa31c38fb37983e56d33ed9481ab1e0a63da6"
+      "frozen_at_utc": "2026-01-18T17:56:43Z",
+      "reason": "Phase 3 context pack citation metadata",
+      "sha256": "0230bef66506d7af34a54473fbfbebc6c44a4fe0395326c7ce32e3848da4d171"
     },
     "autocapture/tracking/store.py": {
       "frozen_at_utc": "2026-01-13T04:48:23Z",

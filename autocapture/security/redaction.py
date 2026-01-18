@@ -6,12 +6,12 @@ import re
 from typing import Any
 
 _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(r"(?i)bearer\\s+[A-Za-z0-9._\\-+/=]{8,}"), "Bearer [REDACTED]"),
-    (re.compile(r"(?i)api[_-]?key\\s*[:=]\\s*[A-Za-z0-9._\\-+/=]{6,}"), "[REDACTED]"),
-    (re.compile(r"(?i)token\\s*[:=]\\s*[A-Za-z0-9._\\-+/=]{6,}"), "[REDACTED]"),
-    (re.compile(r"(?i)secret\\s*[:=]\\s*[A-Za-z0-9._\\-+/=]{6,}"), "[REDACTED]"),
-    (re.compile(r"(?i)sk-[A-Za-z0-9]{8,}"), "sk-[REDACTED]"),
-    (re.compile(r"(?i)gh[pous]_[A-Za-z0-9]{8,}"), "gh[REDACTED]"),
+    (re.compile(r"(?i)bearer\\s+[A-Za-z0-9._+/=-]{8,}"), "Bearer [REDACTED]"),
+    (re.compile(r"(?i)api[_-]?key\\s*[:=]\\s*[A-Za-z0-9._+/=-]{6,}"), "[REDACTED]"),
+    (re.compile(r"(?i)token\\s*[:=]\\s*[A-Za-z0-9._+/=-]{6,}"), "[REDACTED]"),
+    (re.compile(r"(?i)secret\\s*[:=]\\s*[A-Za-z0-9._+/=-]{6,}"), "[REDACTED]"),
+    (re.compile(r"(?i)sk-[A-Za-z0-9-]{8,}"), "sk-[REDACTED]"),
+    (re.compile(r"(?i)gh[pous]_[A-Za-z0-9-]{8,}"), "gh[REDACTED]"),
 ]
 
 _SENSITIVE_KEYS = {

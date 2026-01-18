@@ -51,6 +51,7 @@ from ..memory.context_pack import (
     build_context_pack,
     build_evidence_payload,
 )
+from ..vision.citation_overlay import render_citation_overlay
 from ..memory.entities import EntityResolver, SecretStore
 from ..security.token_vault import TokenVaultStore
 from ..memory.prompts import PromptLibraryService, PromptRegistry
@@ -181,6 +182,12 @@ class AnswerRequest(BaseModel):
             if not values.get("query") and values.get("q"):
                 values["query"] = values["q"]
         return values
+
+
+class CitationOverlayRequest(BaseModel):
+    event_id: str
+    bboxes: list[list[float]] = Field(default_factory=list)
+    bbox_format: str = Field("px", description="px|norm|auto")
 
 
 class PromptStrategyInfo(BaseModel):
@@ -330,7 +337,11 @@ def create_app(
     token_vault = TokenVaultStore(config, db)
     entities = EntityResolver(db, secret, token_vault=token_vault)
     agent_jobs = AgentJobQueue(db)
-    prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
+    prompt_registry = PromptRegistry.from_package(
+        "autocapture.prompts.derived",
+        hardening_enabled=config.templates.enabled,
+        log_provenance=config.templates.log_provenance,
+    )
     PromptLibraryService(db).sync_registry(prompt_registry)
     answer_graph = AnswerGraph(
         config,
@@ -919,8 +930,38 @@ def create_app(
                 except Exception:
                     pass
             return Response(content=data, media_type="image/webp", headers=headers)
-
         return FileResponse(path, headers=headers)
+
+    @app.post("/api/citations/overlay")
+    def citation_overlay(request: CitationOverlayRequest) -> Response:
+        if not config.ui.overlay_citations_enabled:
+            raise HTTPException(status_code=403, detail="Citation overlay disabled")
+        with db.session() as session:
+            event = session.get(EventRecord, request.event_id)
+            if not event or not event.screenshot_path:
+                raise HTTPException(status_code=404, detail="Screenshot not available")
+            path_value = event.screenshot_path
+            path = Path(path_value)
+            if not path.is_absolute():
+                path = config.capture.data_dir / path
+            resolved = path.resolve()
+            root = Path(config.capture.data_dir).resolve()
+            if root not in resolved.parents and resolved != root:
+                raise HTTPException(status_code=403, detail="Invalid screenshot path")
+            if not resolved.exists():
+                raise HTTPException(status_code=404, detail="Screenshot file missing")
+            try:
+                image = Image.open(resolved)
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid screenshot: {exc}") from exc
+        fmt = (request.bbox_format or "px").strip().lower()
+        if fmt not in {"px", "norm", "auto"}:
+            raise HTTPException(status_code=422, detail="bbox_format must be px, norm, or auto")
+        normalized = True if fmt == "norm" else None if fmt == "auto" else False
+        overlay = render_citation_overlay(image, request.bboxes, normalized=normalized)
+        buf = io.BytesIO()
+        overlay.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png")
 
     @app.post("/api/retrieve")
     def retrieve(request: RetrieveRequest) -> RetrieveResponse:
@@ -1711,12 +1752,14 @@ def _build_evidence(
         if not snippet:
             snippet, snippet_offset = _snippet_for_query(event.ocr_text, query)
         spans_data = _fetch_spans(db, event.event_id, result.matched_span_keys)
+        frame_size = _frame_size_from_tags(event.tags)
         spans = _spans_for_event(
             spans_data,
             snippet,
             snippet_offset,
             query,
             result.matched_span_keys,
+            frame_size=frame_size,
         )
         app_name = event.app_name
         title = event.window_title
@@ -1949,6 +1992,74 @@ def _fetch_spans(
     ]
 
 
+def _frame_size_from_tags(tags: dict | None) -> tuple[int, int] | None:
+    if not isinstance(tags, dict):
+        return None
+    meta = tags.get("capture_meta")
+    if not isinstance(meta, dict):
+        return None
+    width = meta.get("frame_width")
+    height = meta.get("frame_height")
+    try:
+        width_val = int(width)
+        height_val = int(height)
+    except (TypeError, ValueError):
+        return None
+    if width_val <= 0 or height_val <= 0:
+        return None
+    return width_val, height_val
+
+
+def _span_bbox(raw: object) -> list[int] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        coords = [raw.get(key) for key in ("x0", "y0", "x1", "y1")]
+        if any(val is None for val in coords):
+            return None
+        try:
+            return [int(float(val)) for val in coords]
+        except (TypeError, ValueError):
+            return None
+    if isinstance(raw, list):
+        values = [val for val in raw if isinstance(val, (int, float))]
+        if not values:
+            return None
+        return [int(float(val)) for val in values]
+    return None
+
+
+def _bbox_norm(bbox: list[int] | None, frame_size: tuple[int, int] | None) -> list[float] | None:
+    if not bbox or not frame_size:
+        return None
+    width, height = frame_size
+    if width <= 0 or height <= 0:
+        return None
+    if len(bbox) >= 8:
+        xs = bbox[0::2]
+        ys = bbox[1::2]
+        if not xs or not ys:
+            return None
+        x0, x1 = min(xs), max(xs)
+        y0, y1 = min(ys), max(ys)
+    elif len(bbox) >= 4:
+        x0, y0, x1, y1 = bbox[:4]
+    else:
+        return None
+    x0 = max(0, min(width, x0))
+    x1 = max(0, min(width, x1))
+    y0 = max(0, min(height, y0))
+    y1 = max(0, min(height, y1))
+    if width == 0 or height == 0:
+        return None
+    return [
+        round(x0 / width, 6),
+        round(y0 / height, 6),
+        round(x1 / width, 6),
+        round(y1 / height, 6),
+    ]
+
+
 def _snippet_for_query(text: str, query: str, window: int = 200) -> tuple[str, int]:
     if not text:
         return "", 0
@@ -1976,6 +2087,8 @@ def _spans_for_event(
     snippet_offset: int,
     query: str,
     matched_span_keys: list[str],
+    *,
+    frame_size: tuple[int, int] | None = None,
 ) -> list[EvidenceSpan]:
     evidence_spans: list[EvidenceSpan] = []
     query_lower = query.lower()
@@ -1993,16 +2106,22 @@ def _spans_for_event(
         end = int(span.get("end", 0)) - snippet_offset
         if start < 0 or end > len(snippet) or end <= start:
             continue
+        bbox = _span_bbox(span.get("bbox"))
+        bbox_norm = _bbox_norm(bbox, frame_size)
         evidence_spans.append(
             EvidenceSpan(
                 span_id=str(span.get("span_id", "S?")),
                 start=start,
                 end=end,
                 conf=float(span.get("conf", span.get("confidence", 0.9))),
+                bbox=bbox,
+                bbox_norm=bbox_norm,
             )
         )
     if not evidence_spans:
-        evidence_spans.append(EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5))
+        evidence_spans.append(
+            EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5)
+        )
     return evidence_spans
 
 
@@ -2040,6 +2159,8 @@ def _remap_spans(
                 start=new_start,
                 end=new_end,
                 conf=span.conf,
+                bbox=span.bbox,
+                bbox_norm=span.bbox_norm,
             )
         )
     return remapped

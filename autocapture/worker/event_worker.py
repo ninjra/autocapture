@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..agents import AGENT_JOB_ENRICH_EVENT
 from ..agents.jobs import AgentJobQueue
-from ..config import AppConfig, OCRConfig
+from ..config import AppConfig, CaptureConfig, OCRConfig
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
 from ..image_utils import ensure_rgb, hash_rgb_image
 from ..indexing.lexical_index import LexicalIndex
@@ -29,6 +29,8 @@ from ..storage.database import DatabaseManager
 from ..storage.models import CaptureRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
 from ..vision.extractors import ScreenExtractorRouter
 from ..vision.layout import build_layout
+from ..vision.paddle_layout import PaddleLayoutExtractor
+from ..vision.hdr import apply_hdr_tone_mapping
 from ..vision.ui_grounding import UIGroundingRouter
 from ..vision.types import ExtractionResult, VISION_SCHEMA_VERSION, build_ocr_payload
 from ..enrichment.sql_artifacts import SqlArtifacts, extract_sql_artifacts
@@ -115,6 +117,7 @@ class EventIngestWorker:
             else:
                 raise ValueError("ocr_processor must implement extract() or run()")
         self._ui_grounding = UIGroundingRouter(config, runtime_governor=runtime_governor)
+        self._ppstructure = PaddleLayoutExtractor(config.ocr)
 
     def process_batch(self, limit: Optional[int] = None) -> int:
         if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
@@ -256,6 +259,17 @@ class EventIngestWorker:
         heartbeat_thread.start()
         try:
             image = self._load_image(path)
+            image, hdr_tags = apply_hdr_tone_mapping(
+                image, enabled=self._config.capture.hdr_enabled
+            )
+            frame_height, frame_width = image.shape[:2]
+            capture_meta = _build_capture_meta(
+                capture,
+                frame_width,
+                frame_height,
+                hdr_tags,
+                self._config.capture,
+            )
             ocr_start = time.monotonic()
             with otel_span("extract_ocr", {"stage_name": "extract_ocr"}):
                 result = self._extractor.extract(image)
@@ -271,9 +285,26 @@ class EventIngestWorker:
                 if isinstance(result.tags, dict)
                 else None
             )
-            layout_blocks, layout_md = build_layout(ocr_spans)
+            tags = _merge_tags(result.tags or {}, {"capture_meta": capture_meta, "hdr": hdr_tags})
+            layout_blocks: list[dict] = []
+            layout_md = ""
+            layout_source = "disabled"
+            if self._config.ocr.layout_enabled:
+                layout_blocks, layout_md = build_layout(ocr_spans)
+                layout_source = "ocr_layout"
+            pp_layout = self._ppstructure.extract(image)
+            if pp_layout and pp_layout.tags.get("status") == "ok" and pp_layout.blocks:
+                layout_blocks = pp_layout.blocks
+                layout_md = pp_layout.markdown
+                layout_source = "ppstructure"
             tags = _merge_tags(
-                result.tags or {}, {"layout_blocks": layout_blocks, "layout_md": layout_md}
+                tags,
+                {
+                    "layout_blocks": layout_blocks,
+                    "layout_md": layout_md,
+                    "layout_source": layout_source,
+                    "ppstructure": pp_layout.tags if pp_layout else {},
+                },
             )
             ui_result = self._ui_grounding.extract(image)
             tags = _merge_tags(tags, {"ui_elements": ui_result.tags})
@@ -426,6 +457,7 @@ class EventIngestWorker:
         frame_hash: str | None = None,
         normalized_text: str | None = None,
     ) -> None:
+        capture_id = getattr(capture, "capture_id", None) or getattr(capture, "id")
         focus_reference = self._config.capture.focus_crop_reference
         focus_path = capture.focus_path if focus_reference == "event" else None
         extra_tags: dict = {}
@@ -440,7 +472,7 @@ class EventIngestWorker:
         def _write(session) -> None:
             if not event_existing:
                 event = EventRecord(
-                    event_id=capture.capture_id,
+                    event_id=capture_id,
                     ts_start=capture.captured_at,
                     ts_end=None,
                     app_name=capture.foreground_process,
@@ -462,7 +494,7 @@ class EventIngestWorker:
                 if session.bind and session.bind.dialect.name == "sqlite":
                     session.flush()
             else:
-                event = session.get(EventRecord, capture.capture_id)
+                event = session.get(EventRecord, capture_id)
                 if event and not event.ocr_text:
                     event.ocr_text = ocr_text
                     if screenshot_hash and not event.screenshot_hash:
@@ -482,7 +514,7 @@ class EventIngestWorker:
             if ocr_spans:
                 self._upsert_spans(
                     session,
-                    capture.capture_id,
+                    capture_id,
                     ocr_spans,
                     engine=engine,
                     frame_hash=frame_hash,
@@ -492,7 +524,7 @@ class EventIngestWorker:
                     span.span_key: span
                     for span in session.execute(
                         select(OCRSpanRecord).where(
-                            OCRSpanRecord.capture_id == capture.capture_id,
+                            OCRSpanRecord.capture_id == capture_id,
                             OCRSpanRecord.span_key.in_(
                                 [str(span.get("span_key")) for span in ocr_spans]
                             ),
@@ -501,8 +533,8 @@ class EventIngestWorker:
                     .scalars()
                     .all()
                 }
-                self._upsert_embeddings(session, capture.capture_id, span_map, frame_hash)
-            record = session.get(CaptureRecord, capture.capture_id)
+                self._upsert_embeddings(session, capture_id, span_map, frame_hash)
+            record = session.get(CaptureRecord, capture_id)
             if record:
                 record.ocr_status = "done"
                 record.ocr_last_error = None
@@ -668,6 +700,36 @@ def _extract_domain(window_title: str, ocr_text: str) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+def _build_capture_meta(
+    capture: CapturePayload,
+    frame_width: int,
+    frame_height: int,
+    hdr_tags: dict,
+    capture_config: CaptureConfig,
+) -> dict:
+    meta: dict[str, object] = {
+        "frame_width": int(frame_width),
+        "frame_height": int(frame_height),
+        "color_space": hdr_tags.get("color_space", "sRGB") if isinstance(hdr_tags, dict) else "sRGB",
+        "hdr": hdr_tags,
+    }
+    if capture_config.multi_monitor_enabled:
+        meta["monitor_id"] = capture.monitor_id
+        meta["monitor_bounds"] = capture.monitor_bounds
+        if capture.monitor_bounds and len(capture.monitor_bounds) >= 4:
+            try:
+                bounds_width = int(capture.monitor_bounds[2])
+                bounds_height = int(capture.monitor_bounds[3])
+            except (TypeError, ValueError):
+                bounds_width = 0
+                bounds_height = 0
+            if bounds_width > 0 and bounds_height > 0:
+                scale_x = round(frame_width / bounds_width, 6)
+                scale_y = round(frame_height / bounds_height, 6)
+                meta["dpi_scale"] = [scale_x, scale_y]
+    return meta
 
 
 def _clamp_bbox(bbox: object, monitor_bounds: list[int] | None) -> object:

@@ -17,7 +17,16 @@ def test_context_pack_text_formatting() -> None:
             title="Window",
             domain="example.com",
             score=0.9,
-            spans=[EvidenceSpan(span_id="S1", start=0, end=10, conf=0.95)],
+            spans=[
+                EvidenceSpan(
+                    span_id="S1",
+                    start=0,
+                    end=10,
+                    conf=0.95,
+                    bbox=[0, 0, 10, 10],
+                    bbox_norm=[0.0, 0.0, 0.01, 0.01],
+                )
+            ],
             text="Sample text",
             screenshot_path=None,
             screenshot_hash=None,
@@ -36,6 +45,7 @@ def test_context_pack_text_formatting() -> None:
     data = pack.to_json()
     assert data["version"] == 1
     assert data["evidence"][0]["id"] == "E1"
+    assert data["evidence"][0]["meta"]["spans"][0]["bbox"] == [0, 0, 10, 10]
     assert '"version"' in text
 
 

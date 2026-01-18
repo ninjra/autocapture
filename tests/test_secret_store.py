@@ -1,5 +1,3 @@
-import os
-
 from autocapture.security.secret_store import SecretStore
 
 

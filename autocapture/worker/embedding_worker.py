@@ -642,7 +642,8 @@ def _ensure_aware(timestamp: dt.datetime | None) -> dt.datetime | None:
 
 
 def _build_spans_v2_payload(event: EventRecord, span: OCRSpanRecord) -> dict:
-    bbox_norm = _normalize_bbox(span.bbox)
+    frame_size = _frame_size_from_tags(event.tags)
+    bbox_norm = _normalize_bbox(span.bbox, frame_size)
     text = (span.text or "").strip()
     if len(text) > 300:
         text = text[:300]
@@ -664,7 +665,7 @@ def _build_spans_v2_payload(event: EventRecord, span: OCRSpanRecord) -> dict:
     }
 
 
-def _normalize_bbox(bbox: object) -> list[float]:
+def _normalize_bbox(bbox: object, frame_size: tuple[int, int] | None) -> list[float]:
     if isinstance(bbox, list) and bbox:
         values = [float(val) for val in bbox if isinstance(val, (int, float))]
         if not values:
@@ -672,4 +673,48 @@ def _normalize_bbox(bbox: object) -> list[float]:
         max_val = max(values)
         if max_val <= 1.0 and len(values) >= 4:
             return [max(0.0, min(1.0, float(val))) for val in values[:4]]
+        if frame_size and len(values) >= 4:
+            width, height = frame_size
+            if width > 0 and height > 0:
+                x0, y0, x1, y1 = values[:4]
+                return [
+                    max(0.0, min(1.0, x0 / width)),
+                    max(0.0, min(1.0, y0 / height)),
+                    max(0.0, min(1.0, x1 / width)),
+                    max(0.0, min(1.0, y1 / height)),
+                ]
+    if isinstance(bbox, dict) and frame_size:
+        width, height = frame_size
+        if width > 0 and height > 0:
+            try:
+                x0 = float(bbox.get("x0"))
+                y0 = float(bbox.get("y0"))
+                x1 = float(bbox.get("x1"))
+                y1 = float(bbox.get("y1"))
+            except (TypeError, ValueError):
+                return []
+            return [
+                max(0.0, min(1.0, x0 / width)),
+                max(0.0, min(1.0, y0 / height)),
+                max(0.0, min(1.0, x1 / width)),
+                max(0.0, min(1.0, y1 / height)),
+            ]
     return []
+
+
+def _frame_size_from_tags(tags: dict | None) -> tuple[int, int] | None:
+    if not isinstance(tags, dict):
+        return None
+    meta = tags.get("capture_meta")
+    if not isinstance(meta, dict):
+        return None
+    width = meta.get("frame_width")
+    height = meta.get("frame_height")
+    try:
+        width_val = int(width)
+        height_val = int(height)
+    except (TypeError, ValueError):
+        return None
+    if width_val <= 0 or height_val <= 0:
+        return None
+    return width_val, height_val

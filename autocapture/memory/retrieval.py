@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 from dataclasses import dataclass, field
 import inspect
 import math
+import os
 import time
 import re
 from typing import Iterable
@@ -84,6 +86,10 @@ class RetrievalService:
         self._config = config or AppConfig()
         self._log = get_logger("retrieval")
         self._lexical = LexicalIndex(db)
+        if embedder is None:
+            if os.environ.get("AUTOCAPTURE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
+                if self._config.embed.text_model == "BAAI/bge-base-en-v1.5":
+                    self._config.embed.text_model = "local-test"
         self._embedder = embedder or EmbeddingService(self._config.embed)
         self._vector = vector_index or VectorIndex(self._config, self._embedder.dim)
         self._spans_v2 = spans_index
@@ -127,6 +133,7 @@ class RetrievalService:
         offset = max(0, offset)
         start_ts = monotonic_now()
         mode_value = (mode or "auto").strip().lower()
+        v2_enabled = self._v2_enabled()
 
         candidate_limit = (limit + offset) * 3
         baseline = self._retrieve_candidates(
@@ -135,10 +142,13 @@ class RetrievalService:
         results = baseline
         rewrites: list[str] = []
 
-        enable_fusion = self._config.retrieval.fusion_enabled and mode_value in {
-            "auto",
-            "deep",
-        }
+        enable_fusion = (
+            v2_enabled
+            and self._config.retrieval.fusion_enabled
+            and self._config.retrieval.multi_query_enabled
+            and self._config.retrieval.rrf_enabled
+            and mode_value in {"auto", "deep"}
+        )
         if enable_fusion:
             confidence = _retrieval_confidence(baseline)
             if mode_value == "deep" or not _is_confident(
@@ -158,7 +168,7 @@ class RetrievalService:
                     )
                 results = _rrf_fuse(fused_lists, self._config.retrieval.fusion_rrf_k)
 
-        if self._config.retrieval.late_enabled and mode_value in {"auto", "deep"}:
+        if v2_enabled and self._config.retrieval.late_enabled and mode_value in {"auto", "deep"}:
             results = self._late_rerank(query, results, candidate_limit)
 
         results = self._rerank_results(query, results)
@@ -178,6 +188,16 @@ class RetrievalService:
                 reason="no_results",
             )
         return RetrievalBatch(results=results, no_evidence=False)
+
+    def _v2_enabled(self) -> bool:
+        config = self._config.retrieval
+        return bool(
+            config.v2_enabled
+            or config.use_spans_v2
+            or config.sparse_enabled
+            or config.late_enabled
+            or config.fusion_enabled
+        )
 
     def list_events(self, limit: int = 100) -> Iterable[EventRecord]:
         with self._db.session() as session:
@@ -301,7 +321,37 @@ class RetrievalService:
                 sparse_scores[hit.event_id] = max(sparse_scores.get(hit.event_id, 0.0), hit.score)
                 span_hits.setdefault(hit.event_id, []).append(hit.span_key)
 
-        candidate_ids = set(lexical_scores) | set(dense_scores) | set(sparse_scores)
+        late_stage1_scores: dict[str, float] = {}
+        if (
+            self._config.retrieval.late_stage1_enabled
+            and self._config.retrieval.late_enabled
+            and self._spans_v2
+            and self._late_encoder
+            and _late_stage1_window_ok(time_range, self._config.retrieval.late_stage1_max_days)
+        ):
+            query_vectors = self._late_encoder.encode_text(query)
+            if query_vectors:
+                try:
+                    late_hits = self._spans_v2.search_late(
+                        query_vectors,
+                        self._config.retrieval.late_stage1_k,
+                        filters=filters_v2,
+                    )
+                except Exception as exc:
+                    self._log.warning("Late stage-1 retrieval failed: {}", exc)
+                    late_hits = []
+                for hit in late_hits:
+                    late_stage1_scores[hit.event_id] = max(
+                        late_stage1_scores.get(hit.event_id, 0.0), hit.score
+                    )
+                    span_hits.setdefault(hit.event_id, []).append(hit.span_key)
+
+        candidate_ids = (
+            set(lexical_scores)
+            | set(dense_scores)
+            | set(sparse_scores)
+            | set(late_stage1_scores)
+        )
         if not candidate_ids:
             return self._fallback_ocr_scan(query, time_range, filters, limit)
 
@@ -320,15 +370,17 @@ class RetrievalService:
         sparse_norm = _normalize_scores(sparse_scores)
         now = dt.datetime.now(dt.timezone.utc)
 
+        late_stage1_norm = _normalize_scores(late_stage1_scores)
         results: list[RetrievedEvent] = []
         for event in events:
             lex = lexical_norm.get(event.event_id, 0.0)
             dense = dense_norm.get(event.event_id, 0.0)
             sparse = sparse_norm.get(event.event_id, 0.0)
+            late_stage1 = late_stage1_norm.get(event.event_id, 0.0)
             event_ts = _ensure_aware(event.ts_start)
             age_hours = max((now - event_ts).total_seconds() / 3600, 0.0)
             recency = _recency_bias(age_hours)
-            score = _combine_scores(lex, dense, sparse, recency)
+            score = _combine_scores(lex, dense, sparse, recency, late_stage1)
             results.append(
                 RetrievedEvent(
                     event=event,
@@ -337,6 +389,7 @@ class RetrievalService:
                     lexical_score=lex,
                     vector_score=dense,
                     sparse_score=sparse,
+                    late_score=late_stage1,
                     engine=engine,
                     frame_hash=getattr(event, "frame_hash", None) or event.screenshot_hash,
                     frame_id=event.event_id,
@@ -419,21 +472,26 @@ class RetrievalService:
     def _persist_trace(
         self, query: str, rewrites: list[str], results: list[RetrievedEvent]
     ) -> None:
+        rewrites_payload = _sorted_json({"rewrites": rewrites})
+        fused_payload = _sorted_json(
+            {
+                "results": [
+                    {
+                        "event_id": result.event.event_id,
+                        "score": result.score,
+                        "engine": result.engine,
+                    }
+                    for result in results
+                ]
+            }
+        )
+
         def _write(session) -> None:
             session.add(
                 RetrievalTraceRecord(
                     query_text=query,
-                    rewrites_json={"rewrites": rewrites},
-                    fused_results_json={
-                        "results": [
-                            {
-                                "event_id": result.event.event_id,
-                                "score": result.score,
-                                "engine": result.engine,
-                            }
-                            for result in results
-                        ]
-                    },
+                    rewrites_json=rewrites_payload,
+                    fused_results_json=fused_payload,
                 )
             )
 
@@ -547,7 +605,7 @@ class RetrievalService:
             spans = spans_by_event.get(event.event_id, [])
             matched = _select_span(spans, item.matched_span_keys, query)
             bbox = _span_bbox(matched.bbox) if matched is not None else None
-            non_citable = bbox is None
+            non_citable = bool(item.non_citable)
             decorated.append(
                 RetrievedEvent(
                     event=event,
@@ -611,6 +669,20 @@ def _ensure_aware(timestamp: dt.datetime) -> dt.datetime:
     return timestamp
 
 
+def _late_stage1_window_ok(
+    time_range: tuple[dt.datetime, dt.datetime] | None, max_days: int
+) -> bool:
+    if not time_range:
+        return False
+    start, end = time_range
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=dt.timezone.utc)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=dt.timezone.utc)
+    delta_days = abs((end - start).total_seconds()) / 86400.0
+    return delta_days <= max(1, int(max_days))
+
+
 def _build_rerank_document(event: EventRecord, max_chars: int = 1000) -> str:
     parts: list[str] = []
     if event.app_name:
@@ -629,11 +701,14 @@ def _build_rerank_document(event: EventRecord, max_chars: int = 1000) -> str:
     return document
 
 
-def _combine_scores(lex: float, dense: float, sparse: float, recency: float) -> float:
+def _combine_scores(
+    lex: float, dense: float, sparse: float, recency: float, late: float = 0.0
+) -> float:
     weights = {
         "lex": 0.4,
         "dense": 0.4,
         "sparse": 0.15 if sparse > 0.0 else 0.0,
+        "late": 0.1 if late > 0.0 else 0.0,
         "recency": 0.1,
     }
     total = sum(weights.values()) or 1.0
@@ -641,6 +716,7 @@ def _combine_scores(lex: float, dense: float, sparse: float, recency: float) -> 
         weights["lex"] * lex
         + weights["dense"] * dense
         + weights["sparse"] * sparse
+        + weights["late"] * late
         + weights["recency"] * recency
     ) / total
 
@@ -848,6 +924,12 @@ def _span_bbox(raw: object) -> list[int] | None:
         x0, y0, x1, y1 = [int(val) for val in coords[:4]]
         return [min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)]
     return None
+
+
+def _sorted_json(payload: dict) -> dict:
+    if not payload:
+        return {}
+    return json.loads(json.dumps(payload, sort_keys=True))
 
 
 def _snippet_for_query(text: str, query: str, window: int = 200) -> tuple[str, int]:

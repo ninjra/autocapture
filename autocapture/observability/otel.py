@@ -79,7 +79,12 @@ def init_otel(enabled: bool, *, test_mode: bool = False) -> None:
         resource = Resource.create({"service.name": "autocapture"})
         provider = TracerProvider(resource=resource)
         if test_mode:
-            from opentelemetry.sdk.trace.export import InMemorySpanExporter
+            try:
+                from opentelemetry.sdk.trace.export import InMemorySpanExporter
+            except Exception:
+                from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+                    InMemorySpanExporter,
+                )
 
             exporter = InMemorySpanExporter()
             provider.add_span_processor(SimpleSpanProcessor(exporter))

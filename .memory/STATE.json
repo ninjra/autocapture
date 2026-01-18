@@ -141,6 +141,13 @@
       "value": "Never store secrets, tokens, PII, or medical data in repo memory/logs.",
       "why": "Security and privacy policy."
     },
+    "security.template-hardening-lint": {
+      "source": "agent",
+      "ts": "2026-01-18T02:19:11Z",
+      "type": "fix",
+      "value": "Prompt templates are linted with a Jinja2 sandbox parse; unsafe nodes/filters/names are rejected and provenance hashes can be logged.",
+      "why": "Harden prompts against injection and track provenance deterministically."
+    },
     "stability.frozen-surfaces": {
       "source": "user",
       "ts": "2026-01-15T05:04:00Z",
@@ -169,6 +176,13 @@
       "value": "Release gate now invokes memory_guard with sys.executable to avoid missing python shims in WSL/venv environments.",
       "why": "Keep release_gate portable across environments."
     },
+    "ui.citation-overlay-bbox": {
+      "source": "agent",
+      "ts": "2026-01-18T02:19:17Z",
+      "type": "note",
+      "value": "Context packs now expose span bbox/bbox_norm and the API/UI can render citation overlays; capture tags include capture_meta plus optional HDR/PP-Structure layout metadata.",
+      "why": "Enable region-level citations and deterministic overlays tied to capture metadata."
+    },
     "vision.vlm-first-extraction": {
       "source": "agent",
       "ts": "2026-01-16T12:49:28Z",
@@ -177,6 +191,6 @@
       "why": "Capture full-screen context with structured layout."
     }
   },
-  "updated_at": "2026-01-17T19:31:17Z",
+  "updated_at": "2026-01-18T02:19:17Z",
   "version": 1
 }

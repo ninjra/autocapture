@@ -52,7 +52,11 @@ class EnrichmentScheduler:
         self._log = get_logger("enrichment.scheduler")
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
+        self._prompt_registry = PromptRegistry.from_package(
+            "autocapture.prompts.derived",
+            hardening_enabled=config.templates.enabled,
+            log_provenance=config.templates.log_provenance,
+        )
         self._thread_segmenter = ThreadSegmenter(
             max_gap_minutes=config.threads.max_gap_minutes,
             app_similarity=config.threads.app_similarity_threshold,

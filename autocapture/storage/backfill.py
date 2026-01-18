@@ -152,6 +152,7 @@ class BackfillRunner:
             def _apply(session) -> None:
                 nonlocal updated, hashes, processed, last_ts, last_id
                 for record in batch:
+                    record = session.merge(record)
                     processed += 1
                     changes = False
                     if not record.event_id:
@@ -247,6 +248,7 @@ class BackfillRunner:
             def _apply(session) -> None:
                 nonlocal updated, normalized, processed, last_ts, last_id
                 for record in batch:
+                    record = session.merge(record)
                     processed += 1
                     changes = False
                     if record.ocr_text and not record.ocr_text_normalized:
@@ -306,6 +308,7 @@ class BackfillRunner:
             def _apply(session) -> None:
                 nonlocal updated, processed, last_id
                 for record in batch:
+                    record = session.merge(record)
                     processed += 1
                     changes = False
                     if not record.schema_version:
@@ -364,6 +367,7 @@ class BackfillRunner:
             def _apply(session) -> None:
                 nonlocal updated, processed, last_id
                 for record in batch:
+                    record = session.merge(record)
                     processed += 1
                     changes = False
                     if not record.frame_hash:

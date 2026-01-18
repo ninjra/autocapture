@@ -127,6 +127,12 @@ class CaptureConfig(BaseModel):
         True,
         description="Enable FFmpeg video recording for activity segments.",
     )
+    multi_monitor_enabled: bool = Field(
+        True, description="Enable multi-monitor capture metadata and normalization."
+    )
+    hdr_enabled: bool = Field(
+        False, description="Enable HDR detection/tone mapping hooks for capture frames."
+    )
     layout_mode: str = Field(
         "virtual_desktop",
         description="Frame layout mode (virtual_desktop or per_monitor).",
@@ -210,6 +216,19 @@ class OCRConfig(BaseModel):
     )
     languages: list[str] = Field(default_factory=lambda: ["en"])
     output_format: str = Field("json")
+    layout_enabled: bool = Field(True, description="Enable deterministic OCR layout reconstruction.")
+    paddle_ppstructure_enabled: bool = Field(
+        False, description="Enable PaddleOCR PP-Structure layout backend."
+    )
+    paddle_ppstructure_model_dir: Path | None = Field(
+        None,
+        description=(
+            "Local model directory for PaddleOCR PP-Structure (required to avoid downloads)."
+        ),
+    )
+    paddle_ppstructure_use_gpu: bool = Field(
+        False, description="Allow GPU execution for PaddleOCR PP-Structure."
+    )
 
 
 class VisionBackendConfig(BaseModel):
@@ -656,10 +675,13 @@ class SecurityConfig(BaseModel):
 
 
 class RetrievalConfig(BaseModel):
+    v2_enabled: bool = Field(False, description="Enable RetrievalService v2 enhancements.")
     use_spans_v2: bool = Field(False, description="Use spans_v2 Qdrant collection.")
     sparse_enabled: bool = Field(False, description="Enable learned sparse retrieval.")
     late_enabled: bool = Field(False, description="Enable late-interaction reranking.")
     fusion_enabled: bool = Field(False, description="Enable multi-query fusion (RRF).")
+    multi_query_enabled: bool = Field(True, description="Enable multi-query query rewrites.")
+    rrf_enabled: bool = Field(True, description="Enable RRF fusion for multi-query retrieval.")
     lexical_min_score: float = Field(0.15, ge=0.0, le=1.0)
     dense_min_score: float = Field(0.15, ge=0.0, le=1.0)
     rerank_min_score: float = Field(0.15, ge=0.0, le=1.0)
@@ -675,6 +697,13 @@ class RetrievalConfig(BaseModel):
     late_text_max_chars: int = Field(200, ge=1)
     late_candidate_k: int = Field(100, ge=1)
     late_rerank_k: int = Field(50, ge=1)
+    late_stage1_enabled: bool = Field(
+        False, description="Enable late-interaction stage-1 retrieval for narrow windows."
+    )
+    late_stage1_max_days: int = Field(
+        7, ge=1, description="Max time window (days) for late stage-1 retrieval."
+    )
+    late_stage1_k: int = Field(50, ge=1, description="Top-K for late stage-1 retrieval.")
     rewrite_max_chars: int = Field(200, ge=10)
     speculative_enabled: bool = Field(False, description="Enable speculative draft/verify.")
     speculative_draft_k: int = Field(6, ge=1)
@@ -756,6 +785,17 @@ class PromptOpsConfig(BaseModel):
         if value not in {"worst_case", "mean"}:
             raise ValueError("promptops.eval_aggregation must be 'worst_case' or 'mean'")
         return value
+
+
+class TemplateHardeningConfig(BaseModel):
+    enabled: bool = Field(True, description="Enable template hardening checks.")
+    log_provenance: bool = Field(True, description="Log template provenance hashes on load.")
+
+
+class UIConfig(BaseModel):
+    overlay_citations_enabled: bool = Field(
+        False, description="Enable citation overlay rendering in the UI/API."
+    )
 
 
 class LLMConfig(BaseModel):
@@ -967,6 +1007,8 @@ class AppConfig(BaseModel):
     output: OutputConfig = OutputConfig()
     time: TimeConfig = TimeConfig()
     security: SecurityConfig = SecurityConfig()
+    templates: TemplateHardeningConfig = TemplateHardeningConfig()
+    ui: UIConfig = UIConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
     presets: PresetConfig = PresetConfig()
     promptops: PromptOpsConfig = PromptOpsConfig()

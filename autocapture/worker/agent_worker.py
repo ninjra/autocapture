@@ -81,7 +81,11 @@ class AgentJobWorker:
         self._lexical = LexicalIndex(self._db)
         self._thread_lexical = ThreadLexicalIndex(self._db)
         self._llm = llm_client or AgentLLMClient(config)
-        self._prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
+        self._prompt_registry = PromptRegistry.from_package(
+            "autocapture.prompts.derived",
+            hardening_enabled=config.templates.enabled,
+            log_provenance=config.templates.log_provenance,
+        )
         self._media_store = MediaStore(config.capture, config.encryption)
         self._screen_extractor = ScreenExtractorRouter(config, runtime_governor=runtime_governor)
         secret = SecretStore(Path(config.capture.data_dir)).get_or_create()

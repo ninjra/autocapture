@@ -17,7 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 
 class Base(DeclarativeBase):
@@ -65,6 +65,10 @@ class EventRecord(Base):
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
+
+    @validates("screenshot_hash")
+    def _normalize_screenshot_hash(self, _key: str, value: str | None) -> str:
+        return value or ""
 
 
 class AgentJobRecord(Base):
