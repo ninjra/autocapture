@@ -21,8 +21,12 @@ from sqlalchemy import func, select
 
 from .privacy import PrivacyPolicy, get_screen_lock_status
 from .privacy_filter import apply_exclude_region_masks, should_skip_capture
-from ..config import CaptureConfig, FFmpegConfig, PrivacyConfig, WorkerConfig
+from ..config import CaptureConfig, FFmpegConfig, FeatureFlagsConfig, PrivacyConfig, WorkerConfig
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..time_utils import monotonic_now, utc_now
+from ..observability.otel import otel_span, record_histogram, set_gauge
+from ..image_utils import hash_rgb_image
+from .frame_record import build_frame_record_v1, build_privacy_flags, capture_record_kwargs
 from ..logging_utils import get_logger
 from ..observability.metrics import (
     captures_skipped_backpressure_total,
@@ -57,13 +61,16 @@ class CaptureItem:
     focus_image: np.ndarray | None
     captured_at: dt.datetime
     capture_id: str
+    monotonic_ts: float
     segment_id: Optional[str]
     cursor_x: int
     cursor_y: int
     monitor_id: str
+    monitor_bounds: tuple[int, int, int, int]
     foreground_process: str
     foreground_window: str
     is_fullscreen: bool
+    masked_regions_applied: bool
 
     @property
     def image(self) -> np.ndarray:
@@ -79,6 +86,8 @@ class CaptureOrchestrator:
         capture_config: CaptureConfig,
         worker_config: WorkerConfig,
         privacy_config: PrivacyConfig | None = None,
+        offline: bool | None = None,
+        feature_flags: FeatureFlagsConfig | None = None,
         roi_w: int | None = None,
         roi_h: int | None = None,
         roi_queue_size: int = 256,
@@ -101,6 +110,8 @@ class CaptureOrchestrator:
         self._worker_config = worker_config
         self._privacy_config = privacy_config or PrivacyConfig()
         self._privacy = self._privacy_config
+        self._offline = bool(offline)
+        self._features = feature_flags or FeatureFlagsConfig()
         self._privacy_policy = PrivacyPolicy(self._privacy)
         focus_size = capture_config.focus_crop_size or capture_config.tile_size
         self._roi_w = roi_w if roi_w is not None else focus_size
@@ -354,7 +365,7 @@ class CaptureOrchestrator:
         self._clear_auto_pause()
         if monitor and monitor.id in frames:
             roi, roi_origin = self._crop_roi(frames[monitor.id], monitor, cursor_x, cursor_y)
-            apply_exclude_region_masks(
+            roi_masked = apply_exclude_region_masks(
                 roi,
                 monitor_id=monitor.id,
                 roi_origin_x=roi_origin[0],
@@ -364,26 +375,34 @@ class CaptureOrchestrator:
             duplicate = self._duplicate_detector.update(Image.fromarray(np.ascontiguousarray(roi)))
             capture_id = str(uuid4())
             if not duplicate.is_duplicate:
-                captured_at = dt.datetime.now(dt.timezone.utc)
+                captured_at = utc_now()
+                capture_monotonic = monotonic_now()
                 if self._fullscreen_primary:
                     full_image, full_origin = self._compose_fullscreen(frames, monitor)
-                    full_image = self._apply_fullscreen_masks(full_image, full_origin, frames)
+                    full_image, full_masked = self._apply_fullscreen_masks(
+                        full_image, full_origin, frames
+                    )
                     full_image = self._resize_fullscreen(full_image)
                 else:
                     full_image = roi.copy()
+                    full_masked = roi_masked
                 focus_image = roi if self._focus_crop_enabled else None
+                masked_regions_applied = bool(roi_masked or full_masked)
                 capture_item = CaptureItem(
                     full_image=full_image,
                     focus_image=focus_image,
                     captured_at=captured_at,
                     capture_id=capture_id,
+                    monotonic_ts=capture_monotonic,
                     segment_id=self._active_segment_id,
                     cursor_x=cursor_x,
                     cursor_y=cursor_y,
                     monitor_id=monitor.id,
+                    monitor_bounds=(monitor.left, monitor.top, monitor.width, monitor.height),
                     foreground_process=foreground_process or "unknown",
                     foreground_window=foreground_window or "unknown",
                     is_fullscreen=is_fullscreen,
+                    masked_regions_applied=masked_regions_applied,
                 )
                 self._enqueue_roi(capture_item)
                 captures_taken_total.inc()
@@ -397,6 +416,7 @@ class CaptureOrchestrator:
         try:
             self._roi_queue.put(item, timeout=0.1)
             roi_queue_depth.set(self._roi_queue.qsize())
+            set_gauge("capture_queue_depth", float(self._roi_queue.qsize()), {"stage_name": "roi"})
             self._backoff_s = 0.0
         except queue.Full:
             roi_queue_full_total.inc()
@@ -500,26 +520,39 @@ class CaptureOrchestrator:
                 roi_queue_depth.set(self._roi_queue.qsize())
 
     def _save_fullscreen(self, item: CaptureItem) -> Optional[Path]:
-        if not self._has_disk_space():
-            disk_low_total.inc()
-            self._apply_backpressure("disk_low")
-            return None
-        if self._media_store:
-            return self._media_store.write_fullscreen(
-                item.full_image, item.captured_at, item.capture_id
+        start_ts = time.monotonic()
+        with otel_span("store_media", {"stage_name": "store_media"}):
+            if not self._has_disk_space():
+                disk_low_total.inc()
+                self._apply_backpressure("disk_low")
+                return None
+            if self._media_store:
+                path = self._media_store.write_fullscreen(
+                    item.full_image, item.captured_at, item.capture_id
+                )
+                record_histogram(
+                    "store_media_ms",
+                    (time.monotonic() - start_ts) * 1000,
+                    {"stage_name": "store_media"},
+                )
+                return path
+            timestamp = item.captured_at.astimezone(dt.timezone.utc)
+            path = (
+                Path(self._capture_config.data_dir)
+                / "media"
+                / "screen"
+                / timestamp.strftime("%Y/%m/%d")
+                / f"{timestamp.strftime('%H%M%S_%f')}_{item.capture_id}.webp"
             )
-        timestamp = item.captured_at.astimezone(dt.timezone.utc)
-        path = (
-            Path(self._capture_config.data_dir)
-            / "media"
-            / "screen"
-            / timestamp.strftime("%Y/%m/%d")
-            / f"{timestamp.strftime('%H%M%S_%f')}_{item.capture_id}.webp"
-        )
-        path.parent.mkdir(parents=True, exist_ok=True)
-        image = Image.fromarray(np.ascontiguousarray(item.full_image))
-        image.save(path, format="WEBP", lossless=True, quality=100, method=6)
-        return path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            image = Image.fromarray(np.ascontiguousarray(item.full_image))
+            image.save(path, format="WEBP", lossless=True, quality=100, method=6)
+            record_histogram(
+                "store_media_ms",
+                (time.monotonic() - start_ts) * 1000,
+                {"stage_name": "store_media"},
+            )
+            return path
 
     def _save_focus(self, item: CaptureItem) -> Optional[Path]:
         if item.focus_image is None:
@@ -544,6 +577,59 @@ class CaptureOrchestrator:
         return path
 
     def _persist_capture(self, item: CaptureItem, full_path: Path, focus_path: Path | None) -> None:
+        start_ts = time.monotonic()
+        frame = None
+        record_kwargs = None
+        if self._features.enable_frame_record_v1:
+            frame_hash = None
+            if self._features.enable_frame_hash:
+                try:
+                    frame_hash = hash_rgb_image(item.full_image)
+                except Exception:
+                    frame_hash = None
+            privacy_flags = build_privacy_flags(
+                self._privacy,
+                excluded=False,
+                masked_regions_applied=item.masked_regions_applied,
+                offline=self._offline,
+            )
+            frame = build_frame_record_v1(
+                frame_id=item.capture_id,
+                event_id=item.capture_id,
+                captured_at=item.captured_at,
+                monotonic_ts=item.monotonic_ts,
+                monitor_id=item.monitor_id,
+                monitor_bounds=item.monitor_bounds,
+                app_name=item.foreground_process,
+                window_title=item.foreground_window,
+                image_path=str(full_path),
+                privacy_flags=privacy_flags,
+                frame_hash=frame_hash,
+            )
+            record_kwargs = capture_record_kwargs(
+                frame=frame,
+                captured_at=item.captured_at,
+                image_path=str(full_path),
+                focus_path=str(focus_path) if focus_path else None,
+                foreground_process=item.foreground_process,
+                foreground_window=item.foreground_window,
+                monitor_id=item.monitor_id,
+                is_fullscreen=item.is_fullscreen,
+                ocr_status="pending",
+            )
+        if record_kwargs is None:
+            record_kwargs = {
+                "id": item.capture_id,
+                "captured_at": item.captured_at,
+                "image_path": str(full_path),
+                "focus_path": str(focus_path) if focus_path else None,
+                "foreground_process": item.foreground_process or "unknown",
+                "foreground_window": item.foreground_window or "unknown",
+                "monitor_id": item.monitor_id,
+                "is_fullscreen": item.is_fullscreen,
+                "ocr_status": "pending",
+            }
+
         def _write(session) -> None:
             if focus_path is not None:
                 session.add(
@@ -557,38 +643,67 @@ class CaptureOrchestrator:
                         monitor_id=item.monitor_id,
                     )
                 )
-            session.add(
-                CaptureRecord(
-                    id=item.capture_id,
-                    captured_at=item.captured_at,
-                    image_path=str(full_path),
-                    focus_path=str(focus_path) if focus_path else None,
-                    foreground_process=item.foreground_process or "unknown",
-                    foreground_window=item.foreground_window or "unknown",
-                    monitor_id=item.monitor_id,
-                    is_fullscreen=item.is_fullscreen,
-                    ocr_status="pending",
-                )
-            )
+            session.add(CaptureRecord(**record_kwargs))
 
-        self._database.transaction(_write)
+        with otel_span("capture_frame", {"stage_name": "capture_frame"}):
+            self._database.transaction(_write)
+        record_histogram(
+            "capture_frame_ms",
+            (time.monotonic() - start_ts) * 1000,
+            {"stage_name": "capture_frame"},
+        )
 
     def _persist_skipped_capture(self, item: CaptureItem, reason: str) -> None:
-        def _write(session) -> None:
-            session.add(
-                CaptureRecord(
-                    id=item.capture_id,
-                    captured_at=item.captured_at,
-                    image_path=None,
-                    focus_path=None,
-                    foreground_process=item.foreground_process or "unknown",
-                    foreground_window=item.foreground_window or "unknown",
-                    monitor_id=item.monitor_id,
-                    is_fullscreen=item.is_fullscreen,
-                    ocr_status="skipped",
-                    ocr_last_error=reason,
-                )
+        frame = None
+        record_kwargs = None
+        if self._features.enable_frame_record_v1:
+            privacy_flags = build_privacy_flags(
+                self._privacy,
+                excluded=False,
+                masked_regions_applied=item.masked_regions_applied,
+                offline=self._offline,
             )
+            frame = build_frame_record_v1(
+                frame_id=item.capture_id,
+                event_id=item.capture_id,
+                captured_at=item.captured_at,
+                monotonic_ts=item.monotonic_ts,
+                monitor_id=item.monitor_id,
+                monitor_bounds=item.monitor_bounds,
+                app_name=item.foreground_process,
+                window_title=item.foreground_window,
+                image_path=None,
+                privacy_flags=privacy_flags,
+                frame_hash=None,
+            )
+            record_kwargs = capture_record_kwargs(
+                frame=frame,
+                captured_at=item.captured_at,
+                image_path=None,
+                focus_path=None,
+                foreground_process=item.foreground_process,
+                foreground_window=item.foreground_window,
+                monitor_id=item.monitor_id,
+                is_fullscreen=item.is_fullscreen,
+                ocr_status="skipped",
+                ocr_last_error=reason,
+            )
+        if record_kwargs is None:
+            record_kwargs = {
+                "id": item.capture_id,
+                "captured_at": item.captured_at,
+                "image_path": None,
+                "focus_path": None,
+                "foreground_process": item.foreground_process or "unknown",
+                "foreground_window": item.foreground_window or "unknown",
+                "monitor_id": item.monitor_id,
+                "is_fullscreen": item.is_fullscreen,
+                "ocr_status": "skipped",
+                "ocr_last_error": reason,
+            }
+
+        def _write(session) -> None:
+            session.add(CaptureRecord(**record_kwargs))
 
         self._database.transaction(_write)
 
@@ -710,21 +825,25 @@ class CaptureOrchestrator:
 
     def _apply_fullscreen_masks(
         self, image: np.ndarray, origin: tuple[int, int], frames: Dict[str, np.ndarray]
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, bool]:
         if not self._privacy.exclude_regions:
-            return image
+            return image, False
         origin_x, origin_y = origin
+        masked = False
         for monitor in self._monitors:
             if monitor.id not in frames:
                 continue
-            apply_exclude_region_masks(
-                image,
-                monitor_id=monitor.id,
-                roi_origin_x=monitor.left - origin_x,
-                roi_origin_y=monitor.top - origin_y,
-                exclude_regions=self._privacy.exclude_regions,
+            masked = (
+                apply_exclude_region_masks(
+                    image,
+                    monitor_id=monitor.id,
+                    roi_origin_x=monitor.left - origin_x,
+                    roi_origin_y=monitor.top - origin_y,
+                    exclude_regions=self._privacy.exclude_regions,
+                )
+                or masked
             )
-        return image
+        return image, masked
 
     def _resize_fullscreen(self, image: np.ndarray) -> np.ndarray:
         target_width = int(self._fullscreen_width or 0)

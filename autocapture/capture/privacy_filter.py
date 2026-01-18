@@ -59,19 +59,20 @@ def apply_exclude_region_masks(
     roi_origin_x: int,
     roi_origin_y: int,
     exclude_regions: list[dict],
-) -> np.ndarray:
+) -> bool:
     """Mask excluded rectangles in the ROI in-place.
 
-    Returns the ROI array (which may have been mutated in-place).
+    Returns True when any pixels were masked.
     """
 
     if not exclude_regions:
-        return roi
+        return False
     roi_height, roi_width = roi.shape[:2]
     roi_left = roi_origin_x
     roi_top = roi_origin_y
     roi_right = roi_left + roi_width
     roi_bottom = roi_top + roi_height
+    masked = False
     for entry in exclude_regions:
         if not isinstance(entry, dict):
             _LOG.debug("Ignoring malformed exclude region (not dict): %r", entry)
@@ -103,7 +104,8 @@ def apply_exclude_region_masks(
         local_x1 = min(roi_width, intersect_right - roi_left)
         local_y1 = min(roi_height, intersect_bottom - roi_top)
         roi[local_y0:local_y1, local_x0:local_x1] = 0
-    return roi
+        masked = True
+    return masked
 
 
 def _normalize_list(values: Iterable[str]) -> set[str]:

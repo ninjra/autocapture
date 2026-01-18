@@ -526,6 +526,25 @@ class ObservabilityConfig(BaseModel):
     enable_gpu_stats: bool = Field(True)
 
 
+class FeatureFlagsConfig(BaseModel):
+    enable_frame_record_v1: bool = Field(
+        True, description="Enable FrameRecord v1 fields for new captures."
+    )
+    enable_frame_hash: bool = Field(
+        True, description="Compute frame_hash for new captures (post-masking)."
+    )
+    enable_normalized_indexing: bool = Field(
+        True, description="Index normalized OCR text alongside raw text."
+    )
+    enable_thresholding: bool = Field(
+        True, description="Apply retrieval thresholds and no-evidence responses."
+    )
+    enable_retention_prune: bool = Field(
+        False, description="Enable retention-aware index pruning and scans."
+    )
+    enable_otel: bool = Field(False, description="Enable OpenTelemetry tracing/metrics.")
+
+
 class APIConfig(BaseModel):
     bind_host: str = Field("127.0.0.1", description="Bind host for the local API server.")
     port: int = Field(8008, ge=1024, le=65535)
@@ -641,6 +660,11 @@ class RetrievalConfig(BaseModel):
     sparse_enabled: bool = Field(False, description="Enable learned sparse retrieval.")
     late_enabled: bool = Field(False, description="Enable late-interaction reranking.")
     fusion_enabled: bool = Field(False, description="Enable multi-query fusion (RRF).")
+    lexical_min_score: float = Field(0.15, ge=0.0, le=1.0)
+    dense_min_score: float = Field(0.15, ge=0.0, le=1.0)
+    rerank_min_score: float = Field(0.15, ge=0.0, le=1.0)
+    sparse_min_score: float = Field(0.1, ge=0.0, le=1.0)
+    late_min_score: float = Field(0.1, ge=0.0, le=1.0)
     fusion_rewrites: int = Field(4, ge=1, le=8)
     fusion_rrf_k: int = Field(60, ge=1)
     fusion_confidence_min: float = Field(0.65, ge=0.0, le=1.0)
@@ -932,6 +956,7 @@ class AppConfig(BaseModel):
     ffmpeg: FFmpegConfig = FFmpegConfig()
     encryption: EncryptionConfig = EncryptionConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
+    features: FeatureFlagsConfig = FeatureFlagsConfig()
     api: APIConfig = APIConfig()
     llm: LLMConfig = LLMConfig()
     llm_governor: LLMGovernorConfig = LLMGovernorConfig()

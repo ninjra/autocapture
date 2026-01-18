@@ -47,7 +47,9 @@ class EventRecord(Base):
     screenshot_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     focus_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     screenshot_hash: Mapped[str] = mapped_column(String(128))
+    frame_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     ocr_text: Mapped[str] = mapped_column(Text)
+    ocr_text_normalized: Mapped[str | None] = mapped_column(Text, nullable=True)
     embedding_vector: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
     embedding_status: Mapped[str] = mapped_column(String(16), default="pending")
     embedding_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -309,6 +311,16 @@ class RetrievalTraceRecord(Base):
     )
 
 
+class BackfillCheckpointRecord(Base):
+    __tablename__ = "backfill_checkpoints"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class RuntimeStateRecord(Base):
     __tablename__ = "runtime_state"
 
@@ -331,13 +343,22 @@ class CaptureRecord(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    event_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     captured_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at_utc: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    monotonic_ts: Mapped[float | None] = mapped_column(Float, nullable=True)
     image_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     focus_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     foreground_process: Mapped[str] = mapped_column(String(256))
     foreground_window: Mapped[str] = mapped_column(String(512))
     monitor_id: Mapped[str] = mapped_column(String(64))
+    monitor_bounds: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     is_fullscreen: Mapped[bool] = mapped_column(default=False)
+    privacy_flags: Mapped[dict] = mapped_column(JSON, default=dict)
+    frame_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    schema_version: Mapped[str] = mapped_column(String(16), default="v1")
     ocr_status: Mapped[str] = mapped_column(String(16), default="pending")
     ocr_started_at: Mapped[dt.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -373,6 +394,9 @@ class OCRSpanRecord(Base):
     text: Mapped[str] = mapped_column(Text)
     confidence: Mapped[float] = mapped_column(Float)
     bbox: Mapped[dict] = mapped_column(JSON)
+    engine: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    frame_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    schema_version: Mapped[str] = mapped_column(String(16), default="v1")
 
     capture: Mapped[CaptureRecord] = relationship("CaptureRecord", back_populates="spans")
 
@@ -413,6 +437,7 @@ class EmbeddingRecord(Base):
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )
     span_key: Mapped[str] = mapped_column(String(64))
+    frame_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     capture: Mapped[CaptureRecord] = relationship("CaptureRecord", back_populates="embeddings")
 
