@@ -17,11 +17,7 @@ def build_privacy_flags(
     masked_regions_applied: bool,
     offline: bool,
 ) -> PrivacyFlags:
-    cloud_allowed = bool(
-        privacy.cloud_enabled
-        and privacy.allow_cloud_images
-        and not offline
-    )
+    cloud_allowed = bool(privacy.cloud_enabled and privacy.allow_cloud_images and not offline)
     return PrivacyFlags(
         excluded=excluded,
         masked_regions_applied=masked_regions_applied,

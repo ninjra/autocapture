@@ -29,8 +29,6 @@ def normalize_text(text: str) -> str:
         return ""
     normalized = unicodedata.normalize("NFKC", text)
     normalized = normalized.translate(_PUNCT_TRANSLATION)
-    normalized = "".join(
-        ch for ch in normalized if unicodedata.category(ch) != "Cf"
-    )
+    normalized = "".join(ch for ch in normalized if unicodedata.category(ch) != "Cf")
     normalized = _RE_WHITESPACE.sub(" ", normalized)
     return normalized.strip()

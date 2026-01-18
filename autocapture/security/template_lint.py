@@ -59,9 +59,7 @@ def lint_template_text(template: str, *, label: str = "template") -> None:
         raise ValueError(f"{label} could not be parsed as a template: {exc}") from exc
     for node_type in _FORBIDDEN_NODES:
         if any(parsed.find_all(node_type)):
-            raise ValueError(
-                f"{label} contains forbidden Jinja2 construct: {node_type.__name__}"
-            )
+            raise ValueError(f"{label} contains forbidden Jinja2 construct: {node_type.__name__}")
     for node in parsed.find_all(nodes.Filter):
         if node.name in _BANNED_FILTERS:
             raise ValueError(f"{label} contains forbidden filter: {node.name}")

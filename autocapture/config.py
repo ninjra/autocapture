@@ -216,7 +216,9 @@ class OCRConfig(BaseModel):
     )
     languages: list[str] = Field(default_factory=lambda: ["en"])
     output_format: str = Field("json")
-    layout_enabled: bool = Field(True, description="Enable deterministic OCR layout reconstruction.")
+    layout_enabled: bool = Field(
+        True, description="Enable deterministic OCR layout reconstruction."
+    )
     paddle_ppstructure_enabled: bool = Field(
         False, description="Enable PaddleOCR PP-Structure layout backend."
     )

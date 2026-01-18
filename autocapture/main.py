@@ -18,6 +18,15 @@ from .logging_utils import configure_logging, get_logger
 from .doctor import run_doctor
 from .paths import default_config_path, ensure_config_path
 from .runtime import AppRuntime
+from .runtime_context import build_runtime_context
+from .runtime_device import require_cuda_available
+from .runtime_env import (
+    RuntimeEnvConfig,
+    apply_runtime_env_overrides,
+    configure_cuda_visible_devices,
+    load_runtime_env,
+)
+from .runtime_governor import RuntimeGovernor
 from .security.offline_guard import apply_offline_guard
 from .storage.database import DatabaseManager
 from .worker.supervisor import WorkerSupervisor
@@ -134,8 +143,8 @@ def _doctor(config: AppConfig) -> int:
     return exit_code
 
 
-def _run_runtime(config: AppConfig) -> int:
-    runtime = AppRuntime(config)
+def _run_runtime(config: AppConfig, runtime_env: RuntimeEnvConfig) -> int:
+    runtime = AppRuntime(config, runtime_env=runtime_env)
     runtime.start()
     log = get_logger("cli")
     log.info("Autocapture running. Press Ctrl+C to stop.")
@@ -154,6 +163,10 @@ def main(argv: list[str] | None = None) -> None:
     config_path = ensure_config_path(Path(args.config))
     config = load_config(config_path)
     configure_logging(args.log_dir or getattr(config, "logging", None))
+    runtime_env = load_runtime_env()
+    configure_cuda_visible_devices(runtime_env)
+    apply_runtime_env_overrides(config, runtime_env)
+    require_cuda_available(runtime_env)
     logger = get_logger("cli")
     if config.offline and not config.privacy.cloud_enabled and config.mode.mode == "remote":
         logger.warning("Offline guard disabled in remote mode (OIDC/JWKS requires outbound HTTPS).")
@@ -364,7 +377,21 @@ def main(argv: list[str] | None = None) -> None:
         if not claim_single_instance():
             logger.warning("Autocapture worker already active in another interpreter. Exiting.")
             raise SystemExit(0)
-        worker = WorkerSupervisor(config=config)
+        runtime_context = build_runtime_context(config, runtime_env)
+        profile_override = runtime_env.profile if runtime_env.profile_override else None
+        runtime_governor = RuntimeGovernor(
+            config.runtime,
+            raw_input=None,
+            pause_controller=runtime_context.pause,
+            profile_override=profile_override,
+            profile_scheduler=runtime_context.scheduler,
+        )
+        runtime_governor.start()
+        worker = WorkerSupervisor(
+            config=config,
+            runtime_governor=runtime_governor,
+            pause_controller=runtime_context.pause,
+        )
         logger.info("Worker supervisor running. Press Ctrl+C to stop.")
         worker.start()
         try:
@@ -374,6 +401,7 @@ def main(argv: list[str] | None = None) -> None:
             logger.info("Shutting down worker")
         finally:
             worker.stop()
+            runtime_governor.stop()
         return
 
     if cmd in {"app", "tray"}:
@@ -399,7 +427,7 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(0)
 
     try:
-        raise SystemExit(_run_runtime(config))
+        raise SystemExit(_run_runtime(config, runtime_env))
     except KeyboardInterrupt:
         logger.info("Shutting down")
         # Let asyncio loop close cleanly.

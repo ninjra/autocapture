@@ -1036,7 +1036,8 @@ def create_app(
                 text=text_pack,
                 tron=tron_pack,
                 warnings=["no_evidence"],
-                message=message or _no_evidence_message(request.query, bool(request.time_range), None),
+                message=message
+                or _no_evidence_message(request.query, bool(request.time_range), None),
             )
         pack = build_context_pack(
             query=request.query,
@@ -2119,9 +2120,7 @@ def _spans_for_event(
             )
         )
     if not evidence_spans:
-        evidence_spans.append(
-            EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5)
-        )
+        evidence_spans.append(EvidenceSpan(span_id="S0", start=0, end=len(snippet), conf=0.5))
     return evidence_spans
 
 

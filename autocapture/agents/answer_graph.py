@@ -11,7 +11,12 @@ from typing import Any
 from ..config import AppConfig
 from ..logging_utils import get_logger
 from ..memory.compression import CompressedAnswer, extractive_answer
-from ..memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack, build_evidence_payload
+from ..memory.context_pack import (
+    EvidenceItem,
+    EvidenceSpan,
+    build_context_pack,
+    build_evidence_payload,
+)
 from ..memory.time_intent import (
     is_time_only_expression,
     resolve_time_intent,
@@ -749,9 +754,11 @@ def _merge_aggregates(existing: dict | None, incoming: dict | None) -> dict:
 
 
 def _unpack_evidence_result(
-    result: tuple[list[EvidenceItem], list[EventRecord], bool]
-    | tuple[list[EvidenceItem], list[EventRecord]]
-    | None
+    result: (
+        tuple[list[EvidenceItem], list[EventRecord], bool]
+        | tuple[list[EvidenceItem], list[EventRecord]]
+        | None
+    )
 ) -> tuple[list[EvidenceItem], list[EventRecord], bool]:
     if not result:
         return [], [], True
@@ -792,9 +799,7 @@ def _frame_size_from_tags(tags: dict | None) -> tuple[int, int] | None:
     return width_val, height_val
 
 
-def _bbox_norm(
-    bbox: list[int] | None, frame_size: tuple[int, int] | None
-) -> list[float] | None:
+def _bbox_norm(bbox: list[int] | None, frame_size: tuple[int, int] | None) -> list[float] | None:
     if not bbox or not frame_size:
         return None
     width, height = frame_size

@@ -20,6 +20,9 @@ from .storage.database import DatabaseManager
 from .storage.models import RuntimeStateRecord
 from .tracking.win_foreground import get_foreground_context, is_fullscreen_window
 from .gpu_lease import GpuLease, get_global_gpu_lease
+from .runtime_env import ProfileName
+from .runtime_pause import PauseController
+from .runtime_profile import ProfileScheduler
 
 
 class RuntimeMode(str, Enum):
@@ -73,12 +76,18 @@ class RuntimeGovernor:
         raw_input: object | None = None,
         window_monitor: WindowMonitor | None = None,
         gpu_lease: GpuLease | None = None,
+        pause_controller: PauseController | None = None,
+        profile_override: ProfileName | None = None,
+        profile_scheduler: ProfileScheduler | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager
         self._raw_input = raw_input
         self._monitor = window_monitor or WindowMonitor()
         self._gpu_lease = gpu_lease or get_global_gpu_lease()
+        self._pause = pause_controller
+        self._profile_override = profile_override
+        self._profile_scheduler = profile_scheduler
         self._log = get_logger("runtime.governor")
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -123,9 +132,28 @@ class RuntimeGovernor:
 
     def qos_profile(self, mode: RuntimeMode | None = None) -> RuntimeQosProfile:
         mode = mode or self.current_mode
+        if self._profile_scheduler:
+            if self._profile_override == ProfileName.IDLE:
+                return self._profile_scheduler.qos_profile(ProfileName.IDLE)
+            if self._profile_override == ProfileName.FOREGROUND:
+                return self._profile_scheduler.qos_profile(ProfileName.FOREGROUND)
+            name = ProfileName.IDLE if mode == RuntimeMode.IDLE_DRAIN else ProfileName.FOREGROUND
+            return self._profile_scheduler.qos_profile(name)
         if mode == RuntimeMode.IDLE_DRAIN:
             return self._config.qos.profile_idle
         return self._config.qos.profile_active
+
+    def poll_interval_s(self, default: float) -> float:
+        if not self._profile_scheduler:
+            return default
+        name = ProfileName.FOREGROUND
+        if self._profile_override == ProfileName.IDLE:
+            name = ProfileName.IDLE
+        elif self._profile_override == ProfileName.FOREGROUND:
+            name = ProfileName.FOREGROUND
+        elif self.current_mode == RuntimeMode.IDLE_DRAIN:
+            name = ProfileName.IDLE
+        return self._profile_scheduler.profile(name).poll_interval_s
 
     def allow_vision_extract(self) -> bool:
         profile = self.qos_profile()
@@ -150,6 +178,10 @@ class RuntimeGovernor:
             self._stop.wait(interval)
 
     def _determine_mode(self, state: FullscreenState) -> tuple[RuntimeMode, str | None]:
+        if self._pause and self._pause.is_paused():
+            pause_state = self._pause.get_state()
+            reason = pause_state.reason or "pause_latch"
+            return RuntimeMode.FULLSCREEN_HARD_PAUSE, reason
         if self._config.auto_pause.on_fullscreen and state.is_fullscreen:
             return RuntimeMode.FULLSCREEN_HARD_PAUSE, "fullscreen"
         now_ms = int(time.monotonic() * 1000)

@@ -1,6 +1,10 @@
 import datetime as dt
 
-from autocapture.capture.frame_record import build_frame_record_v1, build_privacy_flags, capture_record_kwargs
+from autocapture.capture.frame_record import (
+    build_frame_record_v1,
+    build_privacy_flags,
+    capture_record_kwargs,
+)
 from autocapture.config import AppConfig, DatabaseConfig, PrivacyConfig
 from autocapture.storage.database import DatabaseManager
 from autocapture.storage.models import CaptureRecord, EventRecord

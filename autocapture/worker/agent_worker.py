@@ -56,6 +56,7 @@ from ..storage.models import (
 )
 from ..media.store import MediaStore
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..runtime_pause import PauseController, paused_guard
 from ..vision.extractors import ScreenExtractorRouter
 from ..enrichment.sql_artifacts import extract_sql_artifacts
 
@@ -70,14 +71,18 @@ class AgentJobWorker:
         vector_index: VectorIndex | None = None,
         llm_client: AgentLLMClient | None = None,
         runtime_governor: RuntimeGovernor | None = None,
+        pause_controller: PauseController | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.agents")
         self._queue = AgentJobQueue(self._db)
-        self._embedder = embedder or EmbeddingService(config.embed)
+        self._embedder = embedder or EmbeddingService(
+            config.embed, pause_controller=pause_controller
+        )
         self._vector_index = vector_index or VectorIndex(config, self._embedder.dim)
         self._runtime = runtime_governor
+        self._pause = pause_controller
         self._lexical = LexicalIndex(self._db)
         self._thread_lexical = ThreadLexicalIndex(self._db)
         self._llm = llm_client or AgentLLMClient(config)
@@ -98,12 +103,16 @@ class AgentJobWorker:
         self._max_task_runtime_s = config.worker.max_task_runtime_s
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
-        poll_interval = self._config.worker.poll_interval_s
         backoff_s = 1.0
         while True:
             if stop_event and stop_event.is_set():
                 return
+            if paused_guard(self._pause, stop_event):
+                return
             if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
+                poll_interval = self._config.worker.poll_interval_s
+                if self._runtime:
+                    poll_interval = self._runtime.poll_interval_s(poll_interval)
                 time.sleep(min(poll_interval, 1.0))
                 continue
             try:
@@ -118,10 +127,15 @@ class AgentJobWorker:
                 backoff_s = min(backoff_s * 2, 30.0)
                 continue
             if processed == 0:
+                poll_interval = self._config.worker.poll_interval_s
+                if self._runtime:
+                    poll_interval = self._runtime.poll_interval_s(poll_interval)
                 time.sleep(poll_interval)
 
     def process_batch(self) -> int:
         if not self._config.agents.enabled:
+            return 0
+        if paused_guard(self._pause):
             return 0
         self._recover_stale_leases()
         worker_id = "agent-worker"
@@ -377,6 +391,7 @@ class AgentJobWorker:
             self._queue.mark_skipped(job.id, "Screenshot missing on disk")
             return
         image = ensure_rgb(self._media_store.read_image(path))
+        paused_guard(self._pause)
         result = self._screen_extractor.extract(image)
         sql_artifacts = extract_sql_artifacts(
             result.text,
@@ -719,6 +734,7 @@ class AgentJobWorker:
         if not text:
             return
         try:
+            paused_guard(self._pause)
             vector = self._embedder.embed_texts([text])[0]
             upsert = SpanEmbeddingUpsert(
                 capture_id=thread_id,
@@ -825,6 +841,7 @@ class AgentJobWorker:
 
     def _index_synthetic_span(self, event_id: str, span_key: str, text: str) -> None:
         try:
+            paused_guard(self._pause)
             vector = self._embedder.embed_texts([text])[0]
             upsert = SpanEmbeddingUpsert(
                 capture_id=event_id,

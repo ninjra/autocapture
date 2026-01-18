@@ -34,6 +34,14 @@ from .tracking import HostVectorTracker
 from .worker.supervisor import WorkerSupervisor
 from .memory.router import ProviderRouter
 from .qdrant.sidecar import QdrantSidecar
+from .runtime_context import RuntimeContext, build_runtime_context
+from .runtime_device import require_cuda_available
+from .runtime_env import (
+    RuntimeEnvConfig,
+    apply_runtime_env_overrides,
+    configure_cuda_visible_devices,
+    load_runtime_env,
+)
 from .runtime_governor import RuntimeGovernor, RuntimeMode
 from .gpu_lease import get_global_gpu_lease
 
@@ -154,9 +162,22 @@ class HighlightsScheduler:
 class AppRuntime:
     """Start/stop the entire Autocapture pipeline in one process."""
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        *,
+        runtime_env: RuntimeEnvConfig | None = None,
+        runtime_context: RuntimeContext | None = None,
+    ) -> None:
         set_process_dpi_awareness()
+        runtime_env = runtime_env or (
+            runtime_context.env if runtime_context else load_runtime_env()
+        )
+        configure_cuda_visible_devices(runtime_env)
+        require_cuda_available(runtime_env)
+        apply_runtime_env_overrides(config, runtime_env)
         self._config = config
+        self._runtime_context = runtime_context or build_runtime_context(config, runtime_env)
         self._log = get_logger("runtime")
         self._lock = threading.Lock()
         self._running = False
@@ -164,7 +185,9 @@ class AppRuntime:
         self._db = DatabaseManager(config.database)
         self._gpu_lease = get_global_gpu_lease()
         self._agent_jobs = AgentJobQueue(self._db)
-        self._retrieval_embedder = EmbeddingService(config.embed)
+        self._retrieval_embedder = EmbeddingService(
+            config.embed, pause_controller=self._runtime_context.pause
+        )
         self._vector_index = VectorIndex(config, self._retrieval_embedder.dim)
         self._tracker = (
             HostVectorTracker(
@@ -183,11 +206,15 @@ class AppRuntime:
             track_mouse_movement=config.tracking.track_mouse_movement,
             mouse_move_sample_ms=config.tracking.mouse_move_sample_ms,
         )
+        profile_override = runtime_env.profile if runtime_env.profile_override else None
         self._runtime_governor = RuntimeGovernor(
             config.runtime,
             db_manager=self._db,
             raw_input=self._raw_input,
             gpu_lease=self._gpu_lease,
+            pause_controller=self._runtime_context.pause,
+            profile_override=profile_override,
+            profile_scheduler=self._runtime_context.scheduler,
         )
         self._orchestrator = CaptureOrchestrator(
             database=self._db,
@@ -205,6 +232,7 @@ class AppRuntime:
             ffmpeg_config=config.ffmpeg,
             runtime_governor=self._runtime_governor,
             runtime_auto_pause=config.runtime.auto_pause.on_fullscreen,
+            pause_controller=self._runtime_context.pause,
         )
         self._qdrant_sidecar = QdrantSidecar(
             config, Path(config.capture.data_dir), Path(config.capture.data_dir) / "logs"
@@ -214,6 +242,7 @@ class AppRuntime:
             db_manager=self._db,
             vector_index=self._vector_index,
             runtime_governor=self._runtime_governor,
+            pause_controller=self._runtime_context.pause,
         )
         self._retention = RetentionManager(
             config.storage,

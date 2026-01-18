@@ -347,10 +347,7 @@ class RetrievalService:
                     span_hits.setdefault(hit.event_id, []).append(hit.span_key)
 
         candidate_ids = (
-            set(lexical_scores)
-            | set(dense_scores)
-            | set(sparse_scores)
-            | set(late_stage1_scores)
+            set(lexical_scores) | set(dense_scores) | set(sparse_scores) | set(late_stage1_scores)
         )
         if not candidate_ids:
             return self._fallback_ocr_scan(query, time_range, filters, limit)
@@ -590,9 +587,7 @@ class RetrievalService:
         reranked.sort(key=lambda item: item.score, reverse=True)
         return reranked + tail
 
-    def _decorate_results(
-        self, query: str, results: list[RetrievedEvent]
-    ) -> list[RetrievedEvent]:
+    def _decorate_results(self, query: str, results: list[RetrievedEvent]) -> list[RetrievedEvent]:
         if not results:
             return results
         event_ids = [result.event.event_id for result in results]
@@ -834,9 +829,7 @@ def _tokenize_query(query: str) -> list[str]:
     return filtered or [token.lower() for token in tokens]
 
 
-def _apply_thresholds(
-    results: list[RetrievedEvent], config
-) -> list[RetrievedEvent]:
+def _apply_thresholds(results: list[RetrievedEvent], config) -> list[RetrievedEvent]:
     if not results:
         return results
     filtered: list[RetrievedEvent] = []
