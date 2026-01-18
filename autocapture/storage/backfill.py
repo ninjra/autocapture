@@ -404,7 +404,12 @@ class BackfillRunner:
         self._db.transaction(_delete)
 
     def _save_checkpoint(
-        self, name: str, last_ts: dt.datetime | None, last_id: str | None, *, extra: dict | None = None
+        self,
+        name: str,
+        last_ts: dt.datetime | None,
+        last_id: str | None,
+        *,
+        extra: dict | None = None,
     ) -> None:
         payload: dict = dict(extra or {})
         if last_ts is not None and last_id is not None:

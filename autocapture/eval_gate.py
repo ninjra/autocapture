@@ -170,9 +170,7 @@ def _seed_fixture_corpus(db: DatabaseManager) -> None:
     ]
     with db.session() as session:
         for event_id, lines in fixtures:
-            text, spans = build_ocr_payload(
-                [(line, 0.9, [0, 0, 10, 10]) for line in lines]
-            )
+            text, spans = build_ocr_payload([(line, 0.9, [0, 0, 10, 10]) for line in lines])
             session.add(
                 CaptureRecord(
                     id=event_id,

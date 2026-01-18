@@ -1,0 +1,2 @@
+Autocapture bench fixture v1.
+Deterministic payload for CPU hashing.

@@ -148,7 +148,9 @@ def test_answer_graph_no_evidence_returns_notice() -> None:
     config.features.enable_thresholding = True
     config.retrieval.lexical_min_score = 0.99
     db = DatabaseManager(config.database)
-    retrieval = RetrievalService(db, config, embedder=_StubEmbedder(), vector_index=_StubVectorIndex())
+    retrieval = RetrievalService(
+        db, config, embedder=_StubEmbedder(), vector_index=_StubVectorIndex()
+    )
     secret = SecretStore(config.capture.data_dir).get_or_create()
     entities = EntityResolver(db, secret)
     graph = AnswerGraph(config, retrieval, prompt_registry=_StubPromptRegistry(), entities=entities)

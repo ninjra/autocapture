@@ -23,6 +23,7 @@ from .privacy import PrivacyPolicy, get_screen_lock_status
 from .privacy_filter import apply_exclude_region_masks, should_skip_capture
 from ..config import CaptureConfig, FFmpegConfig, FeatureFlagsConfig, PrivacyConfig, WorkerConfig
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..runtime_pause import PauseController
 from ..time_utils import monotonic_now, utc_now
 from ..observability.otel import otel_span, record_histogram, set_gauge
 from ..image_utils import hash_rgb_image
@@ -103,6 +104,7 @@ class CaptureOrchestrator:
         backend: object | None = None,
         runtime_governor: RuntimeGovernor | None = None,
         runtime_auto_pause: bool | None = None,
+        pause_controller: PauseController | None = None,
     ) -> None:
         self._log = get_logger("orchestrator")
         self._database = database
@@ -172,6 +174,7 @@ class CaptureOrchestrator:
         self._capture_restart_max_backoff_s = 30.0
         self._runtime = runtime_governor
         self._runtime_auto_pause = bool(runtime_auto_pause)
+        self._pause = pause_controller
 
     def start(self) -> None:
         with self._state_lock:
@@ -277,6 +280,13 @@ class CaptureOrchestrator:
         interval = max(1.0 / max(self._capture_config.hid.fps_soft_cap, 0.01), min_interval)
         try:
             while self._running.is_set():
+                if self._pause and self._pause.is_paused():
+                    try:
+                        self._pause.wait_until_resumed(timeout=1.0)
+                    except TimeoutError:
+                        if not self._running.is_set():
+                            return
+                        continue
                 loop_start = time.monotonic()
                 if (
                     self._runtime
@@ -486,6 +496,13 @@ class CaptureOrchestrator:
 
     def _run_roi_saver(self) -> None:
         while self._running.is_set() or not self._roi_queue.empty():
+            if self._pause and self._pause.is_paused():
+                try:
+                    self._pause.wait_until_resumed(timeout=1.0)
+                except TimeoutError:
+                    if not self._running.is_set():
+                        return
+                    continue
             try:
                 item = self._roi_queue.get(timeout=0.2)
             except queue.Empty:

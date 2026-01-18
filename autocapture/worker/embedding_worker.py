@@ -11,6 +11,7 @@ from sqlalchemy import select, update
 
 from ..config import AppConfig
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..runtime_pause import PauseController, paused_guard
 from ..embeddings.service import EmbeddingService
 from ..indexing.lexical_index import LexicalIndex
 from ..indexing.vector_index import IndexUnavailable, SpanEmbeddingUpsert, VectorIndex
@@ -37,14 +38,18 @@ class EmbeddingWorker:
         embedder: Optional[EmbeddingService] = None,
         vector_index: VectorIndex | None = None,
         runtime_governor: RuntimeGovernor | None = None,
+        pause_controller: PauseController | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.embedding")
-        self._embedder = embedder or EmbeddingService(config.embed)
+        self._embedder = embedder or EmbeddingService(
+            config.embed, pause_controller=pause_controller
+        )
         self._vector_index = vector_index or VectorIndex(config, self._embedder.dim)
         self._lexical_index = LexicalIndex(self._db)
         self._runtime = runtime_governor
+        self._pause = pause_controller
         self._spans_v2: SpansV2Index | None = None
         self._sparse_encoder: SparseEncoder | None = None
         self._late_encoder: LateInteractionEncoder | None = None
@@ -66,14 +71,18 @@ class EmbeddingWorker:
         self._index_backoff_s = 0.0
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
-        poll_interval = self._config.worker.poll_interval_s
         self._recover_stale_embeddings()
         self._recover_stale_event_embeddings()
         backoff_s = 1.0
         while True:
             if stop_event and stop_event.is_set():
                 return
+            if paused_guard(self._pause, stop_event):
+                return
             if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
+                poll_interval = self._config.worker.poll_interval_s
+                if self._runtime:
+                    poll_interval = self._runtime.poll_interval_s(poll_interval)
                 time.sleep(min(poll_interval, 1.0))
                 continue
             try:
@@ -88,6 +97,9 @@ class EmbeddingWorker:
                 backoff_s = min(backoff_s * 2, 30.0)
                 continue
             if processed == 0:
+                poll_interval = self._config.worker.poll_interval_s
+                if self._runtime:
+                    poll_interval = self._runtime.poll_interval_s(poll_interval)
                 time.sleep(poll_interval)
 
     def process_batch(self) -> int:
@@ -125,6 +137,8 @@ class EmbeddingWorker:
             self._log.debug("Embedding backlog metric failed: {}", exc)
 
     def _process_event_embeddings(self) -> int:
+        if paused_guard(self._pause):
+            return 0
         batch_size = self._config.embed.text_batch_size
         if self._runtime:
             profile = self._runtime.qos_profile()
@@ -213,6 +227,7 @@ class EmbeddingWorker:
         ticker.start()
         try:
             start = time.monotonic()
+            paused_guard(self._pause)
             vectors = self._embedder.embed_texts(texts)
             embedding_latency_ms.observe((time.monotonic() - start) * 1000)
         except Exception as exc:
@@ -262,6 +277,8 @@ class EmbeddingWorker:
         return self._db.transaction(_persist)
 
     def _process_span_embeddings(self) -> int:
+        if paused_guard(self._pause):
+            return 0
         batch_size = self._config.embed.text_batch_size
         if self._runtime:
             profile = self._runtime.qos_profile()
@@ -372,6 +389,7 @@ class EmbeddingWorker:
 
         sparse_vectors: dict[str, SparseEmbedding] = {}
         if self._sparse_encoder and self._config.retrieval.sparse_enabled:
+            paused_guard(self._pause)
             sparse_list = self._sparse_encoder.encode(
                 [_index_text(span.text or "") for _, span, _ in span_rows]
             )
@@ -383,6 +401,7 @@ class EmbeddingWorker:
             eligible = self._eligible_late_span_keys(span_rows)
             for _embedding, span, _event in span_rows:
                 if span.span_key in eligible:
+                    paused_guard(self._pause)
                     late_vectors[span.span_key] = self._late_encoder.encode_text(
                         _index_text(span.text or "")
                     )
@@ -396,6 +415,7 @@ class EmbeddingWorker:
         if span_texts:
             try:
                 start = time.monotonic()
+                paused_guard(self._pause)
                 vectors = self._embedder.embed_texts(span_texts)
                 embedding_latency_ms.observe((time.monotonic() - start) * 1000)
             except Exception as exc:

@@ -11,6 +11,7 @@ from ..observability.metrics import worker_restarts_total
 from ..storage.database import DatabaseManager
 from ..indexing.vector_index import VectorIndex
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..runtime_pause import PauseController
 from ..runtime_qos import apply_cpu_priority
 from .agent_worker import AgentJobWorker
 from .embedding_worker import EmbeddingWorker
@@ -37,6 +38,7 @@ class WorkerSupervisor:
         embed_workers: list[object] | None = None,
         agent_workers: list[object] | None = None,
         runtime_governor: RuntimeGovernor | None = None,
+        pause_controller: PauseController | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
@@ -49,11 +51,15 @@ class WorkerSupervisor:
         self._slots_lock = threading.Lock()
         self._desired_counts = {"ocr": 0, "embed": 0, "agents": 0}
         self._runtime = runtime_governor
+        self._pause = pause_controller
         if ocr_workers is None:
             if self._ocr_enabled():
                 self._ocr_workers = [
                     EventIngestWorker(
-                        config, db_manager=self._db, runtime_governor=runtime_governor
+                        config,
+                        db_manager=self._db,
+                        runtime_governor=runtime_governor,
+                        pause_controller=pause_controller,
                     )
                     for _ in range(config.worker.ocr_workers)
                 ]
@@ -69,6 +75,7 @@ class WorkerSupervisor:
                     db_manager=self._db,
                     vector_index=vector_index,
                     runtime_governor=runtime_governor,
+                    pause_controller=pause_controller,
                 )
                 for _ in range(config.worker.embed_workers)
             ]
@@ -81,6 +88,7 @@ class WorkerSupervisor:
                     db_manager=self._db,
                     vector_index=vector_index,
                     runtime_governor=runtime_governor,
+                    pause_controller=pause_controller,
                 )
                 for _ in range(config.worker.agent_workers)
             ]

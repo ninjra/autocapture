@@ -19,6 +19,7 @@ from ..agents import AGENT_JOB_ENRICH_EVENT
 from ..agents.jobs import AgentJobQueue
 from ..config import AppConfig, CaptureConfig, OCRConfig
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..runtime_pause import PauseController, paused_guard
 from ..image_utils import ensure_rgb, hash_rgb_image
 from ..indexing.lexical_index import LexicalIndex
 from ..logging_utils import get_logger
@@ -96,11 +97,13 @@ class EventIngestWorker:
         db_manager: DatabaseManager | None = None,
         ocr_processor: Optional[object] = None,
         runtime_governor: RuntimeGovernor | None = None,
+        pause_controller: PauseController | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.event_ingest")
         self._runtime = runtime_governor
+        self._pause = pause_controller
         self._lexical = LexicalIndex(self._db)
         self._media_store = MediaStore(config.capture, config.encryption)
         self._agent_jobs = AgentJobQueue(self._db)
@@ -120,6 +123,8 @@ class EventIngestWorker:
         self._ppstructure = PaddleLayoutExtractor(config.ocr)
 
     def process_batch(self, limit: Optional[int] = None) -> int:
+        if paused_guard(self._pause):
+            return 0
         if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
             return 0
         processed = 0
@@ -162,13 +167,17 @@ class EventIngestWorker:
         return processed
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
-        poll_interval = self._config.worker.poll_interval_s
         self._recover_stale_captures()
         backoff_s = 1.0
         while True:
             if stop_event and stop_event.is_set():
                 return
+            if paused_guard(self._pause, stop_event):
+                return
             if self._runtime and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE:
+                poll_interval = self._config.worker.poll_interval_s
+                if self._runtime:
+                    poll_interval = self._runtime.poll_interval_s(poll_interval)
                 time.sleep(min(poll_interval, 1.0))
                 continue
             try:
@@ -183,6 +192,9 @@ class EventIngestWorker:
                 backoff_s = min(backoff_s * 2, 30.0)
                 continue
             if processed == 0:
+                poll_interval = self._config.worker.poll_interval_s
+                if self._runtime:
+                    poll_interval = self._runtime.poll_interval_s(poll_interval)
                 time.sleep(poll_interval)
 
     def _claim_capture(self, capture_id: str) -> bool:
@@ -270,6 +282,7 @@ class EventIngestWorker:
                 hdr_tags,
                 self._config.capture,
             )
+            paused_guard(self._pause)
             ocr_start = time.monotonic()
             with otel_span("extract_ocr", {"stage_name": "extract_ocr"}):
                 result = self._extractor.extract(image)
@@ -292,6 +305,7 @@ class EventIngestWorker:
             if self._config.ocr.layout_enabled:
                 layout_blocks, layout_md = build_layout(ocr_spans)
                 layout_source = "ocr_layout"
+            paused_guard(self._pause)
             pp_layout = self._ppstructure.extract(image)
             if pp_layout and pp_layout.tags.get("status") == "ok" and pp_layout.blocks:
                 layout_blocks = pp_layout.blocks
@@ -306,6 +320,7 @@ class EventIngestWorker:
                     "ppstructure": pp_layout.tags if pp_layout else {},
                 },
             )
+            paused_guard(self._pause)
             ui_result = self._ui_grounding.extract(image)
             tags = _merge_tags(tags, {"ui_elements": ui_result.tags})
             sql_artifacts = extract_sql_artifacts(
@@ -712,7 +727,9 @@ def _build_capture_meta(
     meta: dict[str, object] = {
         "frame_width": int(frame_width),
         "frame_height": int(frame_height),
-        "color_space": hdr_tags.get("color_space", "sRGB") if isinstance(hdr_tags, dict) else "sRGB",
+        "color_space": (
+            hdr_tags.get("color_space", "sRGB") if isinstance(hdr_tags, dict) else "sRGB"
+        ),
         "hdr": hdr_tags,
     }
     if capture_config.multi_monitor_enabled:

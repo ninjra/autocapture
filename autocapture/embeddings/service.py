@@ -7,20 +7,25 @@ from typing import Iterable
 from ..config import EmbedConfig, is_dev_mode
 from ..logging_utils import get_logger
 from ..gpu_lease import get_global_gpu_lease
+from ..runtime_pause import PauseController, paused_guard
 
 
 class EmbeddingService:
-    def __init__(self, config: EmbedConfig) -> None:
+    def __init__(
+        self, config: EmbedConfig, *, pause_controller: PauseController | None = None
+    ) -> None:
         self._config = config
         self._log = get_logger("embeddings")
         self._backend = None
         self._dim = None
         self._model_name = config.text_model
         self._lease_key = f"embed:{id(self)}"
+        self._pause = pause_controller
         get_global_gpu_lease().register_release_hook(self._lease_key, self._on_release)
         self._init_backend()
 
     def _init_backend(self) -> None:
+        paused_guard(self._pause)
         if self._model_name == "local-test":
             self._backend = "local-test"
             self._dim = 16

@@ -1,0 +1,67 @@
+{
+  "backend": {
+    "cuda_available": false
+  },
+  "config": {
+    "batch_sizes": {
+      "embed": 256,
+      "ocr": 32,
+      "reranker_active": 8,
+      "reranker_idle": 32
+    },
+    "pause_state": {
+      "is_paused": false,
+      "raw": null,
+      "reason": "",
+      "source": "",
+      "updated_at_ms": 0
+    },
+    "qos_profiles": {
+      "active": {
+        "agent_workers": 0,
+        "embed_workers": 0,
+        "ocr_workers": 1
+      },
+      "idle": {
+        "agent_workers": 1,
+        "embed_workers": 2,
+        "ocr_workers": 4
+      }
+    },
+    "runtime_env": {
+      "bench_output_dir": "artifacts/bench",
+      "cuda_device_index": 0,
+      "cuda_visible_devices": "0",
+      "gpu_mode": "auto",
+      "profile": "foreground",
+      "profile_override": true,
+      "redact_window_titles": true,
+      "runtime_dir": "/mnt/c/autocapture_runtime",
+      "schema_version": 1
+    },
+    "workers": {
+      "agents": 1,
+      "embed": 1,
+      "ocr": 4
+    }
+  },
+  "counters": {
+    "errors": 0,
+    "processed": 0,
+    "skipped": 1
+  },
+  "env": {
+    "cpu_count": 32,
+    "git_sha": "726ffd5af6230d0ac4d2dd4c64e3ee16eb77d226",
+    "machine": "x86_64",
+    "platform": "Linux-5.15.153.1-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.12.3",
+    "total_ram_bytes": 33508106240
+  },
+  "metrics": null,
+  "mode": "gpu",
+  "reason": "cuda_unavailable",
+  "schema_version": 1,
+  "status": "skipped"
+}

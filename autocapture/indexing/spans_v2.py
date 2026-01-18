@@ -268,9 +268,7 @@ class QdrantSpansV2Backend:
         self._ensure_collection()
         from qdrant_client.http import models
 
-        filter_obj = _build_filter(
-            models, {"capture_id": list(event_ids)}, embedding_model=None
-        )
+        filter_obj = _build_filter(models, {"capture_id": list(event_ids)}, embedding_model=None)
 
         def _delete() -> None:
             self._client.delete(collection_name=self._collection, points_selector=filter_obj)

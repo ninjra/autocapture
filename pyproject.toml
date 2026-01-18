@@ -5,7 +5,11 @@ description = "High-performance local activity capture and recall pipeline"
 readme = "README.md"
 authors = ["Ninjra <dev@ninjra.ai>"]
 packages = [{ include = "autocapture" }]
-include = ["autocapture/prompts/**/*.yaml", "autocapture/ui/web/**"]
+include = [
+  "autocapture/prompts/**/*.yaml",
+  "autocapture/ui/web/**",
+  "autocapture/bench/fixtures/**",
+]
 # Exclude files from the built distribution (moved from tool.poetry.packages[*].exclude)
 exclude = ["autocapture/_legacy/**"]
 

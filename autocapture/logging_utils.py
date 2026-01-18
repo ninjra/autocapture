@@ -44,9 +44,7 @@ class LoggerAdapter:
 
 
 def _prepare_message(message, args):
-    redacted_args = tuple(
-        redact_text(arg) if isinstance(arg, str) else arg for arg in (args or ())
-    )
+    redacted_args = tuple(redact_text(arg) if isinstance(arg, str) else arg for arg in (args or ()))
     if args and isinstance(message, str):
         if "%" in message:
             try:
@@ -117,16 +115,23 @@ def configure_logging(log_dir: Path | str | None = None, level: str = "INFO") ->
                 exc,
             )
             return
-        logger.add(
-            path / "autocapture.log",
-            rotation="1 day",
-            retention="14 days",
-            compression="gz",
-            level=level,
-            backtrace=False,
-            diagnose=False,
-            format=log_format,
-        )
+        try:
+            logger.add(
+                path / "autocapture.log",
+                rotation="1 day",
+                retention="14 days",
+                compression="gz",
+                level=level,
+                backtrace=False,
+                diagnose=False,
+                format=log_format,
+            )
+        except OSError as exc:
+            logger.warning(
+                "Failed to initialize file logging {} ({}). File logging disabled.",
+                path,
+                exc,
+            )
 
 
 def _redact_record(record: dict) -> None:
