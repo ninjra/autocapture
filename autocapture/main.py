@@ -94,6 +94,36 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     db_cmd = sub.add_parser("db", help="Database utilities.")
     db_sub = db_cmd.add_subparsers(dest="db_cmd", required=True)
     db_sub.add_parser("encrypt", help="Encrypt the SQLite database with SQLCipher.")
+    backfill = db_sub.add_parser("backfill", help="Run resumable Phase 0 backfills.")
+    backfill.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
+    backfill.add_argument("--batch-size", type=int, default=500)
+    backfill.add_argument("--max-rows", type=int, default=None)
+    backfill.add_argument("--frame-hash-days", type=int, default=7)
+    backfill.add_argument("--fill-monotonic", action=argparse.BooleanOptionalAction, default=False)
+    backfill.add_argument(
+        "--task",
+        action="append",
+        default=[],
+        help="Backfill task(s): captures, events, spans, embeddings.",
+    )
+    backfill.add_argument(
+        "--reset-checkpoints",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    integrity = db_sub.add_parser("integrity-scan", help="Scan for index/storage orphans.")
+    integrity.add_argument(
+        "--include-vectors",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
+    prune = db_sub.add_parser("prune-indexes", help="Prune index entries missing events.")
+    prune.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=False)
+    prune.add_argument(
+        "--include-vectors",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+    )
 
     return p.parse_args(argv)
 
@@ -229,11 +259,84 @@ def main(argv: list[str] | None = None) -> None:
             return
 
     if cmd == "db":
+        db = DatabaseManager(config.database)
         if args.db_cmd == "encrypt":
             from .storage.sqlcipher_migrate import encrypt_sqlite_database
 
             encrypt_sqlite_database(config.database)
             logger.info("Database encryption complete.")
+            return
+        if args.db_cmd == "backfill":
+            from .storage.backfill import BackfillRunner
+
+            runner = BackfillRunner(config, db=db)
+            counts = runner.run(
+                tasks=args.task or None,
+                dry_run=bool(args.dry_run),
+                batch_size=int(args.batch_size),
+                max_rows=args.max_rows,
+                frame_hash_days=int(args.frame_hash_days),
+                fill_monotonic=bool(args.fill_monotonic),
+                reset_checkpoints=bool(args.reset_checkpoints),
+            )
+            logger.info(
+                "Backfill complete. captures={} events={} spans={} embeddings={} hashes={} normalized={}",
+                counts.captures_updated,
+                counts.events_updated,
+                counts.spans_updated,
+                counts.embeddings_updated,
+                counts.hashes_computed,
+                counts.normalized_texts,
+            )
+            return
+        if args.db_cmd == "integrity-scan":
+            from .storage.integrity import scan_integrity
+            from .embeddings.service import EmbeddingService
+            from .indexing.vector_index import VectorIndex
+
+            vector_index = None
+            if args.include_vectors and config.qdrant.enabled:
+                try:
+                    embedder = EmbeddingService(config.embed)
+                    vector_index = VectorIndex(config, embedder.dim)
+                except Exception:
+                    vector_index = None
+            report = scan_integrity(db, vector_index=vector_index)
+            logger.info(
+                "Integrity scan: fts_orphans={} spans_orphans={} embedding_orphans={} vector_orphans={}",
+                report.orphan_fts,
+                report.orphan_spans,
+                report.orphan_embeddings,
+                report.orphan_vectors,
+            )
+            return
+        if args.db_cmd == "prune-indexes":
+            from .storage.integrity import find_fts_orphans
+            from .indexing.pruner import IndexPruner
+            from .embeddings.service import EmbeddingService
+            from .indexing.vector_index import VectorIndex
+            from .indexing.spans_v2 import SpansV2Index
+
+            event_ids = find_fts_orphans(db)
+            if not event_ids:
+                logger.info("No orphan index entries detected.")
+                return
+            if args.dry_run:
+                logger.info("Prune preview: {} orphaned event ids", len(event_ids))
+                return
+            vector_index = None
+            spans_index = None
+            if args.include_vectors and config.qdrant.enabled:
+                try:
+                    embedder = EmbeddingService(config.embed)
+                    vector_index = VectorIndex(config, embedder.dim)
+                    spans_index = SpansV2Index(config, embedder.dim)
+                except Exception:
+                    vector_index = None
+                    spans_index = None
+            pruner = IndexPruner(db, vector_index=vector_index, spans_index=spans_index)
+            pruner.prune_event_ids(event_ids)
+            logger.info("Pruned {} orphaned event ids from indexes.", len(event_ids))
             return
 
     if cmd == "api":
