@@ -64,6 +64,8 @@ class VectorBackend(Protocol):
         embedding_model: str,
     ) -> list[VectorHit]: ...
 
+    def delete_event_ids(self, event_ids: list[str]) -> int: ...
+
 
 class QdrantBackend:
     def __init__(
@@ -222,6 +224,31 @@ class QdrantBackend:
             )
         return results
 
+    def delete_event_ids(self, event_ids: list[str]) -> int:
+        if not event_ids:
+            return 0
+        if not self._breaker.allow():
+            raise IndexUnavailable("vector index unavailable (circuit open)")
+        self._ensure_collection()
+        filter_obj = Filter(
+            must=[
+                FieldCondition(
+                    key="capture_id",
+                    match=MatchAny(any=list(event_ids)),
+                )
+            ]
+        )
+
+        def _delete() -> None:
+            self._client.delete(collection_name=self._collection, points_selector=filter_obj)
+
+        try:
+            self._run_resilient(_delete)
+        except Exception as exc:
+            self._log.warning("Vector index deletion failed: {}", exc)
+            return 0
+        return len(event_ids)
+
 
 class VectorIndex:
     def __init__(
@@ -282,3 +309,23 @@ class VectorIndex:
             self._log.warning("Vector index unavailable; returning empty results")
             vector_search_failures_total.inc()
             return []
+
+    def delete_event_ids(self, event_ids: list[str]) -> int:
+        if self._backend is None:
+            return 0
+        if not self._backend_allows():
+            return 0
+        try:
+            return self._backend.delete_event_ids(event_ids)
+        except Exception as exc:  # pragma: no cover - best effort
+            self._log.warning("Vector index deletion failed: {}", exc)
+            return 0
+
+    def list_event_ids(self) -> list[str]:
+        listing = getattr(self._backend, "list_event_ids", None)
+        if callable(listing):
+            try:
+                return list(listing())
+            except Exception:
+                return []
+        return []

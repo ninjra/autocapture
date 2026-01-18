@@ -30,6 +30,7 @@ def delete_range(
     end_utc: dt.datetime,
     process: str | None = None,
     window_title: str | None = None,
+    index_pruner: object | None = None,
 ) -> DeleteCounts:
     log = get_logger("storage.delete")
     start = _ensure_aware(start_utc)
@@ -47,7 +48,10 @@ def delete_range(
             path = data_dir / path
         file_paths.add(path)
 
+    event_ids: list[str] = []
+
     def _delete(session) -> DeleteCounts:
+        nonlocal event_ids
         captures_stmt = select(CaptureRecord).where(CaptureRecord.captured_at.between(start, end))
         if process:
             captures_stmt = captures_stmt.where(
@@ -110,6 +114,11 @@ def delete_range(
         )
 
     counts = db.transaction(_delete)
+    if index_pruner and event_ids:
+        try:
+            index_pruner.prune_event_ids(event_ids)
+        except Exception as exc:  # pragma: no cover - best effort
+            log.warning("Index pruning failed: %s", exc)
     deleted_files = _delete_files(file_paths, log)
     return DeleteCounts(
         deleted_captures=counts.deleted_captures,

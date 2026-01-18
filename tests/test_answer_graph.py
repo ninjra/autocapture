@@ -126,7 +126,7 @@ def test_refine_query_uses_prompt_output(monkeypatch) -> None:
         return _RefineProvider(), type("Decision", (), {"temperature": 0.2})()
 
     monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _select_llm)
-    evidence, _events = graph._build_evidence("hello", None, None, 2, sanitized=False)
+    evidence, _events, _no_evidence = graph._build_evidence("hello", None, None, 2, sanitized=False)
     refined = asyncio.run(graph._refine_query("hello", evidence, routing_override=None))
     assert refined.refined_query == "hello notes"
 
@@ -138,6 +138,31 @@ def test_refine_query_falls_back_on_invalid_output(monkeypatch) -> None:
         return _BadRefineProvider(), type("Decision", (), {"temperature": 0.2})()
 
     monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _select_llm)
-    evidence, _events = graph._build_evidence("hello", None, None, 2, sanitized=False)
+    evidence, _events, _no_evidence = graph._build_evidence("hello", None, None, 2, sanitized=False)
     refined = asyncio.run(graph._refine_query("hello", evidence, routing_override=None))
     assert refined.refined_query == "hello Editor"
+
+
+def test_answer_graph_no_evidence_returns_notice() -> None:
+    config = AppConfig(database=DatabaseConfig(url="sqlite:///:memory:", sqlite_wal=False))
+    config.features.enable_thresholding = True
+    config.retrieval.lexical_min_score = 0.99
+    db = DatabaseManager(config.database)
+    retrieval = RetrievalService(db, config, embedder=_StubEmbedder(), vector_index=_StubVectorIndex())
+    secret = SecretStore(config.capture.data_dir).get_or_create()
+    entities = EntityResolver(db, secret)
+    graph = AnswerGraph(config, retrieval, prompt_registry=_StubPromptRegistry(), entities=entities)
+    result = asyncio.run(
+        graph.run(
+            "nothing",
+            time_range=None,
+            filters=None,
+            k=3,
+            sanitized=False,
+            extractive_only=True,
+            routing=ProviderRoutingConfig().model_dump(),
+            aggregates=None,
+        )
+    )
+    assert result.answer
+    assert "No evidence" in result.answer
