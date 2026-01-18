@@ -1,5 +1,27 @@
 # Troubleshooting
 
+## Why is capture paused?
+
+When capture appears paused, check these common causes:
+
+1. **Fullscreen hard pause.**
+   - Verify `runtime.auto_pause.enabled=true`.
+   - If a fullscreen app is active, the governor enters `FULLSCREEN_HARD_PAUSE`.
+   - Inspect the latest runtime state (`pause_reason`, `since_ts`) from logs or the runtime state
+     record persisted by `RuntimeGovernor`.
+
+2. **Manual pause latch.**
+   - If `pause.flag` exists in the runtime directory, capture/worker loops block until it is removed.
+   - See `docs/runtime.md` for pause latch details.
+
+3. **Privacy/overlay rules.**
+   - `privacy.paused=true` or `privacy.snooze_until_utc` can stop capture.
+   - Exclusion filters (`privacy.exclude_processes`, `privacy.exclude_window_title_regex`) can
+     suppress captures for specific apps/windows.
+
+If you need capture to continue during fullscreen apps, set
+`runtime.auto_pause.fullscreen_hard_pause_enabled=false` (or `runtime.auto_pause.mode=soft`).
+
 ## PyCharm does not show new Git files
 
 When PyCharm is open while you add files on disk (for example by pulling from

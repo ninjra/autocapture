@@ -84,6 +84,7 @@ class OllamaProvider(LLMProvider):
         base_url: str,
         model: str,
         *,
+        keep_alive_s: float | None = None,
         timeout_s: float,
         retries: int,
         prompt_strategy: PromptStrategySettings,
@@ -97,6 +98,7 @@ class OllamaProvider(LLMProvider):
         self._breaker = CircuitBreaker()
         self._prompt_strategy = prompt_strategy
         self._governor = governor
+        self._keep_alive_s = keep_alive_s
         self.last_prompt_metadata: PromptStrategyMetadata | None = None
         self.last_prompt_metadata_stage1: PromptStrategyMetadata | None = None
         self._lease_key = f"ollama:{self._base_url}:{self._model}"
@@ -216,6 +218,8 @@ class OllamaProvider(LLMProvider):
             "messages": messages,
             "temperature": temperature,
         }
+        if self._keep_alive_s is not None:
+            payload["keep_alive"] = self._keep_alive_s
 
         async def _request() -> str:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -248,6 +252,8 @@ class OllamaProvider(LLMProvider):
             "stream": False,
             "temperature": temperature,
         }
+        if self._keep_alive_s is not None:
+            payload["keep_alive"] = self._keep_alive_s
 
         async def _request() -> str:
             async with httpx.AsyncClient(timeout=self._timeout) as client:
@@ -273,6 +279,9 @@ class OllamaProvider(LLMProvider):
             raise
 
     def unload(self) -> None:
+        self.unload_models()
+
+    def unload_models(self) -> None:
         """Best-effort unload for local Ollama models."""
         payload = {"model": self._model, "prompt": "", "stream": False, "keep_alive": 0}
         try:
@@ -282,7 +291,7 @@ class OllamaProvider(LLMProvider):
 
     def _on_release(self, reason: str) -> None:
         _ = reason
-        self.unload()
+        self.unload_models()
 
 
 class OpenAIProvider(LLMProvider):

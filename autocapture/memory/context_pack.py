@@ -82,6 +82,7 @@ class ContextPack:
                     text="\n".join(lines),
                     screenshot_path=item.screenshot_path,
                     screenshot_hash=item.screenshot_hash,
+                    retrieval=item.retrieval,
                 )
             )
         return sanitized, warnings

@@ -28,7 +28,6 @@ class FakeWindowMonitor(WindowMonitor):
 
 def test_fullscreen_pause_triggers_gpu_release() -> None:
     config = RuntimeConfig()
-    config.auto_pause.poll_hz = 50
     raw = FakeRawInput()
     monitor = FakeWindowMonitor()
     lease = GpuLease()
@@ -40,17 +39,14 @@ def test_fullscreen_pause_triggers_gpu_release() -> None:
         window_monitor=monitor,
         gpu_lease=lease,
     )
-    governor.start()
     monitor.state = FullscreenState(True, 1, "app.exe", "Full Screen")
-    time.sleep(0.1)
+    governor.tick()
     assert governor.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE
     assert "fullscreen" in releases
-    governor.stop()
 
 
 def test_idle_transition() -> None:
     config = RuntimeConfig()
-    config.auto_pause.poll_hz = 50
     raw = FakeRawInput()
     monitor = FakeWindowMonitor()
     lease = GpuLease()
@@ -60,8 +56,20 @@ def test_idle_transition() -> None:
         window_monitor=monitor,
         gpu_lease=lease,
     )
-    governor.start()
     raw.last_input_ts = int(time.monotonic() * 1000) - (config.qos.idle_grace_ms + 100)
-    time.sleep(0.1)
+    governor.tick()
     assert governor.current_mode == RuntimeMode.IDLE_DRAIN
-    governor.stop()
+
+
+def test_snapshot_reason_and_since_ts() -> None:
+    config = RuntimeConfig()
+    raw = FakeRawInput()
+    monitor = FakeWindowMonitor()
+    governor = RuntimeGovernor(config, raw_input=raw, window_monitor=monitor)
+    snap_initial = governor.snapshot()
+    monitor.state = FullscreenState(True, 1, "app.exe", "Full Screen")
+    governor.tick()
+    snap_full = governor.snapshot()
+    assert snap_full.mode == RuntimeMode.FULLSCREEN_HARD_PAUSE
+    assert snap_full.reason == "fullscreen"
+    assert snap_full.since_ts >= snap_initial.since_ts

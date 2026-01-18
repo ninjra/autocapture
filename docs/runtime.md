@@ -2,6 +2,31 @@
 
 This doc describes runtime switches, pause latch semantics, and local gates.
 
+## Runtime governor modes
+The runtime governor selects one of three modes based on fullscreen detection and input idle time:
+- **FULLSCREEN_HARD_PAUSE:** capture and workers are paused; GPU release hooks fire once per transition.
+- **ACTIVE_INTERACTIVE:** interactive defaults; lightweight background work only.
+- **IDLE_DRAIN:** aggressive backlog drain when input is idle.
+
+Mode transitions are logged with `mode`, `reason`, and `since_ts`. The latest state is also persisted
+in the runtime state record (see `autocapture/runtime_governor.py`).
+
+Relevant flags:
+- `runtime.auto_pause.enabled`: enable fullscreen auto-pause.
+- `runtime.auto_pause.fullscreen_hard_pause_enabled`: allow FULLSCREEN_HARD_PAUSE on fullscreen.
+- `runtime.auto_pause.mode`: `hard` (workers + capture) or `soft` (capture only).
+- `runtime.auto_pause.release_gpu`: fire GPU release hooks on fullscreen transitions.
+- `runtime.qos.enabled`: enable QoS profiles for worker counts/batches.
+
+## QoS budgets
+QoS profiles live under `runtime.qos` and control worker counts, batch sizes, and optional budgets:
+- `sleep_ms`: minimum sleep for paused loops.
+- `max_batch`: max batch size hint.
+- `max_concurrency`: max concurrency hint.
+- `gpu_policy`: `allow_gpu|prefer_cpu|disallow_gpu|release_on_pause`.
+
+Profiles are evaluated per mode, and the governor exposes `qos_budget()` for fast checks.
+
 ## Runtime env vars
 - `GPU_MODE`: `auto` (default), `on`, or `off`.
 - `PROFILE`: `foreground` or `idle` (optional override; when unset, runtime auto-selects).
@@ -23,6 +48,14 @@ Profiles adjust worker concurrency and batch sizing through `runtime.qos`:
 - Idle: throughput defaults (larger worker counts, larger batch sizes).
 
 Set `PROFILE=idle` to force idle profile; otherwise the runtime governor chooses based on input.
+
+## Fullscreen hard pause behavior
+When fullscreen hard pause is enabled:
+- capture ticks are skipped
+- worker loops do not acquire or renew leases
+- GPU release hooks are invoked on transition into fullscreen
+
+To override: set `runtime.auto_pause.fullscreen_hard_pause_enabled=false` (or `mode=soft`) in config.
 
 ## Local gates
 ```

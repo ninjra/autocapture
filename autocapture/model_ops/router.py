@@ -50,6 +50,7 @@ class StageRouter:
             client = OllamaProvider(
                 base_url,
                 model,
+                keep_alive_s=self._config.llm.ollama_keep_alive_s,
                 timeout_s=self._config.llm.timeout_s,
                 retries=self._config.llm.retries,
                 prompt_strategy=self._prompt_strategy,

@@ -31,12 +31,28 @@ class RuntimeMode(str, Enum):
     IDLE_DRAIN = "IDLE_DRAIN"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FullscreenState:
     is_fullscreen: bool
     hwnd: int | None
     process_name: str | None
     window_title: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeSnapshot:
+    mode: RuntimeMode
+    reason: str | None
+    since_ts: dt.datetime
+    last_fullscreen: FullscreenState
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeQosBudget:
+    sleep_ms: int
+    max_batch: int | None
+    max_concurrency: int | None
+    gpu_policy: str
 
 
 class WindowMonitor:
@@ -130,6 +146,41 @@ class RuntimeGovernor:
         with self._lock:
             return self._pause_reason
 
+    def snapshot(self) -> RuntimeSnapshot:
+        with self._lock:
+            return RuntimeSnapshot(
+                mode=self._current_mode,
+                reason=self._pause_reason,
+                since_ts=self._since_ts,
+                last_fullscreen=self._last_fullscreen,
+            )
+
+    def allow_workers(self) -> bool:
+        if not self._auto_pause_enabled():
+            return True
+        return self.current_mode != RuntimeMode.FULLSCREEN_HARD_PAUSE
+
+    def qos_budget(self, mode: RuntimeMode | None = None) -> RuntimeQosBudget:
+        mode = mode or self.current_mode
+        profile = self.qos_profile(mode)
+        if not self._config.qos.enabled:
+            sleep_ms = int(max(0.01, self.poll_interval_s(1.0)) * 1000)
+            return RuntimeQosBudget(
+                sleep_ms=sleep_ms,
+                max_batch=None,
+                max_concurrency=None,
+                gpu_policy="allow_gpu",
+            )
+        sleep_ms = int(max(0.01, self.poll_interval_s(1.0)) * 1000)
+        if getattr(profile, "sleep_ms", None) is not None:
+            sleep_ms = int(max(0, int(profile.sleep_ms)))
+        return RuntimeQosBudget(
+            sleep_ms=sleep_ms,
+            max_batch=getattr(profile, "max_batch", None),
+            max_concurrency=getattr(profile, "max_concurrency", None),
+            gpu_policy=str(getattr(profile, "gpu_policy", "allow_gpu") or "allow_gpu"),
+        )
+
     def qos_profile(self, mode: RuntimeMode | None = None) -> RuntimeQosProfile:
         mode = mode or self.current_mode
         if self._profile_scheduler:
@@ -166,13 +217,16 @@ class RuntimeGovernor:
     def is_fullscreen_pause(self) -> bool:
         return self.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE
 
+    def tick(self) -> None:
+        state = self._monitor.sample()
+        mode, reason = self._determine_mode(state)
+        self._maybe_update(mode, reason, state)
+
     def _run_loop(self) -> None:
         interval = max(0.01, 1.0 / max(self._config.auto_pause.poll_hz, 0.1))
         while not self._stop.is_set():
             try:
-                state = self._monitor.sample()
-                mode, reason = self._determine_mode(state)
-                self._maybe_update(mode, reason, state)
+                self.tick()
             except Exception as exc:  # pragma: no cover - defensive
                 self._log.debug("Runtime governor loop failed: {}", exc)
             self._stop.wait(interval)
@@ -182,8 +236,10 @@ class RuntimeGovernor:
             pause_state = self._pause.get_state()
             reason = pause_state.reason or "pause_latch"
             return RuntimeMode.FULLSCREEN_HARD_PAUSE, reason
-        if self._config.auto_pause.on_fullscreen and state.is_fullscreen:
-            return RuntimeMode.FULLSCREEN_HARD_PAUSE, "fullscreen"
+        if self._auto_pause_enabled() and state.is_fullscreen:
+            if self._config.auto_pause.fullscreen_hard_pause_enabled:
+                return RuntimeMode.FULLSCREEN_HARD_PAUSE, "fullscreen"
+            return RuntimeMode.ACTIVE_INTERACTIVE, "fullscreen_soft"
         now_ms = int(time.monotonic() * 1000)
         last_input_ms = self._get_last_input_ms()
         idle_grace_ms = max(0, int(self._config.qos.idle_grace_ms))
@@ -202,6 +258,13 @@ class RuntimeGovernor:
             return int(value)
         return None
 
+    def _auto_pause_enabled(self) -> bool:
+        auto_pause = self._config.auto_pause
+        enabled = getattr(auto_pause, "enabled", None)
+        if enabled is None:
+            return bool(getattr(auto_pause, "on_fullscreen", False))
+        return bool(enabled)
+
     def _maybe_update(self, mode: RuntimeMode, reason: str | None, state: FullscreenState) -> None:
         notify = False
         with self._lock:
@@ -218,7 +281,13 @@ class RuntimeGovernor:
             if reason:
                 runtime_pause_reason_total.labels(reason).inc()
             if mode == RuntimeMode.FULLSCREEN_HARD_PAUSE and self._config.auto_pause.release_gpu:
-                self._gpu_lease.release("fullscreen")
+                self._gpu_lease.release_all("fullscreen")
+            self._log.info(
+                "Runtime mode change: mode={} reason={} since_ts={}",
+                mode.value,
+                reason or "",
+                self._since_ts.isoformat(),
+            )
             self._persist_state(mode, reason, state)
             self._notify_callbacks(mode)
 

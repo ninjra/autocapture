@@ -12,25 +12,38 @@ class GpuLease:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._release_hooks: dict[str, Callable[[str], None]] = {}
+        self._reacquire_hooks: dict[str, Callable[[str], None]] = {}
         self._log = get_logger("gpu.lease")
 
-    def register_release_hook(self, name: str, hook: Callable[[str], None]) -> None:
+    def register_release_hook(
+        self,
+        name: str,
+        hook: Callable[[str], None],
+        reacquire_hook: Callable[[str], None] | None = None,
+    ) -> None:
         if not name:
             return
         with self._lock:
             self._release_hooks[name] = hook
+            if reacquire_hook is not None:
+                self._reacquire_hooks[name] = reacquire_hook
 
     def unregister_release_hook(self, name: str) -> None:
         with self._lock:
             self._release_hooks.pop(name, None)
+            self._reacquire_hooks.pop(name, None)
 
     def release(self, reason: str) -> None:
+        self.release_all(reason)
+
+    def release_all(self, reason: str) -> None:
         hooks: list[tuple[str, Callable[[str], None]]] = []
         with self._lock:
             hooks = list(self._release_hooks.items())
         for name, hook in hooks:
             try:
                 hook(reason)
+                self._log.info("GPU release hook {} completed ({})", name, reason)
             except Exception as exc:  # pragma: no cover - defensive
                 self._log.debug("GPU release hook {} failed: {}", name, exc)
 

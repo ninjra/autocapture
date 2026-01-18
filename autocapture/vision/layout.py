@@ -11,6 +11,7 @@ class _Line:
     text: str
     spans: list[dict]
     bbox: tuple[int, int, int, int]
+    order_index: int
 
 
 def build_layout(spans: list[dict]) -> tuple[list[dict], str]:
@@ -44,43 +45,48 @@ def build_layout(spans: list[dict]) -> tuple[list[dict], str]:
 
 
 def _cluster_lines(spans: list[dict]) -> list[_Line]:
-    items: list[tuple[dict, tuple[int, int, int, int], int]] = []
+    items: list[tuple[int, dict, tuple[int, int, int, int], int]] = []
     heights: list[int] = []
-    for span in spans or []:
+    for idx, span in enumerate(spans or []):
         bbox = _span_bbox(span)
         if bbox is None:
             continue
         x0, y0, x1, y1 = bbox
         height = max(1, y1 - y0)
         heights.append(height)
-        items.append((span, bbox, height))
+        items.append((idx, span, bbox, height))
     if not items:
         return []
     threshold = max(6, int(median(heights) * 0.7))
-    items.sort(key=lambda item: (item[1][1], item[1][0]))
-    lines: list[list[tuple[dict, tuple[int, int, int, int]]]] = []
+    items.sort(key=lambda item: (item[2][1], item[2][0], item[0]))
+    lines: list[list[tuple[int, dict, tuple[int, int, int, int]]]] = []
     line_centers: list[int] = []
-    for span, bbox, _height in items:
+    for idx, span, bbox, _height in items:
         y_center = (bbox[1] + bbox[3]) // 2
         placed = False
-        for idx, center in enumerate(line_centers):
+        for line_idx, center in enumerate(line_centers):
             if abs(y_center - center) <= threshold:
-                lines[idx].append((span, bbox))
-                line_centers[idx] = int((line_centers[idx] + y_center) / 2)
+                lines[line_idx].append((idx, span, bbox))
+                line_centers[line_idx] = int((line_centers[line_idx] + y_center) / 2)
                 placed = True
                 break
         if not placed:
-            lines.append([(span, bbox)])
+            lines.append([(idx, span, bbox)])
             line_centers.append(y_center)
 
     result: list[_Line] = []
     for group in lines:
-        group.sort(key=lambda item: item[1][0])
-        texts = [str(item[0].get("text") or "").strip() for item in group]
+        group.sort(key=lambda item: (item[2][0], item[0]))
+        texts = [str(item[1].get("text") or "").strip() for item in group]
         joined = " ".join([text for text in texts if text])
-        bbox = _merge_bbox([item[1] for item in group])
-        result.append(_Line(text=joined, spans=[item[0] for item in group], bbox=bbox))
-    result.sort(key=lambda line: (line.bbox[1], line.bbox[0]))
+        bbox = _merge_bbox([item[2] for item in group])
+        order_index = min(item[0] for item in group)
+        result.append(
+            _Line(
+                text=joined, spans=[item[1] for item in group], bbox=bbox, order_index=order_index
+            )
+        )
+    result.sort(key=lambda line: (line.bbox[1], line.bbox[0], line.order_index))
     return result
 
 

@@ -121,6 +121,7 @@ class ProviderRouter:
             OllamaProvider(
                 self._llm_config.ollama_url,
                 self._llm_config.ollama_model,
+                keep_alive_s=self._llm_config.ollama_keep_alive_s,
                 timeout_s=self._llm_config.timeout_s,
                 retries=self._llm_config.retries,
                 prompt_strategy=self._prompt_strategy,
