@@ -24,6 +24,7 @@ from ..indexing.lexical_index import LexicalIndex
 from ..logging_utils import get_logger
 from ..media.store import MediaStore
 from ..observability.metrics import ocr_backlog, ocr_latency_ms, worker_errors_total
+from ..observability.otel import otel_span, record_histogram
 from ..storage.database import DatabaseManager
 from ..storage.models import CaptureRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
 from ..vision.extractors import ScreenExtractorRouter
@@ -31,6 +32,7 @@ from ..vision.layout import build_layout
 from ..vision.ui_grounding import UIGroundingRouter
 from ..vision.types import ExtractionResult, VISION_SCHEMA_VERSION, build_ocr_payload
 from ..enrichment.sql_artifacts import SqlArtifacts, extract_sql_artifacts
+from ..text.normalize import normalize_text
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,9 @@ class CapturePayload:
     foreground_window: str
     monitor_id: str
     is_fullscreen: bool
+    monitor_bounds: list[int] | None
+    frame_hash: str | None
+    privacy_flags: dict
 
 
 def _build_rapidocr_kwargs(use_cuda: bool) -> dict[str, object]:
@@ -216,11 +221,18 @@ class EventIngestWorker:
         existing_event = self._load_event(capture_id)
         existing_spans = self._load_spans(capture_id) if existing_event else []
         if existing_event and existing_event.ocr_text and existing_spans:
+            normalized_text = (
+                normalize_text(existing_event.ocr_text)
+                if self._config.features.enable_normalized_indexing
+                else None
+            )
             self._persist_ocr_results(
                 capture,
                 existing_event.ocr_text or "",
                 existing_spans,
                 event_existing=True,
+                screenshot_hash=capture.frame_hash,
+                normalized_text=normalized_text,
             )
             self._lexical.upsert_event(existing_event)
             self._enqueue_enrichment(existing_event.event_id)
@@ -244,9 +256,21 @@ class EventIngestWorker:
         heartbeat_thread.start()
         try:
             image = self._load_image(path)
-            result = self._extractor.extract(image)
+            ocr_start = time.monotonic()
+            with otel_span("extract_ocr", {"stage_name": "extract_ocr"}):
+                result = self._extractor.extract(image)
+            record_histogram(
+                "extract_ocr_ms",
+                (time.monotonic() - ocr_start) * 1000,
+                {"stage_name": "extract_ocr"},
+            )
             ocr_text = result.text
             ocr_spans = result.spans
+            engine = (
+                (result.tags or {}).get("vision_extract", {}).get("engine")
+                if isinstance(result.tags, dict)
+                else None
+            )
             layout_blocks, layout_md = build_layout(ocr_spans)
             tags = _merge_tags(
                 result.tags or {}, {"layout_blocks": layout_blocks, "layout_md": layout_md}
@@ -257,18 +281,30 @@ class EventIngestWorker:
                 ocr_text,
                 (result.tags or {}).get("vision_extract", {}).get("regions", []),
             )
+            frame_hash = capture.frame_hash
+            if self._config.features.enable_frame_hash and not frame_hash:
+                frame_hash = hash_rgb_image(image)
+            normalized_text = (
+                normalize_text(ocr_text)
+                if self._config.features.enable_normalized_indexing
+                else None
+            )
             self._persist_ocr_results(
                 capture,
                 ocr_text,
                 ocr_spans,
                 event_existing=bool(existing_event),
-                screenshot_hash=hash_rgb_image(image),
+                screenshot_hash=frame_hash,
                 tags=tags,
                 sql_artifacts=sql_artifacts,
+                engine=engine,
+                frame_hash=frame_hash,
+                normalized_text=normalized_text,
             )
             event = self._load_event(capture_id)
             if event:
-                self._lexical.upsert_event(event)
+                with otel_span("index_lexical", {"stage_name": "index_lexical"}):
+                    self._lexical.upsert_event(event)
                 self._enqueue_enrichment(event.event_id)
                 if sql_artifacts.artifact_text:
                     self._lexical.upsert_agent_text(event.event_id, sql_artifacts.artifact_text)
@@ -313,6 +349,9 @@ class EventIngestWorker:
                 foreground_window=capture.foreground_window,
                 monitor_id=capture.monitor_id,
                 is_fullscreen=capture.is_fullscreen,
+                monitor_bounds=capture.monitor_bounds,
+                frame_hash=getattr(capture, "frame_hash", None),
+                privacy_flags=(capture.privacy_flags or {}),
             )
 
     def _load_event(self, event_id: str) -> EventRecord | None:
@@ -383,6 +422,9 @@ class EventIngestWorker:
         sql_artifacts: SqlArtifacts | None = None,
         screenshot_hash: str | None = None,
         tags: dict | None = None,
+        engine: str | None = None,
+        frame_hash: str | None = None,
+        normalized_text: str | None = None,
     ) -> None:
         focus_reference = self._config.capture.focus_crop_reference
         focus_path = capture.focus_path if focus_reference == "event" else None
@@ -392,6 +434,8 @@ class EventIngestWorker:
         derived_tags = tags or {}
         if sql_artifacts and (sql_artifacts.code_blocks or sql_artifacts.sql_statements):
             derived_tags = _merge_tags(derived_tags, {"sql_artifacts": sql_artifacts.as_tags()})
+        if capture.privacy_flags:
+            derived_tags = _merge_tags(derived_tags, {"privacy_flags": capture.privacy_flags})
 
         def _write(session) -> None:
             if not event_existing:
@@ -406,7 +450,9 @@ class EventIngestWorker:
                     screenshot_path=capture.image_path,
                     focus_path=focus_path,
                     screenshot_hash=screenshot_hash or "",
+                    frame_hash=frame_hash,
                     ocr_text=ocr_text,
+                    ocr_text_normalized=normalized_text,
                     embedding_vector=None,
                     embedding_status="pending",
                     embedding_model=self._config.embed.text_model,
@@ -421,8 +467,12 @@ class EventIngestWorker:
                     event.ocr_text = ocr_text
                     if screenshot_hash and not event.screenshot_hash:
                         event.screenshot_hash = screenshot_hash
+                    if frame_hash and not getattr(event, "frame_hash", None):
+                        event.frame_hash = frame_hash
                     if focus_path and not event.focus_path:
                         event.focus_path = focus_path
+                if event and normalized_text and not event.ocr_text_normalized:
+                    event.ocr_text_normalized = normalized_text
                 if event and derived_tags:
                     event.tags = _merge_tags(
                         _merge_tags(event.tags or {}, extra_tags), derived_tags
@@ -430,7 +480,14 @@ class EventIngestWorker:
                 elif event and extra_tags:
                     event.tags = _merge_tags(event.tags or {}, extra_tags)
             if ocr_spans:
-                self._upsert_spans(session, capture.capture_id, ocr_spans)
+                self._upsert_spans(
+                    session,
+                    capture.capture_id,
+                    ocr_spans,
+                    engine=engine,
+                    frame_hash=frame_hash,
+                    monitor_bounds=capture.monitor_bounds,
+                )
                 span_map = {
                     span.span_key: span
                     for span in session.execute(
@@ -444,15 +501,26 @@ class EventIngestWorker:
                     .scalars()
                     .all()
                 }
-                self._upsert_embeddings(session, capture.capture_id, span_map)
+                self._upsert_embeddings(session, capture.capture_id, span_map, frame_hash)
             record = session.get(CaptureRecord, capture.capture_id)
             if record:
                 record.ocr_status = "done"
                 record.ocr_last_error = None
+                if frame_hash and not record.frame_hash:
+                    record.frame_hash = frame_hash
 
         self._db.transaction(_write)
 
-    def _upsert_spans(self, session, capture_id: str, ocr_spans: list[dict]) -> None:
+    def _upsert_spans(
+        self,
+        session,
+        capture_id: str,
+        ocr_spans: list[dict],
+        *,
+        engine: str | None,
+        frame_hash: str | None,
+        monitor_bounds: list[int] | None,
+    ) -> None:
         rows = [
             {
                 "capture_id": capture_id,
@@ -461,7 +529,10 @@ class EventIngestWorker:
                 "end": int(span.get("end", 0)),
                 "text": str(span.get("text", "")),
                 "confidence": float(span.get("conf", 0.0)),
-                "bbox": span.get("bbox", []),
+                "bbox": _clamp_bbox(span.get("bbox", []), monitor_bounds),
+                "engine": engine,
+                "frame_hash": frame_hash,
+                "schema_version": "v1",
             }
             for span in ocr_spans
         ]
@@ -494,7 +565,11 @@ class EventIngestWorker:
                         session.rollback()
 
     def _upsert_embeddings(
-        self, session, capture_id: str, span_map: dict[str, OCRSpanRecord]
+        self,
+        session,
+        capture_id: str,
+        span_map: dict[str, OCRSpanRecord],
+        frame_hash: str | None,
     ) -> None:
         rows = []
         for span_key, span in span_map.items():
@@ -505,6 +580,7 @@ class EventIngestWorker:
                     "model": self._config.embed.text_model,
                     "status": "pending",
                     "span_key": span_key,
+                    "frame_hash": frame_hash,
                 }
             )
         if not rows:
@@ -592,6 +668,39 @@ def _extract_domain(window_title: str, ocr_text: str) -> str | None:
         if match:
             return match.group(1)
     return None
+
+
+def _clamp_bbox(bbox: object, monitor_bounds: list[int] | None) -> object:
+    if not monitor_bounds or not bbox:
+        return bbox
+    if len(monitor_bounds) < 4:
+        return bbox
+    width = int(monitor_bounds[2])
+    height = int(monitor_bounds[3])
+    if width <= 0 or height <= 0:
+        return bbox
+    if isinstance(bbox, dict):
+        clamped = dict(bbox)
+        for key, limit in (("x0", width), ("x1", width), ("y0", height), ("y1", height)):
+            if key in clamped:
+                try:
+                    value = float(clamped[key])
+                    clamped[key] = max(0, min(int(round(value)), limit))
+                except (TypeError, ValueError):
+                    continue
+        return clamped
+    if isinstance(bbox, list) and bbox:
+        clamped_list: list[int] = []
+        for idx, value in enumerate(bbox):
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                clamped_list.append(0)
+                continue
+            limit = width if idx % 2 == 0 else height
+            clamped_list.append(max(0, min(int(round(numeric)), limit)))
+        return clamped_list
+    return bbox
 
 
 def _llm_model_id(config: AppConfig) -> str:
