@@ -51,6 +51,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub.add_parser("app", help="Run the tray UI + full local pipeline.")
     sub.add_parser("tray", help="Alias for app.")
     sub.add_parser("api", help="Run the local API + UI server.")
+    sub.add_parser("gateway", help="Run the LLM gateway service.")
+    sub.add_parser("graph-worker", help="Run the graph retrieval worker service.")
     sub.add_parser("worker", help="Run the OCR ingest worker loop only.")
     sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
     sub.add_parser("smoke", help="Run minimal smoke checks and exit.")
@@ -559,6 +561,40 @@ def main(argv: list[str] | None = None) -> None:
                     str(config.mode.tls_cert_path) if config.mode.https_enabled else None
                 ),
                 ssl_keyfile=(str(config.mode.tls_key_path) if config.mode.https_enabled else None),
+            )
+        )
+        server.run()
+        return
+
+    if cmd == "gateway":
+        from .gateway.app import create_gateway_app
+        import uvicorn
+
+        app = create_gateway_app(config)
+        server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host=config.gateway.bind_host,
+                port=config.gateway.port,
+                log_level="info",
+            )
+        )
+        server.run()
+        return
+
+    if cmd == "graph-worker":
+        from .graph.app import create_graph_app
+        import uvicorn
+
+        if not config.graph_service.enabled:
+            logger.warning("graph_service.enabled is false; starting anyway for explicit run.")
+        app = create_graph_app(config)
+        server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host=config.graph_service.bind_host,
+                port=config.graph_service.port,
+                log_level="info",
             )
         )
         server.run()

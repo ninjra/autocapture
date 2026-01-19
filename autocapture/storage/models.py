@@ -803,6 +803,103 @@ class AnswerCitationRecord(Base):
     )
 
 
+class AnswerClaimRecord(Base):
+    __tablename__ = "answer_claims"
+
+    __table_args__ = (
+        Index("ix_answer_claims_answer", "answer_id"),
+        UniqueConstraint("answer_id", "claim_id", name="uq_answer_claims_answer_claim"),
+    )
+
+    claim_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    answer_id: Mapped[str] = mapped_column(
+        ForeignKey("answer_records.answer_id", ondelete="CASCADE")
+    )
+    claim_index: Mapped[int] = mapped_column(Integer, default=0)
+    claim_text: Mapped[str] = mapped_column(Text)
+    entailment_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    entailment_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class AnswerClaimCitationRecord(Base):
+    __tablename__ = "answer_claim_citations"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "claim_id", "span_id", "evidence_id", name="uq_answer_claim_citations"
+        ),
+        Index("ix_answer_claim_citations_claim", "claim_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    claim_id: Mapped[str] = mapped_column(
+        ForeignKey("answer_claims.claim_id", ondelete="CASCADE")
+    )
+    span_id: Mapped[str | None] = mapped_column(
+        ForeignKey("citable_spans.span_id", ondelete="SET NULL"), nullable=True
+    )
+    evidence_id: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class EvidenceLineMapRecord(Base):
+    __tablename__ = "evidence_line_map"
+
+    __table_args__ = (
+        UniqueConstraint(
+            "query_id", "evidence_id", name="uq_evidence_line_map_query_evidence"
+        ),
+        Index("ix_evidence_line_map_query", "query_id"),
+    )
+
+    map_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    query_id: Mapped[str] = mapped_column(ForeignKey("query_records.query_id", ondelete="CASCADE"))
+    evidence_id: Mapped[str] = mapped_column(String(32))
+    span_id: Mapped[str | None] = mapped_column(
+        ForeignKey("citable_spans.span_id", ondelete="SET NULL"), nullable=True
+    )
+    line_count: Mapped[int] = mapped_column(Integer)
+    line_offsets_json: Mapped[list[int]] = mapped_column(JSON)
+    text_sha256: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class ProviderCallRecord(Base):
+    __tablename__ = "provider_calls"
+
+    __table_args__ = (
+        Index("ix_provider_calls_stage", "stage"),
+        Index("ix_provider_calls_query", "query_id"),
+    )
+
+    call_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    query_id: Mapped[str | None] = mapped_column(
+        ForeignKey("query_records.query_id", ondelete="SET NULL"), nullable=True
+    )
+    answer_id: Mapped[str | None] = mapped_column(
+        ForeignKey("answer_records.answer_id", ondelete="SET NULL"), nullable=True
+    )
+    stage: Mapped[str] = mapped_column(String(64))
+    provider_id: Mapped[str] = mapped_column(String(128))
+    model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    attempt_index: Mapped[int] = mapped_column(Integer, default=0)
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
 class ProvenanceLedgerEntryRecord(Base):
     __tablename__ = "provenance_ledger_entries"
 

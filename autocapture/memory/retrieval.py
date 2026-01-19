@@ -43,6 +43,7 @@ from ..storage.ledger import LedgerWriter
 from ..time_utils import elapsed_ms, monotonic_now
 from .reranker import CrossEncoderReranker
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from .graph_adapters import GraphAdapterGroup
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ class RetrievalService:
         reranker: CrossEncoderReranker | None = None,
         spans_index: SpansV2Index | None = None,
         runtime_governor: RuntimeGovernor | None = None,
+        graph_adapters: GraphAdapterGroup | None = None,
     ) -> None:
         self._db = db
         self._config = config or AppConfig()
@@ -129,6 +131,9 @@ class RetrievalService:
         self._last_vector_failure_log = 0.0
         self._last_reranker_failure_log = 0.0
         self._runtime = runtime_governor
+        self._graph_adapters = graph_adapters or GraphAdapterGroup(
+            self._config.retrieval.graph_adapters
+        )
 
     def retrieve(
         self,
@@ -158,6 +163,7 @@ class RetrievalService:
         )
         results = baseline
         rewrites: list[str] = []
+        graph_results = self._graph_candidates(query, time_range, filters, candidate_limit)
 
         enable_fusion = (
             v2_enabled
@@ -175,6 +181,8 @@ class RetrievalService:
             ):
                 rewrites = self._rewrite_queries(query)
                 fused_lists = [baseline]
+                if graph_results:
+                    fused_lists.append(graph_results)
                 for rewrite in rewrites:
                     if rewrite.strip().lower() == query.strip().lower():
                         continue
@@ -184,6 +192,9 @@ class RetrievalService:
                         )
                     )
                 results = _rrf_fuse(fused_lists, self._config.retrieval.fusion_rrf_k)
+        elif graph_results:
+            results = _merge_graph_results(results, graph_results)
+            results = _assign_ranks(results)
 
         if v2_enabled and self._config.retrieval.late_enabled and mode_value in {"auto", "deep"}:
             results = self._late_rerank(query, results, candidate_limit)
@@ -280,6 +291,7 @@ class RetrievalService:
             k_vec=k_vec,
             skip_dense=skip_dense,
         )
+        graph_results = self._graph_candidates(query, time_range, filters, candidate_limit)
         fast_ms = (time.monotonic() - fast_start) * 1000
         budgets.record_stage(budget_state, "retrieve_fast", fast_ms)
         stage_ms["FAST"] = fast_ms
@@ -318,6 +330,8 @@ class RetrievalService:
                 fusion_start = time.monotonic()
                 rewrites = self._rewrite_queries(query)
                 fused_lists = [baseline]
+                if graph_results:
+                    fused_lists.append(graph_results)
                 for rewrite in rewrites:
                     if rewrite.strip().lower() == query.strip().lower():
                         continue
@@ -350,6 +364,8 @@ class RetrievalService:
                 skipped_json["tiers"].append("FUSION")
                 reasons_json["tiers"]["FUSION"] = "confidence_strong"
                 fusion_hit_ids = []
+        elif graph_results:
+            results = _merge_graph_results(results, graph_results)
 
         if "RERANK" in plan_json.get("tiers", []):
             if budgets.should_skip_rerank(budget_state):
@@ -886,6 +902,80 @@ class RetrievalService:
             return None
         return self._reranker
 
+    def _graph_candidates(
+        self,
+        query: str,
+        time_range: tuple[dt.datetime, dt.datetime] | None,
+        filters: RetrieveFilters | None,
+        limit: int,
+    ) -> list[RetrievedEvent]:
+        if not self._graph_adapters or not self._graph_adapters.enabled():
+            return []
+        if not query:
+            return []
+        time_payload = (
+            (time_range[0].isoformat(), time_range[1].isoformat()) if time_range else None
+        )
+        filter_payload: dict[str, list[str]] = {}
+        if filters and filters.apps:
+            filter_payload["apps"] = list(filters.apps)
+        if filters and filters.domains:
+            filter_payload["domains"] = list(filters.domains)
+        hits = self._graph_adapters.query(
+            query,
+            limit=min(limit, 100),
+            time_range=time_payload,
+            filters=filter_payload,
+        )
+        if not hits:
+            return []
+        scores: dict[str, float] = {}
+        snippets: dict[str, str | None] = {}
+        sources: dict[str, str] = {}
+        for hit in hits:
+            if not hit.event_id:
+                continue
+            score = max(float(hit.score), 0.0)
+            current = scores.get(hit.event_id)
+            if current is None or score > current:
+                scores[hit.event_id] = score
+                snippets[hit.event_id] = hit.snippet
+                sources[hit.event_id] = hit.source
+        if not scores:
+            return []
+        with self._db.session() as session:
+            stmt = select(EventRecord).where(EventRecord.event_id.in_(scores))
+            if time_range:
+                stmt = stmt.where(EventRecord.ts_start.between(*time_range))
+            if filters and filters.apps:
+                stmt = stmt.where(EventRecord.app_name.in_(filters.apps))
+            if filters and filters.domains:
+                stmt = stmt.where(EventRecord.domain.in_(filters.domains))
+            events = session.execute(stmt).scalars().all()
+        results: list[RetrievedEvent] = []
+        for event in events:
+            event_id = event.event_id
+            score = scores.get(event_id, 0.0)
+            results.append(
+                RetrievedEvent(
+                    event=event,
+                    score=score,
+                    matched_span_keys=[],
+                    lexical_score=0.0,
+                    vector_score=0.0,
+                    sparse_score=0.0,
+                    late_score=0.0,
+                    rerank_score=None,
+                    engine=f"graph:{sources.get(event_id, 'graph')}",
+                    snippet=snippets.get(event_id),
+                    frame_hash=getattr(event, "frame_hash", None) or event.screenshot_hash,
+                    frame_id=event.event_id,
+                    event_id=event.event_id,
+                )
+            )
+        results.sort(key=lambda item: (-item.score, item.event.event_id))
+        return results
+
 
 def _normalize_scores(scores: dict[str, float]) -> dict[str, float]:
     if not scores:
@@ -1059,6 +1149,23 @@ def _rrf_fuse(results_lists: list[list[RetrievedEvent]], rrf_k: int) -> list[Ret
     return fused
 
 
+def _merge_graph_results(
+    primary: list[RetrievedEvent], graph_results: list[RetrievedEvent]
+) -> list[RetrievedEvent]:
+    if not graph_results:
+        return primary
+    if not primary:
+        return graph_results
+    primary_ids = {item.event.event_id for item in primary}
+    merged = list(primary)
+    for item in graph_results:
+        if item.event.event_id in primary_ids:
+            continue
+        merged.append(item)
+    merged.sort(key=lambda item: (-item.score, item.event.event_id))
+    return merged
+
+
 def _build_vector_filters(filters: RetrieveFilters | None, *, v2: bool) -> dict | None:
     if not filters:
         return None
@@ -1087,6 +1194,9 @@ def _apply_thresholds(results: list[RetrievedEvent], config) -> list[RetrievedEv
         return results
     filtered: list[RetrievedEvent] = []
     for item in results:
+        if (item.engine or "").startswith("graph"):
+            filtered.append(item)
+            continue
         checks: list[bool] = []
         if item.lexical_score is not None:
             checks.append(item.lexical_score >= config.lexical_min_score)

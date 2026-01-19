@@ -15,12 +15,25 @@ Emitted spans include:
 - vector_search
 - vector_upsert
 - answer_generate
+- gateway.upstream
+- verify_citations
+- verify_entailment
 
 ## Metrics
 When enabled, the following metrics are emitted:
 - Stage latency histograms
 - Error counters (best-effort)
 - Queue depth gauge (where a queue exists)
+- Gateway request counters/latency (`gateway_requests_total`, `gateway_latency_ms`)
+- Graph worker request counters/latency (`graph_requests_total`, `graph_latency_ms`)
+- Verification failures (`verification_failures_total`)
+
+## Metrics endpoints
+- Core app metrics: `observability.prometheus_port`
+- Gateway metrics: `GET /metrics` on the gateway port
+- Graph worker metrics: `GET /metrics` on the graph worker port
+
+See `config/prometheus.yml` for a WSL2-friendly Prometheus scrape example.
 
 ## Attribute Allowlist
 Only these attribute keys are permitted:

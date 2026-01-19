@@ -53,3 +53,19 @@ extensions:
       badge:
         text: hybrid
         tone: info
+  - kind: llm.provider
+    id: gateway
+    name: LLM Gateway
+    aliases: [llm-gateway]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_gateway_provider
+    ui:
+      badge:
+        text: local
+        tone: neutral

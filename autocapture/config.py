@@ -801,6 +801,23 @@ class RetrievalConfig(BaseModel):
     speculative_draft_k: int = Field(6, ge=1)
     speculative_final_k: int = Field(12, ge=1)
     traces_enabled: bool = Field(False, description="Persist retrieval traces.")
+    graph_adapters: "GraphAdaptersConfig" = Field(
+        default_factory=lambda: GraphAdaptersConfig(),
+        description="Optional graph retrieval adapters.",
+    )
+
+
+class GraphAdapterConfig(BaseModel):
+    enabled: bool = Field(False)
+    base_url: Optional[str] = None
+    timeout_s: float = Field(10.0, gt=0.0)
+    max_results: int = Field(20, ge=1)
+
+
+class GraphAdaptersConfig(BaseModel):
+    graphrag: GraphAdapterConfig = GraphAdapterConfig()
+    hypergraphrag: GraphAdapterConfig = GraphAdapterConfig()
+    hyperrag: GraphAdapterConfig = GraphAdapterConfig()
 
 
 class MemoryStorageConfig(BaseModel):
@@ -1158,6 +1175,198 @@ class LLMGovernorConfig(BaseModel):
     )
 
 
+class CircuitBreakerConfig(BaseModel):
+    failure_threshold: int = Field(5, ge=1)
+    reset_timeout_s: float = Field(30.0, gt=0.0)
+
+
+class ProviderSpec(BaseModel):
+    id: str
+    type: str = Field(
+        "openai_compatible", description="Provider type (openai|openai_compatible|ollama|gateway)."
+    )
+    base_url: Optional[str] = None
+    api_key_env: Optional[str] = Field(
+        None, description="Env var name holding the API key (preferred over config secrets)."
+    )
+    api_key: Optional[str] = Field(
+        None,
+        description="Optional inline API key. Avoid using this in committed configs.",
+    )
+    timeout_s: float = Field(60.0, gt=0.0)
+    retries: int = Field(3, ge=0, le=10)
+    headers: dict[str, str] = Field(default_factory=dict)
+    allow_cloud: bool = Field(False, description="Allow cloud usage for this provider.")
+    circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
+
+
+class QuantizationConfig(BaseModel):
+    method: str = Field("none", description="none|awq|gptq|int8|int4|fp16")
+    bits: Optional[int] = Field(None, ge=1, le=16)
+    group_size: Optional[int] = Field(None, ge=1)
+
+    @field_validator("method")
+    @classmethod
+    def validate_method(cls, value: str) -> str:
+        allowed = {"none", "awq", "gptq", "int8", "int4", "fp16"}
+        normalized = value.strip().lower()
+        if normalized not in allowed:
+            raise ValueError(f"quantization.method must be one of {sorted(allowed)}")
+        return normalized
+
+
+class LoRAConfig(BaseModel):
+    enabled: bool = False
+    allowed_adapters: list[str] = Field(default_factory=list)
+    load_policy: str = Field("lazy", description="lazy|preload|pinned")
+    enforce_allowlist: bool = True
+
+
+class ModelRuntimeConfig(BaseModel):
+    device: str = Field("auto", description="auto|cuda|cpu")
+    max_memory_utilization: Optional[float] = Field(None, ge=0.0, le=1.0)
+
+
+class ModelSpec(BaseModel):
+    id: str
+    provider_id: str
+    upstream_model_name: str
+    context_tokens: int = Field(8192, ge=256)
+    supports_json: bool = False
+    supports_tools: bool = False
+    supports_vision: bool = False
+    quantization: Optional[QuantizationConfig] = None
+    lora: Optional[LoRAConfig] = None
+    runtime: ModelRuntimeConfig = ModelRuntimeConfig()
+    lmcache_enabled: bool = False
+
+
+class StageSamplingConfig(BaseModel):
+    temperature: float = Field(0.2, ge=0.0, le=1.0)
+    top_p: Optional[float] = Field(None, ge=0.0, le=1.0)
+    max_tokens: Optional[int] = Field(None, ge=1)
+    seed: Optional[int] = Field(None, ge=0)
+
+
+class StageRequirementsConfig(BaseModel):
+    require_json: bool = False
+    require_citations: bool = False
+    claims_schema: Optional[str] = Field(
+        None, description="claims_json_v1 for claim-level outputs."
+    )
+
+
+class DecodeConfig(BaseModel):
+    strategy: str = Field("standard", description="standard|swift|lookahead|medusa")
+    backend_provider_id: Optional[str] = None
+    max_concurrency: int = Field(2, ge=1)
+
+
+class StagePolicy(BaseModel):
+    id: str
+    primary_model_id: str
+    fallback_model_ids: list[str] = Field(default_factory=list)
+    sampling: StageSamplingConfig = StageSamplingConfig()
+    requirements: StageRequirementsConfig = StageRequirementsConfig()
+    decode: DecodeConfig = DecodeConfig()
+    max_attempts: int = Field(2, ge=1)
+    allow_cloud: bool = Field(False)
+    repair_on_failure: bool = True
+
+
+class ModelRegistryConfig(BaseModel):
+    enabled: bool = False
+    providers: list[ProviderSpec] = Field(default_factory=list)
+    models: list[ModelSpec] = Field(default_factory=list)
+    stages: list[StagePolicy] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_registry(self) -> "ModelRegistryConfig":
+        provider_ids = {provider.id for provider in self.providers}
+        model_ids = {model.id for model in self.models}
+        stage_ids = {stage.id for stage in self.stages}
+        if len(provider_ids) != len(self.providers):
+            raise ValueError("model_registry.providers must have unique ids")
+        if len(model_ids) != len(self.models):
+            raise ValueError("model_registry.models must have unique ids")
+        if len(stage_ids) != len(self.stages):
+            raise ValueError("model_registry.stages must have unique ids")
+        for model in self.models:
+            if model.provider_id not in provider_ids:
+                raise ValueError(
+                    f"model_registry.models references unknown provider '{model.provider_id}'"
+                )
+        for stage in self.stages:
+            if stage.primary_model_id not in model_ids:
+                raise ValueError(
+                    f"model_registry.stages references unknown model '{stage.primary_model_id}'"
+                )
+            if len(set(stage.fallback_model_ids)) != len(stage.fallback_model_ids):
+                raise ValueError(
+                    f"stage '{stage.id}' has duplicate fallback_model_ids; order must be unique"
+                )
+            for fallback in stage.fallback_model_ids:
+                if fallback not in model_ids:
+                    raise ValueError(
+                        f"model_registry.stages references unknown fallback model '{fallback}'"
+                    )
+            if stage.decode.strategy != "standard" and not stage.decode.backend_provider_id:
+                raise ValueError(
+                    f"stage '{stage.id}' requires decode.backend_provider_id for "
+                    f"decode.strategy={stage.decode.strategy!r}"
+                )
+            if (
+                stage.decode.backend_provider_id
+                and stage.decode.backend_provider_id not in provider_ids
+            ):
+                raise ValueError(
+                    f"stage '{stage.id}' references unknown decode backend "
+                    f"'{stage.decode.backend_provider_id}'"
+                )
+        return self
+
+
+class GatewayConfig(BaseModel):
+    enabled: bool = False
+    bind_host: str = Field("127.0.0.1")
+    port: int = Field(8010, ge=1024, le=65535)
+    require_api_key: bool = False
+    api_key: Optional[str] = None
+    max_body_bytes: int = Field(2_000_000, ge=1024)
+    request_timeout_s: float = Field(60.0, gt=0.0)
+    upstream_probe_timeout_s: float = Field(5.0, gt=0.0)
+    startup_probe: bool = True
+
+
+class GraphServiceConfig(BaseModel):
+    enabled: bool = False
+    bind_host: str = Field("127.0.0.1")
+    port: int = Field(8020, ge=1024, le=65535)
+    workspace_root: Path = Field(default_factory=lambda: default_data_dir() / "graphs")
+    max_events: int = Field(50_000, ge=100)
+    max_results: int = Field(200, ge=1)
+
+
+class CitationValidatorConfig(BaseModel):
+    max_claims: int = Field(20, ge=1)
+    max_citations_per_claim: int = Field(8, ge=1)
+    allow_empty: bool = False
+
+
+class EntailmentConfig(BaseModel):
+    enabled: bool = True
+    judge_stage: str = Field("entailment_judge")
+    on_contradiction: str = Field("block", description="block|regenerate")
+    on_nei: str = Field("abstain", description="abstain|expand_retrieval")
+    max_attempts: int = Field(2, ge=1)
+
+
+class VerificationConfig(BaseModel):
+    claims_enabled: bool = True
+    citation_validator: CitationValidatorConfig = CitationValidatorConfig()
+    entailment: EntailmentConfig = EntailmentConfig()
+
+
 class ModelStageConfig(BaseModel):
     provider: Optional[str] = Field(
         None, description="ollama|openai_compatible|openai (defaults to llm.provider)"
@@ -1177,6 +1386,9 @@ class ModelStagesConfig(BaseModel):
     )
     final_answer: ModelStageConfig = ModelStageConfig()
     tool_transform: ModelStageConfig = Field(
+        default_factory=lambda: ModelStageConfig(enabled=False)
+    )
+    entailment_judge: ModelStageConfig = Field(
         default_factory=lambda: ModelStageConfig(enabled=False)
     )
 
@@ -1248,12 +1460,16 @@ class AppConfig(BaseModel):
     api: APIConfig = APIConfig()
     llm: LLMConfig = LLMConfig()
     llm_governor: LLMGovernorConfig = LLMGovernorConfig()
+    model_registry: ModelRegistryConfig = ModelRegistryConfig()
+    gateway: GatewayConfig = GatewayConfig()
+    graph_service: GraphServiceConfig = GraphServiceConfig()
     model_stages: ModelStagesConfig = ModelStagesConfig()
     mode: ModeConfig = ModeConfig()
     plugins: PluginsConfig = PluginsConfig()
     routing: ProviderRoutingConfig = ProviderRoutingConfig()
     privacy: PrivacyConfig = PrivacyConfig()
     output: OutputConfig = OutputConfig()
+    verification: VerificationConfig = VerificationConfig()
     time: TimeConfig = TimeConfig()
     security: SecurityConfig = SecurityConfig()
     templates: TemplateHardeningConfig = TemplateHardeningConfig()
