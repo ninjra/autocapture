@@ -10,6 +10,7 @@ class Claim:
     text: str
     evidence_ids: list[str]
     entity_tokens: list[str]
+    claim_id: str | None = None
 
 
 class RulesVerifier:

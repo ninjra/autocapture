@@ -33,6 +33,8 @@ class EvidenceItem:
     score: float
     spans: list[EvidenceSpan]
     text: str
+    raw_text: str | None = None
+    redacted_text: str | None = None
     screenshot_path: str | None = None
     screenshot_hash: str | None = None
     retrieval: dict | None = None
@@ -58,6 +60,7 @@ class ContextPack:
             re.IGNORECASE,
         )
         for item in self.evidence:
+            raw_text = item.raw_text or item.text
             lines = []
             redacted = False
             for line in item.text.splitlines():
@@ -80,6 +83,8 @@ class ContextPack:
                     score=item.score,
                     spans=item.spans,
                     text="\n".join(lines),
+                    raw_text=raw_text,
+                    redacted_text="\n".join(lines) if redacted else None,
                     screenshot_path=item.screenshot_path,
                     screenshot_hash=item.screenshot_hash,
                     retrieval=item.retrieval,

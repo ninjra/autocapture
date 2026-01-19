@@ -37,7 +37,18 @@ class EmbeddingService:
             from fastembed import TextEmbedding  # type: ignore
 
             self._backend = TextEmbedding(model_name=self._model_name)
-            self._dim = self._backend.embedding_size
+            dim = getattr(self._backend, "embedding_size", None)
+            if dim is None:
+                dim = getattr(self._backend, "dim", None)
+            if dim is None:
+                try:
+                    sample = next(iter(self._backend.embed(["dimension probe"])))
+                    dim = len(sample)
+                except Exception:
+                    dim = None
+            if dim is None:
+                raise RuntimeError("fastembed backend did not expose embedding size")
+            self._dim = int(dim)
             self._log.info("Embedding backend: fastembed ({})", self._model_name)
             return
 

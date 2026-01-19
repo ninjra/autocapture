@@ -110,6 +110,23 @@ output:
   format: "text"
   context_pack_format: "json"
   allow_tron_compression: false
+retrieval:
+  graph_adapters:
+    graphrag:
+      enabled: false
+      base_url: null
+      timeout_s: 10.0
+      max_results: 20
+    hypergraphrag:
+      enabled: false
+      base_url: null
+      timeout_s: 10.0
+      max_results: 20
+    hyperrag:
+      enabled: false
+      base_url: null
+      timeout_s: 10.0
+      max_results: 20
 memory:
   enabled: true
   api_context_pack_enabled: true
@@ -166,6 +183,39 @@ llm_governor:
   low_pressure_threshold: 0.45
   high_pressure_threshold: 0.85
   adjust_interval_s: 5.0
+gateway:
+  enabled: false
+  bind_host: "127.0.0.1"
+  port: 8010
+  require_api_key: false
+  api_key: null
+  max_body_bytes: 2000000
+  request_timeout_s: 60.0
+  upstream_probe_timeout_s: 5.0
+  startup_probe: true
+graph_service:
+  enabled: false
+  bind_host: "127.0.0.1"
+  port: 8020
+  max_events: 50000
+  max_results: 200
+model_registry:
+  enabled: false
+  providers: []
+  models: []
+  stages: []
+verification:
+  claims_enabled: true
+  citation_validator:
+    max_claims: 20
+    max_citations_per_claim: 8
+    allow_empty: false
+  entailment:
+    enabled: true
+    judge_stage: "entailment_judge"
+    on_contradiction: "block"
+    on_nei: "abstain"
+    max_attempts: 2
 promptops:
   enabled: false
   schedule_cron: "0 6 * * 1"

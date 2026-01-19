@@ -10,6 +10,8 @@ A local-first desktop recall app for Windows 11 that runs as a single binary: tr
 - **Private by default** with local storage and optional cloud LLM fallback.
 - **Time-aware Q&A** with deterministic time parsing, citations, and optional TRON/JSON outputs.
 - **Stage-routed LLM pipeline** with query refinement, draft generation, and final answer stages (local-first defaults).
+- **LLM gateway** (OpenAI-compatible proxy) with stage policy fallback and claim-level validation (disabled by default).
+- **Graph adapters** for graph-style retrieval workers (GraphRAG / HyperGraphRAG / Hyper-RAG).
 - **Optional DiffusionVL local server** (`tools/diffusionvl_server.py`) for OpenAI-compatible VLM hosting.
 - **Deterministic memory store CLI** (SQLite + FTS5) with snapshots and citations.
 
@@ -88,6 +90,29 @@ PowerShell helper:
 .\dev.ps1 check
 .\dev.ps1 smoke
 ```
+
+### WSL2 local services
+
+Bring up local datastores + Prometheus:
+```bash
+docker compose up -d qdrant prometheus
+```
+
+Run the gateway and graph worker services:
+```bash
+poetry run autocapture gateway
+poetry run autocapture graph-worker
+```
+
+Launch a local vLLM instance (OpenAI-compatible):
+```bash
+scripts/run_vllm.sh <model-name> [port]
+```
+
+Configure endpoints in `autocapture.yml`:
+- `gateway.*`
+- `model_registry.*`
+- `retrieval.graph_adapters.*`
 
 ### AI assistance (model preference)
 

@@ -85,6 +85,41 @@ plugin_healthcheck_latency_ms = Histogram(
     "Plugin healthcheck latency (ms)",
     ["plugin_id"],
 )
+gateway_requests_total = Counter(
+    "gateway_requests_total",
+    "Gateway requests processed",
+    ["endpoint", "status"],
+)
+gateway_latency_ms = Histogram(
+    "gateway_latency_ms",
+    "Gateway request latency (ms)",
+    ["endpoint"],
+)
+gateway_failures_total = Counter(
+    "gateway_failures_total",
+    "Gateway failures",
+    ["endpoint", "reason"],
+)
+graph_requests_total = Counter(
+    "graph_requests_total",
+    "Graph worker requests processed",
+    ["adapter", "endpoint", "status"],
+)
+graph_latency_ms = Histogram(
+    "graph_latency_ms",
+    "Graph worker request latency (ms)",
+    ["adapter", "endpoint"],
+)
+graph_failures_total = Counter(
+    "graph_failures_total",
+    "Graph worker failures",
+    ["adapter", "endpoint", "reason"],
+)
+verification_failures_total = Counter(
+    "verification_failures_total",
+    "Verification failures",
+    ["stage", "reason"],
+)
 
 # Folder size stats are expensive on large trees; only refresh periodically.
 _FOLDER_SIZE_UPDATE_INTERVAL_S = 60.0

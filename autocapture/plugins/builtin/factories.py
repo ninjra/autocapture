@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 from ...config import AppConfig, ModelStageConfig, is_loopback_host
 from ...llm.providers import LLMProvider, OllamaProvider, OpenAICompatibleProvider, OpenAIProvider
+from ...gateway.client import GatewayProvider
 from ...llm.prompt_strategy import PromptStrategySettings
 from ...llm.governor import LLMGovernor
 from ...security.secret_store import SecretStore as EnvSecretStore
@@ -199,6 +200,37 @@ def create_openai_compatible_provider(
         model=model,
         base_url=base_url,
         cloud=cloud,
+    )
+    return provider, info
+
+
+def create_gateway_provider(
+    context: PluginContext,
+    *,
+    stage: str,
+    stage_config: ModelStageConfig,
+    prompt_strategy: PromptStrategySettings,
+    governor: LLMGovernor | None,
+    routing_override: str | None = None,
+    provider_alias: str | None = None,
+) -> tuple[LLMProvider, LLMProviderInfo]:
+    config: AppConfig = context.config
+    base_url = stage_config.base_url or f"http://{config.gateway.bind_host}:{config.gateway.port}"
+    api_key = stage_config.api_key or config.gateway.api_key
+    provider = GatewayProvider(
+        base_url,
+        stage,
+        api_key=api_key,
+        timeout_s=config.llm.timeout_s,
+        retries=config.llm.retries,
+        prompt_strategy=prompt_strategy,
+        governor=governor,
+    )
+    info = LLMProviderInfo(
+        provider_id=provider_alias or "gateway",
+        model=stage_config.model or "gateway",
+        base_url=base_url,
+        cloud=False,
     )
     return provider, info
 
