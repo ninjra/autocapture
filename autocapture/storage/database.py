@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import os
 import random
 import time
 from pathlib import Path
@@ -50,6 +51,8 @@ class DatabaseManager:
         is_sqlite = config.url.startswith("sqlite")
         is_memory = self._is_sqlite_memory(config.url)
         self._is_memory = is_memory
+        if is_sqlite and not is_memory:
+            self._enforce_secure_mode()
         if is_sqlite and config.encryption_enabled and not is_memory:
             self._sqlcipher_key = self._load_sqlcipher_key()
             engine_kwargs["module"] = self._load_sqlcipher_module()
@@ -73,6 +76,21 @@ class DatabaseManager:
             self._run_migrations()
         self._session_factory = sessionmaker(bind=self._engine, expire_on_commit=False)
         self._log.info("Database connected at {}", config.url)
+
+    def _enforce_secure_mode(self) -> None:
+        if not self._config.secure_mode_required:
+            return
+        if self._config.encryption_enabled:
+            return
+        if self._config.allow_insecure_dev or os.environ.get("AUTOCAPTURE_ALLOW_INSECURE_DEV"):
+            self._log.warning(
+                "Secure mode required but allow_insecure_dev is set; running without SQLCipher."
+            )
+            return
+        raise RuntimeError(
+            "Secure mode required: enable database.encryption_enabled or set "
+            "database.allow_insecure_dev=true for development."
+        )
 
     @property
     def engine(self):

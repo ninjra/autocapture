@@ -26,7 +26,9 @@ class ContextCompiler:
     ) -> MemorySnapshotResult:
         query = (query or "").strip()
         retrieval = self._store.query_spans(query, k=k)
-        items = self._store.list_items(status="active", limit=self._config.compiler.max_memory_items)
+        items = self._store.list_items(
+            status="active", limit=self._config.compiler.max_memory_items
+        )
         span_hits = list(retrieval.spans)
 
         span_hits, truncations = _apply_span_budgets(

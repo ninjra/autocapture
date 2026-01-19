@@ -21,13 +21,22 @@ from ..config import AppConfig, CaptureConfig, OCRConfig
 from ..runtime_governor import RuntimeGovernor
 from ..runtime_pause import PauseController, paused_guard
 from ..image_utils import ensure_rgb, hash_rgb_image
-from ..indexing.lexical_index import LexicalIndex
+from ..indexing.lexical_index import LexicalIndex, SpanLexicalIndex
 from ..logging_utils import get_logger
 from ..media.store import MediaStore
 from ..observability.metrics import ocr_backlog, ocr_latency_ms, worker_errors_total
 from ..observability.otel import otel_span, record_histogram
 from ..storage.database import DatabaseManager
-from ..storage.models import CaptureRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
+from ..storage.models import (
+    ArtifactRecord,
+    CaptureRecord,
+    CitableSpanRecord,
+    EmbeddingRecord,
+    EventRecord,
+    FrameRecord,
+    OCRSpanRecord,
+)
+from ..contracts_utils import hash_canonical, stable_id
 from ..vision.extractors import ScreenExtractorRouter
 from ..vision.layout import build_layout
 from ..vision.paddle_layout import PaddleLayoutExtractor
@@ -36,6 +45,7 @@ from ..vision.ui_grounding import UIGroundingRouter
 from ..vision.types import ExtractionResult, VISION_SCHEMA_VERSION, build_ocr_payload
 from ..enrichment.sql_artifacts import SqlArtifacts, extract_sql_artifacts
 from ..text.normalize import normalize_text
+from ..storage.ledger import LedgerWriter
 
 
 @dataclass(frozen=True)
@@ -102,9 +112,11 @@ class EventIngestWorker:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.event_ingest")
+        self._ledger = LedgerWriter(self._db)
         self._runtime = runtime_governor
         self._pause = pause_controller
         self._lexical = LexicalIndex(self._db)
+        self._span_lexical = SpanLexicalIndex(self._db)
         self._media_store = MediaStore(config.capture, config.encryption)
         self._agent_jobs = AgentJobQueue(self._db)
         self._lease_timeout_s = config.worker.ocr_lease_ms / 1000
@@ -239,11 +251,23 @@ class EventIngestWorker:
 
         self._db.transaction(_fail)
 
+    def _mark_skipped(self, capture_id: str, reason: str | None = None) -> None:
+        def _skip(session) -> None:
+            capture = session.get(CaptureRecord, capture_id)
+            if capture:
+                capture.ocr_status = "skipped"
+                capture.ocr_last_error = reason
+
+        self._db.transaction(_skip)
+
     def _ingest_capture(self, capture_id: str) -> bool:
         capture = self._load_capture(capture_id)
         if not capture:
             return False
         if not self._allow_work():
+            return False
+        if capture.privacy_flags.get("excluded"):
+            self._mark_skipped(capture_id, "excluded")
             return False
 
         existing_event = self._load_event(capture_id)
@@ -254,7 +278,7 @@ class EventIngestWorker:
                 if self._config.features.enable_normalized_indexing
                 else None
             )
-            self._persist_ocr_results(
+            artifact_result = self._persist_ocr_results(
                 capture,
                 existing_event.ocr_text or "",
                 existing_spans,
@@ -262,6 +286,7 @@ class EventIngestWorker:
                 screenshot_hash=capture.frame_hash,
                 normalized_text=normalized_text,
             )
+            self._append_extract_ledger(capture.capture_id, artifact_result)
             self._lexical.upsert_event(existing_event)
             self._enqueue_enrichment(existing_event.event_id)
             return True
@@ -348,7 +373,7 @@ class EventIngestWorker:
                 if self._config.features.enable_normalized_indexing
                 else None
             )
-            self._persist_ocr_results(
+            artifact_result = self._persist_ocr_results(
                 capture,
                 ocr_text,
                 ocr_spans,
@@ -360,6 +385,7 @@ class EventIngestWorker:
                 frame_hash=frame_hash,
                 normalized_text=normalized_text,
             )
+            self._append_extract_ledger(capture.capture_id, artifact_result)
             event = self._load_event(capture_id)
             if event:
                 with otel_span("index_lexical", {"stage_name": "index_lexical"}):
@@ -486,7 +512,7 @@ class EventIngestWorker:
         engine: str | None = None,
         frame_hash: str | None = None,
         normalized_text: str | None = None,
-    ) -> None:
+    ) -> dict[str, object] | None:
         capture_id = getattr(capture, "capture_id", None) or getattr(capture, "id")
         focus_reference = self._config.capture.focus_crop_reference
         focus_path = capture.focus_path if focus_reference == "event" else None
@@ -499,7 +525,13 @@ class EventIngestWorker:
         if capture.privacy_flags:
             derived_tags = _merge_tags(derived_tags, {"privacy_flags": capture.privacy_flags})
 
+        artifact_result: dict[str, object] | None = None
+
         def _write(session) -> None:
+            capture_record = session.get(CaptureRecord, capture_id)
+            effective_frame_hash = frame_hash or capture.frame_hash
+            if capture_record and not effective_frame_hash:
+                effective_frame_hash = capture_record.frame_hash
             if not event_existing:
                 event = EventRecord(
                     event_id=capture_id,
@@ -529,8 +561,8 @@ class EventIngestWorker:
                     event.ocr_text = ocr_text
                     if screenshot_hash and not event.screenshot_hash:
                         event.screenshot_hash = screenshot_hash
-                    if frame_hash and not getattr(event, "frame_hash", None):
-                        event.frame_hash = frame_hash
+                    if effective_frame_hash and not getattr(event, "frame_hash", None):
+                        event.frame_hash = effective_frame_hash
                     if focus_path and not event.focus_path:
                         event.focus_path = focus_path
                 if event and normalized_text and not event.ocr_text_normalized:
@@ -541,13 +573,47 @@ class EventIngestWorker:
                     )
                 elif event and extra_tags:
                     event.tags = _merge_tags(event.tags or {}, extra_tags)
+            frame = session.get(FrameRecord, capture_id)
+            if frame is None:
+                privacy_flags = capture.privacy_flags or {}
+                captured_at = capture.captured_at
+                monotonic_ts = (
+                    capture_record.monotonic_ts
+                    if capture_record and capture_record.monotonic_ts is not None
+                    else 0.0
+                )
+                created_at = (
+                    capture_record.created_at_utc
+                    if capture_record and capture_record.created_at_utc
+                    else dt.datetime.now(dt.timezone.utc)
+                )
+                frame = FrameRecord(
+                    frame_id=capture_id,
+                    event_id=capture_id,
+                    captured_at_utc=captured_at,
+                    monotonic_ts=monotonic_ts,
+                    monitor_id=capture.monitor_id,
+                    monitor_bounds=capture.monitor_bounds,
+                    app_name=capture.foreground_process,
+                    window_title=capture.foreground_window,
+                    media_path=capture.image_path,
+                    privacy_flags=privacy_flags,
+                    frame_hash=effective_frame_hash,
+                    excluded=bool(privacy_flags.get("excluded")),
+                    masked=bool(privacy_flags.get("masked")),
+                    schema_version=1,
+                    created_at=created_at,
+                )
+                session.add(frame)
+            elif not frame.event_id:
+                frame.event_id = capture_id
             if ocr_spans:
                 self._upsert_spans(
                     session,
                     capture_id,
                     ocr_spans,
                     engine=engine,
-                    frame_hash=frame_hash,
+                    frame_hash=effective_frame_hash,
                     monitor_bounds=capture.monitor_bounds,
                 )
                 span_map = {
@@ -563,7 +629,16 @@ class EventIngestWorker:
                     .scalars()
                     .all()
                 }
-                self._upsert_embeddings(session, capture_id, span_map, frame_hash)
+                self._upsert_embeddings(session, capture_id, span_map, effective_frame_hash)
+                nonlocal artifact_result
+                artifact_result = self._upsert_artifacts_and_citable_spans(
+                    session,
+                    capture_id,
+                    ocr_spans,
+                    engine=engine,
+                    frame_hash=effective_frame_hash,
+                    monitor_bounds=capture.monitor_bounds,
+                )
             record = session.get(CaptureRecord, capture_id)
             if record:
                 record.ocr_status = "done"
@@ -572,6 +647,7 @@ class EventIngestWorker:
                     record.frame_hash = frame_hash
 
         self._db.transaction(_write)
+        return artifact_result
 
     def _upsert_spans(
         self,
@@ -672,6 +748,163 @@ class EventIngestWorker:
                         session.flush()
                     except IntegrityError:
                         session.rollback()
+
+    def _upsert_artifacts_and_citable_spans(
+        self,
+        session,
+        capture_id: str,
+        ocr_spans: list[dict],
+        *,
+        engine: str | None,
+        frame_hash: str | None,
+        monitor_bounds: list[int] | None,
+    ) -> dict[str, object]:
+        if not ocr_spans:
+            return {
+                "artifact_id": None,
+                "span_ids": [],
+                "engine": engine or self._config.ocr.engine,
+                "span_entries": [],
+            }
+        engine_name = engine or self._config.ocr.engine
+        artifact_payload = {
+            "frame_id": capture_id,
+            "artifact_type": "ocr",
+            "engine": engine_name,
+            "engine_version": self._config.ocr.engine,
+        }
+        artifact_id = stable_id("artifact", artifact_payload)
+        existing = session.get(ArtifactRecord, artifact_id)
+        if existing is None:
+            session.add(
+                ArtifactRecord(
+                    artifact_id=artifact_id,
+                    frame_id=capture_id,
+                    event_id=capture_id,
+                    artifact_type="ocr",
+                    engine=engine_name,
+                    engine_version=self._config.ocr.engine,
+                    derived_from={
+                        "frame_hash": frame_hash,
+                        "capture_id": capture_id,
+                    },
+                    upstream_artifact_ids=[],
+                    schema_version=1,
+                    created_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
+
+        span_ids: list[str] = []
+        span_entries: list[dict[str, str]] = []
+        for span in ocr_spans:
+            text = str(span.get("text", ""))
+            start = int(span.get("start", 0))
+            end = int(span.get("end", 0))
+            bbox = span.get("bbox")
+            bbox_norm = _normalize_bbox(bbox, monitor_bounds)
+            span_payload = {
+                "text": text,
+                "start": start,
+                "end": end,
+                "bbox": bbox,
+                "frame_hash": frame_hash,
+            }
+            span_hash = hash_canonical(span_payload)
+            span_id = stable_id("span", {"span_hash": span_hash, "frame_id": capture_id})
+            existing_span = session.get(CitableSpanRecord, span_id)
+            if existing_span is not None:
+                span_ids.append(span_id)
+                span_entries.append(
+                    {
+                        "span_id": span_id,
+                        "event_id": capture_id,
+                        "frame_id": capture_id,
+                        "text": text,
+                    }
+                )
+                continue
+            session.add(
+                CitableSpanRecord(
+                    span_id=span_id,
+                    artifact_id=artifact_id,
+                    frame_id=capture_id,
+                    event_id=capture_id,
+                    span_hash=span_hash,
+                    text=text,
+                    start_offset=start,
+                    end_offset=end,
+                    bbox=bbox,
+                    bbox_norm=bbox_norm,
+                    tombstoned=False,
+                    expires_at_utc=None,
+                    legacy_span_key=str(span.get("span_key")) if span.get("span_key") else None,
+                    schema_version=1,
+                    created_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
+            span_ids.append(span_id)
+            span_entries.append(
+                {
+                    "span_id": span_id,
+                    "event_id": capture_id,
+                    "frame_id": capture_id,
+                    "text": text,
+                }
+            )
+        return {
+            "artifact_id": artifact_id,
+            "span_ids": span_ids,
+            "engine": engine_name,
+            "span_entries": span_entries,
+        }
+
+    def _append_extract_ledger(
+        self, frame_id: str, artifact_result: dict[str, object] | None
+    ) -> None:
+        if not artifact_result:
+            return
+        artifact_id = artifact_result.get("artifact_id")
+        if not artifact_id:
+            return
+        span_ids = artifact_result.get("span_ids") or []
+        span_entries = artifact_result.get("span_entries") or []
+        engine_name = str(artifact_result.get("engine") or self._config.ocr.engine)
+        if span_entries:
+            try:
+                self._span_lexical.bulk_upsert(span_entries)
+            except Exception as exc:  # pragma: no cover - best effort
+                self._log.debug("Span lexical upsert failed: {}", exc)
+        try:
+            self._ledger.append_entry(
+                "extract",
+                {
+                    "artifact_id": artifact_id,
+                    "frame_id": frame_id,
+                    "engine": engine_name,
+                    "engine_version": self._config.ocr.engine,
+                    "span_ids": span_ids,
+                },
+            )
+            for span_id in span_ids:
+                self._ledger.append_entry(
+                    "span",
+                    {
+                        "span_id": span_id,
+                        "artifact_id": artifact_id,
+                        "frame_id": frame_id,
+                        "engine": engine_name,
+                    },
+                )
+                self._ledger.append_entry(
+                    "index",
+                    {
+                        "index_name": "span_fts",
+                        "span_id": span_id,
+                        "index_version": self._config.next10.index_versions.get("span_fts", "v1"),
+                    },
+                )
+        except Exception as exc:  # pragma: no cover - best effort
+            self._log.debug("Failed to append extract ledger entries: {}", exc)
 
     def _load_image(self, path: Path) -> np.ndarray:
         return ensure_rgb(self._media_store.read_image(path))
@@ -795,6 +1028,41 @@ def _clamp_bbox(bbox: object, monitor_bounds: list[int] | None) -> object:
             clamped_list.append(max(0, min(int(round(numeric)), limit)))
         return clamped_list
     return bbox
+
+
+def _normalize_bbox(bbox: object, monitor_bounds: list[int] | None) -> list[float] | None:
+    if not bbox or not monitor_bounds or len(monitor_bounds) < 4:
+        return None
+    width = int(monitor_bounds[2])
+    height = int(monitor_bounds[3])
+    if width <= 0 or height <= 0:
+        return None
+    if isinstance(bbox, list) and len(bbox) >= 4:
+        x0, y0, x1, y1 = bbox[:4]
+        try:
+            return [
+                max(0.0, min(1.0, float(x0) / width)),
+                max(0.0, min(1.0, float(y0) / height)),
+                max(0.0, min(1.0, float(x1) / width)),
+                max(0.0, min(1.0, float(y1) / height)),
+            ]
+        except (TypeError, ValueError):
+            return None
+    if isinstance(bbox, dict):
+        try:
+            x0 = bbox.get("x0", bbox.get("x", 0))
+            y0 = bbox.get("y0", bbox.get("y", 0))
+            x1 = bbox.get("x1", bbox.get("x", 0) + bbox.get("w", 0))
+            y1 = bbox.get("y1", bbox.get("y", 0) + bbox.get("h", 0))
+            return [
+                max(0.0, min(1.0, float(x0) / width)),
+                max(0.0, min(1.0, float(y0) / height)),
+                max(0.0, min(1.0, float(x1) / width)),
+                max(0.0, min(1.0, float(y1) / height)),
+            ]
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _llm_model_id(config: AppConfig) -> str:

@@ -9,10 +9,21 @@ from .models import ArtifactMeta, PolicyDecision
 
 
 class DefaultPolicyEngine:
-    def __init__(self, *, blocked_labels: Iterable[str], exclude_patterns: Iterable[str], redact_patterns: Iterable[str], redact_token: str) -> None:
+    def __init__(
+        self,
+        *,
+        blocked_labels: Iterable[str],
+        exclude_patterns: Iterable[str],
+        redact_patterns: Iterable[str],
+        redact_token: str,
+    ) -> None:
         self._blocked_labels = {label.strip().lower() for label in blocked_labels if label}
-        self._exclude_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in exclude_patterns if pattern]
-        self._redact_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in redact_patterns if pattern]
+        self._exclude_patterns = [
+            re.compile(pattern, re.IGNORECASE) for pattern in exclude_patterns if pattern
+        ]
+        self._redact_patterns = [
+            re.compile(pattern, re.IGNORECASE) for pattern in redact_patterns if pattern
+        ]
         self._redact_token = redact_token or "[REDACTED]"
 
     def evaluate_artifact(self, meta: ArtifactMeta, text: str) -> PolicyDecision:
@@ -22,7 +33,9 @@ class DefaultPolicyEngine:
             return PolicyDecision(action="exclude", reason="blocked_labels")
         if _matches_any(self._exclude_patterns, text):
             return PolicyDecision(action="exclude", reason="exclude_pattern")
-        redacted_text, redaction_map = _apply_redactions(text, self._redact_patterns, self._redact_token)
+        redacted_text, redaction_map = _apply_redactions(
+            text, self._redact_patterns, self._redact_token
+        )
         if redaction_map:
             return PolicyDecision(
                 action="redact",
@@ -36,7 +49,9 @@ class DefaultPolicyEngine:
         _ = meta
         if _matches_any(self._exclude_patterns, text):
             return PolicyDecision(action="exclude", reason="exclude_pattern")
-        redacted_text, redaction_map = _apply_redactions(text, self._redact_patterns, self._redact_token)
+        redacted_text, redaction_map = _apply_redactions(
+            text, self._redact_patterns, self._redact_token
+        )
         if redaction_map:
             return PolicyDecision(
                 action="redact",

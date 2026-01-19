@@ -43,7 +43,8 @@ from ..observability.metrics import (
 )
 from ..media.store import MediaStore
 from ..storage.database import DatabaseManager
-from ..storage.models import CaptureRecord, ObservationRecord, SegmentRecord
+from ..storage.ledger import LedgerWriter
+from ..storage.models import CaptureRecord, FrameRecord, ObservationRecord, SegmentRecord
 from ..tracking.win_foreground import get_foreground_context, is_fullscreen_window
 from .backends import DxCamBackend, MssBackend, MonitorInfo
 from .duplicate import DuplicateDetector
@@ -108,6 +109,7 @@ class CaptureOrchestrator:
     ) -> None:
         self._log = get_logger("orchestrator")
         self._database = database
+        self._ledger = LedgerWriter(database)
         self._capture_config = capture_config
         self._worker_config = worker_config
         self._privacy_config = privacy_config or PrivacyConfig()
@@ -363,6 +365,15 @@ class CaptureOrchestrator:
             exclude_processes=self._privacy.exclude_processes,
             exclude_window_title_regex=self._privacy.exclude_window_title_regex,
         ):
+            self._persist_excluded_capture(
+                captured_at=utc_now(),
+                monotonic_ts=monotonic_now(),
+                monitor=monitor,
+                foreground_process=foreground_process,
+                foreground_window=foreground_window,
+                is_fullscreen=is_fullscreen,
+                reason="privacy_filter",
+            )
             return
         screen_locked, secure_desktop = get_screen_lock_status()
         decision = self._privacy_policy.evaluate(
@@ -371,6 +382,15 @@ class CaptureOrchestrator:
         if not decision.allowed:
             if decision.auto_pause:
                 self._set_auto_pause(decision.reason or "privacy")
+            self._persist_excluded_capture(
+                captured_at=utc_now(),
+                monotonic_ts=monotonic_now(),
+                monitor=monitor,
+                foreground_process=foreground_process,
+                foreground_window=foreground_window,
+                is_fullscreen=is_fullscreen,
+                reason=decision.reason or "privacy_policy",
+            )
             return
         self._clear_auto_pause()
         if monitor and monitor.id in frames:
@@ -380,7 +400,7 @@ class CaptureOrchestrator:
                 monitor_id=monitor.id,
                 roi_origin_x=roi_origin[0],
                 roi_origin_y=roi_origin[1],
-                exclude_regions=self._privacy.exclude_regions,
+                exclude_regions=self._mask_regions(),
             )
             duplicate = self._duplicate_detector.update(Image.fromarray(np.ascontiguousarray(roi)))
             capture_id = str(uuid4())
@@ -608,6 +628,7 @@ class CaptureOrchestrator:
                 self._privacy,
                 excluded=False,
                 masked_regions_applied=item.masked_regions_applied,
+                capture_paused=bool(self._privacy.paused or self._auto_paused.is_set()),
                 offline=self._offline,
             )
             frame = build_frame_record_v1(
@@ -661,9 +682,41 @@ class CaptureOrchestrator:
                     )
                 )
             session.add(CaptureRecord(**record_kwargs))
+            session.add(
+                FrameRecord(
+                    frame_id=item.capture_id,
+                    event_id=None,
+                    captured_at_utc=item.captured_at,
+                    monotonic_ts=item.monotonic_ts,
+                    monitor_id=item.monitor_id,
+                    monitor_bounds=list(item.monitor_bounds),
+                    app_name=item.foreground_process,
+                    window_title=item.foreground_window,
+                    media_path=str(full_path),
+                    privacy_flags=(frame.privacy_flags.model_dump() if frame else {}),
+                    frame_hash=frame.frame_hash if frame else None,
+                    excluded=False,
+                    masked=item.masked_regions_applied,
+                    schema_version=1,
+                    created_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
 
         with otel_span("capture_frame", {"stage_name": "capture_frame"}):
             self._database.transaction(_write)
+        try:
+            self._ledger.append_entry(
+                "capture",
+                {
+                    "frame_id": item.capture_id,
+                    "frame_hash": frame.frame_hash if frame else None,
+                    "media_path": str(full_path),
+                    "excluded": False,
+                    "masked": item.masked_regions_applied,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            self._log.debug("Failed to append capture ledger entry: {}", exc)
         record_histogram(
             "capture_frame_ms",
             (time.monotonic() - start_ts) * 1000,
@@ -678,6 +731,7 @@ class CaptureOrchestrator:
                 self._privacy,
                 excluded=False,
                 masked_regions_applied=item.masked_regions_applied,
+                capture_paused=bool(self._privacy.paused or self._auto_paused.is_set()),
                 offline=self._offline,
             )
             frame = build_frame_record_v1(
@@ -721,8 +775,128 @@ class CaptureOrchestrator:
 
         def _write(session) -> None:
             session.add(CaptureRecord(**record_kwargs))
+            session.add(
+                FrameRecord(
+                    frame_id=item.capture_id,
+                    event_id=None,
+                    captured_at_utc=item.captured_at,
+                    monotonic_ts=item.monotonic_ts,
+                    monitor_id=item.monitor_id,
+                    monitor_bounds=list(item.monitor_bounds),
+                    app_name=item.foreground_process,
+                    window_title=item.foreground_window,
+                    media_path=None,
+                    privacy_flags=(frame.privacy_flags.model_dump() if frame else {}),
+                    frame_hash=frame.frame_hash if frame else None,
+                    excluded=False,
+                    masked=item.masked_regions_applied,
+                    schema_version=1,
+                    created_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
 
         self._database.transaction(_write)
+        try:
+            self._ledger.append_entry(
+                "capture",
+                {
+                    "frame_id": item.capture_id,
+                    "frame_hash": frame.frame_hash if frame else None,
+                    "media_path": None,
+                    "excluded": False,
+                    "masked": item.masked_regions_applied,
+                    "reason": reason,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            self._log.debug("Failed to append skipped capture ledger entry: {}", exc)
+
+    def _persist_excluded_capture(
+        self,
+        *,
+        captured_at: dt.datetime,
+        monotonic_ts: float,
+        monitor: MonitorInfo | None,
+        foreground_process: str,
+        foreground_window: str,
+        is_fullscreen: bool,
+        reason: str,
+    ) -> None:
+        capture_id = str(uuid4())
+        monitor_id = monitor.id if monitor else "unknown"
+        monitor_bounds = (
+            (monitor.left, monitor.top, monitor.width, monitor.height) if monitor else None
+        )
+        privacy_flags = build_privacy_flags(
+            self._privacy,
+            excluded=True,
+            masked_regions_applied=False,
+            capture_paused=self._privacy.paused,
+            offline=self._offline,
+        )
+        frame = build_frame_record_v1(
+            frame_id=capture_id,
+            event_id=capture_id,
+            captured_at=captured_at,
+            monotonic_ts=monotonic_ts,
+            monitor_id=monitor_id,
+            monitor_bounds=monitor_bounds,
+            app_name=foreground_process,
+            window_title=foreground_window,
+            image_path=None,
+            privacy_flags=privacy_flags,
+            frame_hash=None,
+        )
+        record_kwargs = capture_record_kwargs(
+            frame=frame,
+            captured_at=captured_at,
+            image_path=None,
+            focus_path=None,
+            foreground_process=foreground_process,
+            foreground_window=foreground_window,
+            monitor_id=monitor_id,
+            is_fullscreen=is_fullscreen,
+            ocr_status="skipped",
+            ocr_last_error=reason,
+        )
+
+        def _write(session) -> None:
+            session.add(CaptureRecord(**record_kwargs))
+            session.add(
+                FrameRecord(
+                    frame_id=capture_id,
+                    event_id=None,
+                    captured_at_utc=captured_at,
+                    monotonic_ts=monotonic_ts,
+                    monitor_id=monitor_id,
+                    monitor_bounds=list(monitor_bounds) if monitor_bounds else None,
+                    app_name=foreground_process,
+                    window_title=foreground_window,
+                    media_path=None,
+                    privacy_flags=frame.privacy_flags.model_dump(),
+                    frame_hash=None,
+                    excluded=True,
+                    masked=False,
+                    schema_version=1,
+                    created_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
+
+        self._database.transaction(_write)
+        try:
+            self._ledger.append_entry(
+                "capture",
+                {
+                    "frame_id": capture_id,
+                    "frame_hash": None,
+                    "media_path": None,
+                    "excluded": True,
+                    "masked": False,
+                    "reason": reason,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            self._log.debug("Failed to append excluded capture ledger entry: {}", exc)
 
     def _start_segment(self) -> str:
         segment_id = str(uuid4())
@@ -843,7 +1017,7 @@ class CaptureOrchestrator:
     def _apply_fullscreen_masks(
         self, image: np.ndarray, origin: tuple[int, int], frames: Dict[str, np.ndarray]
     ) -> tuple[np.ndarray, bool]:
-        if not self._privacy.exclude_regions:
+        if not self._mask_regions():
             return image, False
         origin_x, origin_y = origin
         masked = False
@@ -856,11 +1030,19 @@ class CaptureOrchestrator:
                     monitor_id=monitor.id,
                     roi_origin_x=monitor.left - origin_x,
                     roi_origin_y=monitor.top - origin_y,
-                    exclude_regions=self._privacy.exclude_regions,
+                    exclude_regions=self._mask_regions(),
                 )
                 or masked
             )
         return image, masked
+
+    def _mask_regions(self) -> list[dict]:
+        regions = list(self._privacy.exclude_regions)
+        if hasattr(self._privacy, "mask_regions") and self._privacy.mask_regions:
+            for entry in self._privacy.mask_regions:
+                if entry not in regions:
+                    regions.append(entry)
+        return regions
 
     def _resize_fullscreen(self, image: np.ndarray) -> np.ndarray:
         target_width = int(self._fullscreen_width or 0)

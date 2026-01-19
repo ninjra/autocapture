@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "fast": {
+    "k_lex": 24,
+    "k_vec": 24,
+    "min_score": 0.15
+  },
+  "fusion": {
+    "rrf_k": 60,
+    "fusion_k": 32
+  },
+  "rerank": {
+    "top_n": 24,
+    "min_score": 0.15
+  },
+  "coverage": {
+    "min_coverage_normal": 0.6,
+    "min_coverage_no_evidence": 0.2
+  }
+}

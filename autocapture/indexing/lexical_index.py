@@ -22,6 +22,12 @@ class LexicalHit:
     score: float
 
 
+@dataclass(frozen=True)
+class SpanLexicalHit:
+    span_id: str
+    score: float
+
+
 class LexicalIndex:
     def __init__(self, db: DatabaseManager) -> None:
         self._db = db
@@ -171,6 +177,90 @@ class LexicalIndex:
             return [LexicalHit(event_id=row[0], score=float(row[1] or 0.0)) for row in rows]
 
         self._log.warning("Unsupported dialect for lexical search: {}", engine.dialect.name)
+        return []
+
+
+class SpanLexicalIndex:
+    def __init__(self, db: DatabaseManager) -> None:
+        self._db = db
+        self._log = get_logger("index.lexical.spans")
+        self._ensure_schema()
+
+    def _ensure_schema(self) -> None:
+        engine = self._db.engine
+        if engine.dialect.name != "sqlite":
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS span_fts "
+                    "USING fts5(span_id UNINDEXED, event_id UNINDEXED, frame_id UNINDEXED, text)"
+                )
+            )
+
+    def upsert_span(self, *, span_id: str, event_id: str, frame_id: str, text: str) -> None:
+        if not span_id:
+            return
+        engine = self._db.engine
+        if engine.dialect.name != "sqlite":
+            return
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM span_fts WHERE span_id = :span_id"),
+                {"span_id": span_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO span_fts(span_id, event_id, frame_id, text) "
+                    "VALUES (:span_id, :event_id, :frame_id, :text)"
+                ),
+                {
+                    "span_id": span_id,
+                    "event_id": event_id,
+                    "frame_id": frame_id,
+                    "text": text or "",
+                },
+            )
+
+    def bulk_upsert(self, spans: Iterable[dict]) -> None:
+        for item in spans:
+            self.upsert_span(
+                span_id=str(item.get("span_id") or ""),
+                event_id=str(item.get("event_id") or ""),
+                frame_id=str(item.get("frame_id") or ""),
+                text=str(item.get("text") or ""),
+            )
+
+    def search(self, query: str, limit: int = 20) -> list[SpanLexicalHit]:
+        engine = self._db.engine
+        if not query.strip():
+            return []
+        if engine.dialect.name == "sqlite":
+            rows = []
+            with engine.begin() as conn:
+                try:
+                    rows = conn.execute(
+                        text(
+                            "SELECT span_id, bm25(span_fts) AS rank "
+                            "FROM span_fts WHERE span_fts MATCH :query "
+                            "ORDER BY rank LIMIT :limit"
+                        ),
+                        {"query": query, "limit": limit},
+                    ).fetchall()
+                except OperationalError:
+                    sanitized = _sanitize_fts_query(query)
+                    if not sanitized:
+                        return []
+                    rows = conn.execute(
+                        text(
+                            "SELECT span_id, bm25(span_fts) AS rank "
+                            "FROM span_fts WHERE span_fts MATCH :query "
+                            "ORDER BY rank LIMIT :limit"
+                        ),
+                        {"query": sanitized, "limit": limit},
+                    ).fetchall()
+            return [SpanLexicalHit(span_id=row[0], score=1 / (1 + abs(row[1]))) for row in rows]
+        self._log.warning("Unsupported dialect for span lexical search: {}", engine.dialect.name)
         return []
 
 

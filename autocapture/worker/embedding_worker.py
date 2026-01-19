@@ -26,7 +26,8 @@ from ..observability.metrics import (
 )
 from ..observability.otel import otel_span, record_histogram
 from ..storage.database import DatabaseManager
-from ..storage.models import EmbeddingRecord, EventRecord, OCRSpanRecord
+from ..storage.models import CitableSpanRecord, EmbeddingRecord, EventRecord, OCRSpanRecord
+from ..storage.ledger import LedgerWriter
 from ..text.normalize import normalize_text
 
 
@@ -43,6 +44,7 @@ class EmbeddingWorker:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
         self._log = get_logger("worker.embedding")
+        self._ledger = LedgerWriter(self._db)
         self._embedder = embedder or EmbeddingService(
             config.embed, pause_controller=pause_controller
         )
@@ -581,9 +583,45 @@ class EmbeddingWorker:
                 record.updated_at = dt.datetime.now(dt.timezone.utc)
 
         self._db.transaction(_finalize)
+        self._append_index_ledger(span_rows)
         stop_tick.set()
         ticker.join(timeout=1.0)
         return len(span_rows)
+
+    def _append_index_ledger(self, span_rows) -> None:
+        if not span_rows:
+            return
+        event_ids = {event.event_id for _embedding, _span, event in span_rows}
+        span_keys = {span.span_key for _embedding, span, _event in span_rows if span.span_key}
+        if not event_ids:
+            return
+        with self._db.session() as session:
+            stmt = select(CitableSpanRecord).where(CitableSpanRecord.frame_id.in_(event_ids))
+            if span_keys:
+                stmt = stmt.where(CitableSpanRecord.legacy_span_key.in_(span_keys))
+            spans = session.execute(stmt).scalars().all()
+        span_lookup = {
+            (span.frame_id, span.legacy_span_key): span.span_id
+            for span in spans
+            if span.legacy_span_key
+        }
+        for _embedding, span, event in span_rows:
+            span_id = span_lookup.get((event.event_id, span.span_key))
+            if not span_id:
+                continue
+            try:
+                self._ledger.append_entry(
+                    "index",
+                    {
+                        "span_id": span_id,
+                        "event_id": event.event_id,
+                        "embedding_model": self._embedder.model_name,
+                        "index_backend": "qdrant" if self._config.qdrant.enabled else "none",
+                        "index_version": self._config.next10.index_versions.get("vector", "v1"),
+                    },
+                )
+            except Exception as exc:  # pragma: no cover - best effort
+                self._log.debug("Failed to append index ledger entry: {}", exc)
 
     def _recover_stale_event_embeddings(self) -> None:
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=self._lease_timeout_s)

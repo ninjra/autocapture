@@ -53,4 +53,4 @@ memory:
 - [ ] M3: Provide optional vector index plugin (disabled by default).
 - [ ] M4: Add migration strategy if/when the store is shared across hosts.
 
-Deferred items are tracked with TODO markers and (where appropriate) skipped tests.
+Deferred items are tracked in `TASKS.md` and design notes; deferred work is not tracked inline in code.

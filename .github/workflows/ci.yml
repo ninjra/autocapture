@@ -94,3 +94,40 @@ jobs:
         with:
           name: autocapture-windows-installer
           path: dist-installer/*.exe
+
+  next10-gates:
+    runs-on: windows-latest
+    env:
+      AUTOCAPTURE_TEST_MODE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: poetry.lock
+      - name: Install Poetry
+        run: pip install poetry==1.8.3
+      - name: Install dependencies
+        timeout-minutes: 20
+        run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
+      - name: Pillar gate
+        run: poetry run python tools/pillar_gate.py
+      - name: Privacy scanner
+        run: poetry run python tools/privacy_scanner.py
+      - name: Provenance gate
+        run: poetry run python tools/provenance_gate.py
+      - name: Coverage gate
+        run: poetry run python tools/coverage_gate.py
+      - name: Latency gate
+        run: poetry run python tools/latency_gate.py
+      - name: Retrieval sensitivity gate
+        run: poetry run python tools/retrieval_sensitivity.py
+      - name: No-evidence gate
+        run: poetry run python tools/no_evidence_gate.py
+      - name: Conflict gate
+        run: poetry run python tools/conflict_gate.py
+      - name: Integrity gate
+        run: poetry run python tools/integrity_gate.py

@@ -10,6 +10,7 @@ import math
 import os
 import time
 import re
+from pathlib import Path
 from typing import Iterable
 
 from sqlalchemy import select
@@ -25,7 +26,20 @@ from ..logging_utils import get_logger
 from ..observability.metrics import retrieval_latency_ms, vector_search_failures_total
 from ..observability.otel import otel_span, record_histogram
 from ..storage.database import DatabaseManager
-from ..storage.models import EventRecord, OCRSpanRecord, RetrievalTraceRecord
+from ..storage.models import (
+    CitableSpanRecord,
+    EventRecord,
+    FrameRecord,
+    OCRSpanRecord,
+    QueryRecord,
+    RetrievalHitRecord,
+    RetrievalTraceRecord,
+    TierPlanDecisionRecord,
+    TierStatsRecord,
+)
+from ..contracts_utils import stable_id
+from ..runtime_budgets import BudgetManager, BudgetState
+from ..storage.ledger import LedgerWriter
 from ..time_utils import elapsed_ms, monotonic_now
 from .reranker import CrossEncoderReranker
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
@@ -65,6 +79,8 @@ class RetrievalBatch:
     results: list[RetrievalResult]
     no_evidence: bool = False
     reason: str | None = None
+    tier_plan: dict | None = None
+    query_id: str | None = None
 
 
 RetrievedEvent = RetrievalResult
@@ -85,6 +101,7 @@ class RetrievalService:
         self._db = db
         self._config = config or AppConfig()
         self._log = get_logger("retrieval")
+        self._ledger = LedgerWriter(self._db)
         self._lexical = LexicalIndex(db)
         if embedder is None:
             if os.environ.get("AUTOCAPTURE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
@@ -189,6 +206,213 @@ class RetrievalService:
             )
         return RetrievalBatch(results=results, no_evidence=False)
 
+    def retrieve_tiered(
+        self,
+        query: str,
+        time_range: tuple[dt.datetime, dt.datetime] | None,
+        filters: RetrieveFilters | None,
+        limit: int = 12,
+        offset: int = 0,
+        mode: str | None = None,
+    ) -> RetrievalBatch:
+        query = query.strip()
+        if len(query) < 2:
+            if time_range:
+                results = self._retrieve_time_range(time_range, filters, limit, offset)
+                results = self._decorate_results("", results)
+                return RetrievalBatch(results=results, no_evidence=not results)
+            return RetrievalBatch(results=[], no_evidence=True, reason="query_too_short")
+        limit = max(1, limit)
+        offset = max(0, offset)
+        budgets = BudgetManager(self._config)
+        budget_state = budgets.start()
+        mode_value = (mode or "auto").strip().lower()
+
+        query_class = _classify_query(query, filters)
+        query_id = _ensure_query_record(self._db, query, filters, query_class, budgets.snapshot())
+
+        tier_defaults = _load_tier_defaults(self._config)
+        fast_defaults = tier_defaults.get("fast", {})
+        fusion_defaults = tier_defaults.get("fusion", {})
+        rerank_defaults = tier_defaults.get("rerank", {})
+        k_lex = max(limit, int(fast_defaults.get("k_lex", limit)))
+        k_vec = max(limit, int(fast_defaults.get("k_vec", limit)))
+        fusion_k = max(limit, int(fusion_defaults.get("fusion_k", limit)))
+        rerank_top_n = max(limit, int(rerank_defaults.get("top_n", limit)))
+        rrf_k = int(fusion_defaults.get("rrf_k", self._config.retrieval.fusion_rrf_k))
+
+        candidate_limit = max((limit + offset) * 3, k_lex, k_vec)
+        skip_dense = budgets.should_skip_dense(budget_state)
+        if skip_dense:
+            k_vec = 0
+            candidate_limit = budgets.reduce_k(candidate_limit)
+            budgets.mark_degraded(budget_state, "retrieve_dense")
+
+        tier_stats = _load_tier_stats(self._db, query_class)
+        plan_json, skipped_json, reasons_json = _plan_tiers(
+            self._config, mode_value, budgets, budget_state, query_class, tier_stats
+        )
+        plan_json["tiers_requested"] = list(plan_json.get("tiers", []))
+        plan_json["tiers_executed"] = []
+        plan_json["skipped_signals"] = {"dense": "budget_low"} if skip_dense else {}
+        stage_ms: dict[str, float] = {}
+        try:
+            self._ledger.append_entry(
+                "retrieve_start",
+                {
+                    "query_id": query_id,
+                    "plan": plan_json,
+                    "skipped": skipped_json,
+                    "reasons": reasons_json,
+                },
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            self._log.debug("Failed to append retrieve_start ledger entry: {}", exc)
+
+        fast_start = time.monotonic()
+        baseline = self._retrieve_candidates(
+            query,
+            time_range,
+            filters,
+            candidate_limit,
+            engine="baseline",
+            k_lex=k_lex,
+            k_vec=k_vec,
+            skip_dense=skip_dense,
+        )
+        fast_ms = (time.monotonic() - fast_start) * 1000
+        budgets.record_stage(budget_state, "retrieve_fast", fast_ms)
+        stage_ms["FAST"] = fast_ms
+        baseline = _assign_ranks(baseline)
+        fast_hit_ids = _persist_retrieval_hits(self._db, query_id, "FAST", baseline)
+        plan_json["tiers_executed"].append("FAST")
+
+        confidence = _retrieval_confidence(baseline)
+        if "FUSION" in plan_json.get("tiers", []) and mode_value != "deep":
+            if _is_confident(
+                confidence,
+                self._config.retrieval.fusion_confidence_min,
+                self._config.retrieval.fusion_rank_gap_min,
+            ):
+                plan_json["tiers"].remove("FUSION")
+                skipped_json["tiers"].append("FUSION")
+                reasons_json["tiers"]["FUSION"] = "confidence_strong"
+
+        if "RERANK" not in plan_json.get("tiers", []) and query_class == "FACT_NUMERIC_TIMEBOUND":
+            if _has_numeric_candidate(baseline) and not budgets.should_skip_rerank(budget_state):
+                if "RERANK" in skipped_json.get("tiers", []):
+                    skipped_json["tiers"].remove("RERANK")
+                plan_json["tiers"].append("RERANK")
+                reasons_json["tiers"]["RERANK"] = "numeric_guard"
+
+        results = baseline
+        rewrites: list[str] = []
+        fusion_hit_ids: list[str] = []
+        if "FUSION" in plan_json.get("tiers", []):
+            should_fuse = mode_value == "deep" or not _is_confident(
+                confidence,
+                self._config.retrieval.fusion_confidence_min,
+                self._config.retrieval.fusion_rank_gap_min,
+            )
+            if should_fuse:
+                fusion_start = time.monotonic()
+                rewrites = self._rewrite_queries(query)
+                fused_lists = [baseline]
+                for rewrite in rewrites:
+                    if rewrite.strip().lower() == query.strip().lower():
+                        continue
+                    fused_lists.append(
+                        self._retrieve_candidates(
+                            rewrite,
+                            time_range,
+                            filters,
+                            candidate_limit,
+                            engine="rewrite",
+                            k_lex=k_lex,
+                            k_vec=k_vec,
+                            skip_dense=skip_dense,
+                        )
+                    )
+                results = _rrf_fuse(fused_lists, rrf_k)
+                if fusion_k > 0:
+                    results = results[:fusion_k]
+                fusion_ms = (time.monotonic() - fusion_start) * 1000
+                budgets.record_stage(
+                    budget_state,
+                    "retrieve_fusion",
+                    fusion_ms,
+                )
+                stage_ms["FUSION"] = fusion_ms
+                results = _assign_ranks(results)
+                fusion_hit_ids = _persist_retrieval_hits(self._db, query_id, "FUSION", results)
+                plan_json["tiers_executed"].append("FUSION")
+            else:
+                skipped_json["tiers"].append("FUSION")
+                reasons_json["tiers"]["FUSION"] = "confidence_strong"
+                fusion_hit_ids = []
+
+        if "RERANK" in plan_json.get("tiers", []):
+            if budgets.should_skip_rerank(budget_state):
+                skipped_json["tiers"].append("RERANK")
+                reasons_json["tiers"]["RERANK"] = "budget_low"
+                budgets.mark_degraded(budget_state, "retrieve_rerank")
+                rerank_hit_ids = []
+            else:
+                rerank_start = time.monotonic()
+                results = self._rerank_results(query, results, top_k=rerank_top_n)
+                rerank_ms = (time.monotonic() - rerank_start) * 1000
+                budgets.record_stage(
+                    budget_state,
+                    "retrieve_rerank",
+                    rerank_ms,
+                )
+                stage_ms["RERANK"] = rerank_ms
+                results = _assign_ranks(results)
+                rerank_hit_ids = _persist_retrieval_hits(self._db, query_id, "RERANK", results)
+                plan_json["tiers_executed"].append("RERANK")
+        else:
+            rerank_hit_ids = []
+
+        if self._config.retrieval.traces_enabled:
+            self._persist_trace(query, rewrites, results)
+
+        try:
+            self._ledger.append_entry(
+                "retrieve_done",
+                {
+                    "query_id": query_id,
+                    "hit_ids": {
+                        "fast": fast_hit_ids,
+                        "fusion": fusion_hit_ids,
+                        "rerank": rerank_hit_ids,
+                    },
+                },
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            self._log.debug("Failed to append retrieve_done ledger entry: {}", exc)
+
+        plan_json["stage_ms"] = stage_ms
+        _persist_tier_plan(
+            self._db, query_id, plan_json, skipped_json, reasons_json, budgets.snapshot()
+        )
+
+        results = results[offset : offset + limit]
+        results = self._decorate_results(query, results)
+        if not results:
+            return RetrievalBatch(
+                results=[],
+                no_evidence=True,
+                reason="no_results",
+                tier_plan=plan_json,
+                query_id=query_id,
+            )
+        return RetrievalBatch(
+            results=results,
+            no_evidence=False,
+            tier_plan=plan_json,
+            query_id=query_id,
+        )
+
     def _v2_enabled(self) -> bool:
         config = self._config.retrieval
         return bool(
@@ -238,10 +462,13 @@ class RetrievalService:
         limit: int,
         *,
         engine: str,
+        k_lex: int | None = None,
+        k_vec: int | None = None,
+        skip_dense: bool = False,
     ) -> list[RetrievedEvent]:
         lexical_start = time.monotonic()
         with otel_span("index_lexical", {"stage_name": "index_lexical"}):
-            lexical_hits = self._lexical.search(query, limit=limit)
+            lexical_hits = self._lexical.search(query, limit=k_lex or limit)
         record_histogram(
             "index_lexical_ms",
             (time.monotonic() - lexical_start) * 1000,
@@ -265,14 +492,15 @@ class RetrievalService:
         filters_map = _build_vector_filters(filters, v2=False)
         filters_v2 = _build_vector_filters(filters, v2=True)
 
-        if dense_vector is not None:
+        if dense_vector is not None and not skip_dense:
             try:
+                vector_limit = k_vec or limit
                 if self._spans_v2 and self._config.retrieval.use_spans_v2:
                     vector_start = time.monotonic()
                     with otel_span("vector_search", {"stage_name": "vector_search"}):
                         dense_hits = self._spans_v2.search_dense(
                             dense_vector,
-                            limit,
+                            vector_limit,
                             filters=filters_v2,
                             embedding_model=self._embedder.model_name,
                         )
@@ -286,7 +514,7 @@ class RetrievalService:
                     with otel_span("vector_search", {"stage_name": "vector_search"}):
                         dense_hits = self._vector.search(
                             dense_vector,
-                            limit,
+                            vector_limit,
                             filters=filters_map,
                             embedding_model=self._embedder.model_name,
                         )
@@ -310,10 +538,17 @@ class RetrievalService:
             span_hits.setdefault(hit.event_id, []).append(hit.span_key)
 
         sparse_scores: dict[str, float] = {}
-        if self._config.retrieval.sparse_enabled and self._spans_v2 and self._sparse_encoder:
+        if (
+            not skip_dense
+            and self._config.retrieval.sparse_enabled
+            and self._spans_v2
+            and self._sparse_encoder
+        ):
             try:
                 sparse_vector = self._sparse_encoder.encode([query])[0]
-                sparse_hits = self._spans_v2.search_sparse(sparse_vector, limit, filters=filters_v2)
+                sparse_hits = self._spans_v2.search_sparse(
+                    sparse_vector, k_vec or limit, filters=filters_v2
+                )
             except Exception as exc:
                 self._log.warning("Sparse retrieval failed: {}", exc)
                 sparse_hits = []
@@ -323,7 +558,8 @@ class RetrievalService:
 
         late_stage1_scores: dict[str, float] = {}
         if (
-            self._config.retrieval.late_stage1_enabled
+            not skip_dense
+            and self._config.retrieval.late_stage1_enabled
             and self._config.retrieval.late_enabled
             and self._spans_v2
             and self._late_encoder
@@ -522,7 +758,9 @@ class RetrievalService:
                 break
         return deduped
 
-    def _rerank_results(self, query: str, results: list[RetrievedEvent]) -> list[RetrievedEvent]:
+    def _rerank_results(
+        self, query: str, results: list[RetrievedEvent], *, top_k: int | None = None
+    ) -> list[RetrievedEvent]:
         if not results:
             return results
         reranker = self._get_reranker()
@@ -549,9 +787,11 @@ class RetrievalService:
             budget = self._runtime.qos_budget()
             if budget.gpu_policy in {"prefer_cpu", "disallow_gpu"}:
                 device_override = "cpu"
-        top_k = min(len(results), self._config.reranker.top_k)
-        head = results[:top_k]
-        tail = results[top_k:]
+        limit = min(len(results), self._config.reranker.top_k)
+        if top_k is not None:
+            limit = min(limit, int(top_k))
+        head = results[:limit]
+        tail = results[limit:]
         documents = [_build_rerank_document(result.event) for result in head]
         try:
             kwargs: dict[str, object] = {}
@@ -949,3 +1189,307 @@ def _snippet_for_query(text: str, query: str, window: int = 200) -> tuple[str, i
     start = max(idx - window, 0)
     end = min(idx + len(q) + window, len(text))
     return text[start:end], start
+
+
+def _classify_query(query: str, filters: RetrieveFilters | None) -> str:
+    lowered = (query or "").lower()
+    has_digit = any(ch.isdigit() for ch in lowered)
+    has_time = any(
+        token in lowered
+        for token in (
+            "today",
+            "yesterday",
+            "tomorrow",
+            "last",
+            "week",
+            "month",
+            "year",
+            "hour",
+            "minute",
+            "day",
+        )
+    )
+    if has_digit or has_time:
+        return "FACT_NUMERIC_TIMEBOUND"
+    tokens = re.findall(r"[a-z0-9]+", lowered)
+    if filters and (filters.apps or filters.domains):
+        return "FILTERED"
+    if len(tokens) <= 2:
+        return "SHORT"
+    return "GENERAL"
+
+
+def _ensure_query_record(
+    db: DatabaseManager,
+    query: str,
+    filters: RetrieveFilters | None,
+    query_class: str,
+    budget_snapshot,
+) -> str:
+    filters_json = {
+        "apps": filters.apps if filters else None,
+        "domains": filters.domains if filters else None,
+    }
+    query_id = stable_id(
+        "query",
+        {"query": query, "filters": filters_json, "query_class": query_class},
+    )
+
+    def _write(session):
+        existing = session.get(QueryRecord, query_id)
+        if existing:
+            return query_id
+        session.add(
+            QueryRecord(
+                query_id=query_id,
+                query_text=query,
+                normalized_text=query.lower().strip(),
+                filters_json=filters_json,
+                query_class=query_class,
+                budgets_json={
+                    "total_ms": budget_snapshot.total_ms,
+                    "stages": budget_snapshot.stages,
+                    "degrade": budget_snapshot.degrade,
+                },
+                created_at=dt.datetime.now(dt.timezone.utc),
+            )
+        )
+        return query_id
+
+    return db.transaction(_write)
+
+
+def _plan_tiers(
+    config: AppConfig,
+    mode: str,
+    budgets: BudgetManager,
+    state: BudgetState,
+    query_class: str,
+    tier_stats: dict[str, TierStatsRecord],
+):
+    plan = {"tiers": ["FAST"]}
+    skipped = {"tiers": []}
+    reasons = {"tiers": {}}
+
+    fusion_reason = _tier_skip_reason(
+        tier_stats, "FUSION", config, budgets, state, stage="retrieve_fusion"
+    )
+    if config.retrieval.fusion_enabled and mode in {"auto", "deep"}:
+        if fusion_reason:
+            skipped["tiers"].append("FUSION")
+            reasons["tiers"]["FUSION"] = fusion_reason
+        else:
+            plan["tiers"].append("FUSION")
+
+    rerank_reason = None
+    if config.routing.reranker == "enabled" and config.reranker.enabled:
+        if budgets.should_skip_rerank(state) and query_class != "FACT_NUMERIC_TIMEBOUND":
+            rerank_reason = "budget_low"
+        else:
+            rerank_reason = _tier_skip_reason(
+                tier_stats, "RERANK", config, budgets, state, stage="retrieve_rerank"
+            )
+        if rerank_reason and query_class != "FACT_NUMERIC_TIMEBOUND":
+            skipped["tiers"].append("RERANK")
+            reasons["tiers"]["RERANK"] = rerank_reason
+        else:
+            plan["tiers"].append("RERANK")
+    return plan, skipped, reasons
+
+
+def _tier_skip_reason(
+    tier_stats: dict[str, TierStatsRecord],
+    tier: str,
+    config: AppConfig,
+    budgets: BudgetManager,
+    state: BudgetState,
+    *,
+    stage: str,
+) -> str | None:
+    record = tier_stats.get(tier)
+    if record and record.window_n and record.window_n >= config.next10.tier_stats_window:
+        help_rate = float(record.help_rate or 0.0)
+        if help_rate < config.next10.tier_help_rate_min:
+            remaining = budgets.remaining_ms(state)
+            p95_ms = float(record.p95_ms or 0.0)
+            threshold = max(float(budgets.budget_ms(stage)), remaining * 0.6)
+            if p95_ms and p95_ms > threshold:
+                return "low_help_rate_high_latency"
+    if budgets.budget_ms(stage) and budgets.remaining_ms(state) < budgets.budget_ms(stage):
+        return "budget_low"
+    return None
+
+
+def _load_tier_stats(db: DatabaseManager, query_class: str) -> dict[str, TierStatsRecord]:
+    if not query_class:
+        return {}
+    with db.session() as session:
+        rows = (
+            session.execute(
+                select(TierStatsRecord).where(TierStatsRecord.query_class == query_class)
+            )
+            .scalars()
+            .all()
+        )
+    return {row.tier: row for row in rows}
+
+
+def _load_tier_defaults(config: AppConfig) -> dict:
+    path = Path(config.next10.tiers_defaults_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _has_numeric_candidate(results: list[RetrievedEvent]) -> bool:
+    if not results:
+        return False
+    pattern = re.compile(r"\b\d+(?:[.,]\d+)?\b")
+    for item in results:
+        text = item.snippet or item.event.ocr_text or ""
+        if pattern.search(text):
+            return True
+    return False
+
+
+def _persist_tier_plan(
+    db: DatabaseManager,
+    query_id: str,
+    plan_json: dict,
+    skipped_json: dict,
+    reasons_json: dict,
+    budget_snapshot,
+) -> None:
+    decision_id = stable_id(
+        "tier_plan",
+        {"query_id": query_id, "plan": plan_json, "skipped": skipped_json},
+    )
+
+    def _write(session):
+        existing = session.get(TierPlanDecisionRecord, decision_id)
+        if existing:
+            return
+        session.add(
+            TierPlanDecisionRecord(
+                decision_id=decision_id,
+                query_id=query_id,
+                plan_json=plan_json,
+                skipped_json=skipped_json,
+                reasons_json=reasons_json,
+                budgets_json={
+                    "total_ms": budget_snapshot.total_ms,
+                    "stages": budget_snapshot.stages,
+                    "degrade": budget_snapshot.degrade,
+                },
+                schema_version=1,
+                created_at=dt.datetime.now(dt.timezone.utc),
+            )
+        )
+
+    db.transaction(_write)
+
+
+def _persist_retrieval_hits(
+    db: DatabaseManager, query_id: str, tier: str, results: list[RetrievedEvent]
+) -> list[str]:
+    if not results:
+        return []
+    event_ids = [item.event.event_id for item in results]
+    hit_ids: list[str] = []
+
+    def _write(session) -> None:
+        spans = (
+            session.execute(
+                select(CitableSpanRecord).where(CitableSpanRecord.frame_id.in_(event_ids))
+            )
+            .scalars()
+            .all()
+        )
+        frames = {
+            row.frame_id: row
+            for row in session.execute(
+                select(FrameRecord).where(FrameRecord.frame_id.in_(event_ids))
+            )
+            .scalars()
+            .all()
+        }
+        spans_by_event: dict[str, list[CitableSpanRecord]] = {}
+        for span in spans:
+            spans_by_event.setdefault(span.frame_id, []).append(span)
+        for span_list in spans_by_event.values():
+            span_list.sort(key=lambda s: (s.legacy_span_key or "", s.span_id))
+
+        for item in results:
+            event_id = item.event.event_id
+            span_id = _select_span_id(spans_by_event.get(event_id, []), item.matched_span_keys)
+            span_record = None
+            if span_id:
+                for span in spans_by_event.get(event_id, []):
+                    if span.span_id == span_id:
+                        span_record = span
+                        break
+            citable = _is_citable_span(span_record, frames.get(event_id))
+            scores_json = {
+                "lexical": item.lexical_score,
+                "dense": item.vector_score,
+                "sparse": item.sparse_score,
+                "late": item.late_score,
+                "rerank": item.rerank_score,
+                "engine": item.engine,
+            }
+            hit_id = stable_id(
+                "hit",
+                {
+                    "query_id": query_id,
+                    "tier": tier,
+                    "event_id": event_id,
+                    "span_id": span_id,
+                    "rank": item.rank,
+                },
+            )
+            existing = session.get(RetrievalHitRecord, hit_id)
+            if existing:
+                hit_ids.append(hit_id)
+                continue
+            session.add(
+                RetrievalHitRecord(
+                    hit_id=hit_id,
+                    query_id=query_id,
+                    tier=tier,
+                    span_id=span_id,
+                    event_id=event_id,
+                    score=float(item.score),
+                    rank=int(item.rank),
+                    scores_json=scores_json,
+                    citable=citable,
+                    schema_version=1,
+                    created_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
+            hit_ids.append(hit_id)
+
+    db.transaction(_write)
+    return hit_ids
+
+
+def _select_span_id(spans: list[CitableSpanRecord], matched_span_keys: list[str]) -> str | None:
+    if not spans:
+        return None
+    matched_set = {str(key) for key in matched_span_keys if key}
+    if matched_set:
+        for span in spans:
+            if span.legacy_span_key and span.legacy_span_key in matched_set:
+                return span.span_id
+    return spans[0].span_id if spans else None
+
+
+def _is_citable_span(span: CitableSpanRecord | None, frame: FrameRecord | None) -> bool:
+    if span is None or span.tombstoned:
+        return False
+    if span.bbox is None:
+        return False
+    if frame is None or not frame.media_path:
+        return False
+    return True

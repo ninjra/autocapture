@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -607,5 +608,242 @@ class OverlayKvRecord(Base):
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value_json: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class FrameRecord(Base):
+    __tablename__ = "frame_records"
+
+    __table_args__ = (
+        Index("ix_frame_records_event_id", "event_id"),
+        Index("ix_frame_records_captured_at", "captured_at_utc"),
+    )
+
+    frame_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("events.event_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    captured_at_utc: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
+    monotonic_ts: Mapped[float] = mapped_column(Float)
+    monitor_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    monitor_bounds: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    app_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    window_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    media_path: Mapped[str | None] = mapped_column(Text, nullable=True)
+    privacy_flags: Mapped[dict] = mapped_column(JSON, default=dict)
+    frame_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    excluded: Mapped[bool] = mapped_column(Boolean, default=False)
+    masked: Mapped[bool] = mapped_column(Boolean, default=False)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class ArtifactRecord(Base):
+    __tablename__ = "artifact_records"
+
+    __table_args__ = (Index("ix_artifact_records_frame", "frame_id"),)
+
+    artifact_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    frame_id: Mapped[str] = mapped_column(ForeignKey("frame_records.frame_id", ondelete="CASCADE"))
+    event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("events.event_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    artifact_type: Mapped[str] = mapped_column(String(64))
+    engine: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    engine_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    derived_from: Mapped[dict] = mapped_column(JSON, default=dict)
+    upstream_artifact_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class CitableSpanRecord(Base):
+    __tablename__ = "citable_spans"
+
+    __table_args__ = (
+        UniqueConstraint("span_hash", name="uq_citable_spans_span_hash"),
+        Index("ix_citable_spans_event", "event_id"),
+        Index("ix_citable_spans_frame", "frame_id"),
+    )
+
+    span_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    artifact_id: Mapped[str] = mapped_column(
+        ForeignKey("artifact_records.artifact_id", ondelete="CASCADE")
+    )
+    frame_id: Mapped[str] = mapped_column(ForeignKey("frame_records.frame_id", ondelete="CASCADE"))
+    event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("events.event_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    span_hash: Mapped[str] = mapped_column(String(128))
+    text: Mapped[str] = mapped_column(Text)
+    start_offset: Mapped[int] = mapped_column(Integer)
+    end_offset: Mapped[int] = mapped_column(Integer)
+    bbox: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
+    bbox_norm: Mapped[list[float] | None] = mapped_column(JSON, nullable=True)
+    tombstoned: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at_utc: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    legacy_span_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class QueryRecord(Base):
+    __tablename__ = "query_records"
+
+    __table_args__ = (Index("ix_query_records_created_at", "created_at"),)
+
+    query_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    query_text: Mapped[str] = mapped_column(Text)
+    normalized_text: Mapped[str] = mapped_column(Text)
+    filters_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    query_class: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    budgets_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class TierPlanDecisionRecord(Base):
+    __tablename__ = "tier_plan_decisions"
+
+    __table_args__ = (Index("ix_tier_plan_decisions_query", "query_id"),)
+
+    decision_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    query_id: Mapped[str] = mapped_column(ForeignKey("query_records.query_id", ondelete="CASCADE"))
+    plan_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    skipped_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    reasons_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    budgets_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class RetrievalHitRecord(Base):
+    __tablename__ = "retrieval_hits"
+
+    __table_args__ = (
+        Index("ix_retrieval_hits_query", "query_id"),
+        Index("ix_retrieval_hits_tier_rank", "tier", "rank"),
+        Index("ix_retrieval_hits_span", "span_id"),
+    )
+
+    hit_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    query_id: Mapped[str] = mapped_column(ForeignKey("query_records.query_id", ondelete="CASCADE"))
+    tier: Mapped[str] = mapped_column(String(32))
+    span_id: Mapped[str | None] = mapped_column(
+        ForeignKey("citable_spans.span_id", ondelete="SET NULL"), nullable=True
+    )
+    event_id: Mapped[str | None] = mapped_column(
+        ForeignKey("events.event_id", ondelete="SET NULL"), nullable=True
+    )
+    score: Mapped[float] = mapped_column(Float)
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    scores_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    citable: Mapped[bool] = mapped_column(Boolean, default=False)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class AnswerRecord(Base):
+    __tablename__ = "answer_records"
+
+    __table_args__ = (Index("ix_answer_records_query", "query_id"),)
+
+    answer_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    query_id: Mapped[str] = mapped_column(ForeignKey("query_records.query_id", ondelete="CASCADE"))
+    mode: Mapped[str] = mapped_column(String(32))
+    coverage_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    confidence_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    budgets_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stale: Mapped[bool] = mapped_column(Boolean, default=False)
+    answer_format_version: Mapped[int] = mapped_column(Integer, default=1)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class AnswerCitationRecord(Base):
+    __tablename__ = "answer_citations"
+
+    __table_args__ = (
+        UniqueConstraint("answer_id", "sentence_id", "span_id", name="uq_answer_citations"),
+        Index("ix_answer_citations_answer", "answer_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    answer_id: Mapped[str] = mapped_column(
+        ForeignKey("answer_records.answer_id", ondelete="CASCADE")
+    )
+    sentence_id: Mapped[str] = mapped_column(String(128))
+    sentence_index: Mapped[int] = mapped_column(Integer, default=0)
+    span_id: Mapped[str | None] = mapped_column(
+        ForeignKey("citable_spans.span_id", ondelete="SET NULL"), nullable=True
+    )
+    citable: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class ProvenanceLedgerEntryRecord(Base):
+    __tablename__ = "provenance_ledger_entries"
+
+    __table_args__ = (
+        Index("ix_provenance_ledger_answer", "answer_id"),
+        Index("ix_provenance_ledger_hash", "entry_hash"),
+    )
+
+    entry_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    answer_id: Mapped[str | None] = mapped_column(
+        ForeignKey("answer_records.answer_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    entry_type: Mapped[str] = mapped_column(String(64))
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    prev_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    entry_hash: Mapped[str] = mapped_column(String(128))
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class TierStatsRecord(Base):
+    __tablename__ = "tier_stats"
+
+    query_class: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tier: Mapped[str] = mapped_column(String(32), primary_key=True)
+    window_n: Mapped[int] = mapped_column(Integer, default=0)
+    help_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    p50_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    p95_ms: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class SchemaMigrationRecord(Base):
+    __tablename__ = "schema_migrations"
+
+    version: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    applied_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )

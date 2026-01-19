@@ -9,9 +9,7 @@ SCHEMA_VERSION = 1
 
 def ensure_schema(conn: sqlite3.Connection, *, require_fts: bool) -> bool:
     cur = conn.cursor()
-    cur.execute(
-        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)"
-    )
+    cur.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
     row = cur.execute("SELECT version FROM schema_version").fetchone()
     if row is None:
         cur.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
@@ -128,9 +126,7 @@ def ensure_schema(conn: sqlite3.Connection, *, require_fts: bool) -> bool:
         """
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_spans_doc_id ON spans(doc_id)")
-    cur.execute(
-        "CREATE INDEX IF NOT EXISTS idx_memory_items_status ON memory_items(status)"
-    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_memory_items_status ON memory_items(status)")
 
     fts_available = True
     try:

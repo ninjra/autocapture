@@ -14,6 +14,7 @@ class PrivacyFlags(BaseModel):
     excluded: bool = False
     masked_regions_applied: bool = False
     cloud_allowed: bool = False
+    capture_paused: bool = False
 
 
 class FrameRecordV1(BaseModel):
