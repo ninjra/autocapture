@@ -112,7 +112,7 @@ output:
   allow_tron_compression: false
 memory:
   enabled: true
-  api_context_pack_enabled: false
+  api_context_pack_enabled: true
   storage:
     # root_dir uses the platform default unless AUTOCAPTURE_MEMORY_DIR is set.
     db_filename: "memory.sqlite3"
