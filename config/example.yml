@@ -118,6 +118,13 @@ features:
   enable_thresholding: true
   enable_retention_prune: false
   enable_otel: false
+next10:
+  enabled: true
+  policy_defaults_path: "config/defaults/policy.json"
+  budgets_defaults_path: "config/defaults/budgets.json"
+  tiers_defaults_path: "config/defaults/tiers.json"
+  tier_stats_window: 200
+  tier_help_rate_min: 0.05
 output:
   format: "text"
   context_pack_format: "json"
@@ -468,6 +475,8 @@ database:
   encryption_key_name: "autocapture/sqlcipher-key"
   encryption_key_path: "secrets/sqlcipher.key"
   encryption_env_var: "AUTOCAPTURE_SQLCIPHER_KEY"
+  secure_mode_required: true
+  allow_insecure_dev: false
   require_tls_for_remote: true
 qdrant:
   enabled: true

@@ -17,6 +17,7 @@ def test_frame_record_kwargs_include_required_fields():
         privacy,
         excluded=False,
         masked_regions_applied=True,
+        capture_paused=False,
         offline=True,
     )
     frame = build_frame_record_v1(

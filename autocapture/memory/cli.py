@@ -13,8 +13,6 @@ from .models import ArtifactMeta
 from .store import MemoryStore
 from .utils import format_utc, stable_json_dumps
 
-# TODO(memory-roadmap:M2): add API endpoints for memory ingest/query/compile.
-
 _EXIT_USAGE = 2
 _EXIT_RETRIEVAL_UNAVAILABLE = 3
 _EXIT_VERIFY_FAILED = 4

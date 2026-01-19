@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "total_request_ms": 1500,
+  "stages": {
+    "capture": 50,
+    "extract_ocr": 400,
+    "index_lexical": 120,
+    "index_vector": 180,
+    "retrieve_fast": 300,
+    "retrieve_fusion": 200,
+    "retrieve_rerank": 250,
+    "answer_compile": 200,
+    "answer_llm": 800,
+    "conflict_detect": 80,
+    "integrity_check": 120
+  },
+  "degrade": {
+    "min_remaining_ms_for_rerank": 200,
+    "min_remaining_ms_for_dense": 180,
+    "reduce_k_factor": 0.5,
+    "force_no_evidence_on_low_strength": true
+  }
+}

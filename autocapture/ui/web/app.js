@@ -53,7 +53,7 @@ function appendMessage(author, text) {
   thread.scrollTop = thread.scrollHeight;
 }
 
-function appendAssistantMessage(answer, citations, contextPack) {
+function appendAssistantMessage(answer, citations, contextPack, meta = {}) {
   const div = document.createElement('div');
   div.className = 'msg';
   const strong = document.createElement('strong');
@@ -62,6 +62,12 @@ function appendAssistantMessage(answer, citations, contextPack) {
   span.textContent = answer;
   div.appendChild(strong);
   div.appendChild(span);
+  if (meta && meta.mode) {
+    const badge = document.createElement('small');
+    badge.className = 'mode-badge';
+    badge.textContent = `Mode: ${meta.mode}`;
+    div.appendChild(badge);
+  }
   if (Array.isArray(citations) && citations.length > 0) {
     const citationText = document.createElement('small');
     citationText.className = 'citations';
@@ -82,6 +88,31 @@ function appendAssistantMessage(answer, citations, contextPack) {
       div.appendChild(actions);
     }
   }
+  if (meta && Array.isArray(meta.hints) && meta.hints.length > 0) {
+    const hints = document.createElement('div');
+    hints.className = 'hints';
+    hints.textContent = `Hints: ${meta.hints.map((h) => h.label || '').join(', ')}`;
+    div.appendChild(hints);
+  }
+  if (meta && Array.isArray(meta.actions) && meta.actions.length > 0) {
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    meta.actions.forEach((action) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = action.label || 'Action';
+      btn.addEventListener('click', () => {
+        if (action.type === 'time_range' && action.value) {
+          timeRange.value = action.value;
+        } else if (action.type === 'refine_query') {
+          chatInput.value = action.value || '';
+          chatInput.focus();
+        }
+      });
+      actions.appendChild(btn);
+    });
+    div.appendChild(actions);
+  }
   thread.appendChild(div);
   thread.scrollTop = thread.scrollHeight;
 }
@@ -95,6 +126,7 @@ async function showCitationOverlay(citationId, contextPack) {
   }
   const eventId = item.meta.event_id;
   const spans = Array.isArray(item.meta.spans) ? item.meta.spans : [];
+  const spanIds = spans.map((span) => span.span_id).filter((id) => id);
   const bboxes = [];
   let useNorm = false;
   spans.forEach((span) => {
@@ -110,6 +142,26 @@ async function showCitationOverlay(citationId, contextPack) {
   if (!eventId || bboxes.length === 0) {
     appendAssistantMessage('No overlay regions available for that citation.', []);
     return;
+  }
+  if (spanIds.length > 0) {
+    try {
+      const validate = await apiFetch('/api/citations/validate', {
+        method: 'POST',
+        body: JSON.stringify({ span_ids: spanIds })
+      });
+      if (!validate.ok) {
+        appendAssistantMessage('Citation validation failed.', []);
+        return;
+      }
+      const payload = await validate.json();
+      if (payload.invalid_span_ids && Object.keys(payload.invalid_span_ids).length > 0) {
+        appendAssistantMessage('Citation is no longer valid.', []);
+        return;
+      }
+    } catch (err) {
+      appendAssistantMessage('Citation validation failed.', []);
+      return;
+    }
   }
   let response;
   try {
@@ -183,7 +235,12 @@ chatForm.addEventListener('submit', async (event) => {
     appendAssistantMessage(`Error: ${detail}.`, []);
     return;
   }
-  appendAssistantMessage(data.answer || '', data.citations || [], data.used_context_pack || null);
+  appendAssistantMessage(
+    data.answer || '',
+    data.citations || [],
+    data.used_context_pack || null,
+    data || {}
+  );
   if (safeModeIndicator) {
     const strategy = data.prompt_strategy;
     if (!strategy) {

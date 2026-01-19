@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "exclude_processes": [
+    "1password.exe",
+    "bitwarden.exe",
+    "keepass.exe",
+    "keepassxc.exe",
+    "lastpass.exe",
+    "dashlane.exe",
+    "nordpass.exe",
+    "keeper.exe",
+    "roboform.exe",
+    "authy.exe"
+  ],
+  "exclude_window_title_regex": [
+    "(?i)\\b(inprivate|incognito)\\b",
+    "(?i)windows security",
+    "(?i)user account control",
+    "(?i)credential(s)?",
+    "(?i)EXCLUDE_MARKER_123"
+  ],
+  "exclude_regions": [],
+  "mask_regions": [],
+  "notes": "Default policy for exclusion/masking. Update via settings or config overrides."
+}

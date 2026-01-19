@@ -34,6 +34,7 @@ from sqlalchemy import func, select
 from ..agents.answer_graph import AnswerGraph
 from ..agents import AGENT_JOB_DAILY_HIGHLIGHTS
 from ..agents.jobs import AgentJobQueue
+from ..answer.integrity import check_citations
 from ..config import AppConfig, ProviderRoutingConfig, apply_settings_overrides, is_loopback_host
 from ..encryption import EncryptionManager
 from ..logging_utils import get_logger
@@ -78,6 +79,7 @@ from ..storage.models import (
     CaptureRecord,
     DailyHighlightsRecord,
     EventRecord,
+    FrameRecord,
     OCRSpanRecord,
     PromptOpsRunRecord,
     QueryHistoryRecord,
@@ -195,6 +197,15 @@ class CitationOverlayRequest(BaseModel):
     bbox_format: str = Field("px", description="px|norm|auto")
 
 
+class CitationValidateRequest(BaseModel):
+    span_ids: list[str] = Field(default_factory=list)
+
+
+class CitationValidateResponse(BaseModel):
+    valid_span_ids: list[str]
+    invalid_span_ids: dict[str, str]
+
+
 class PromptStrategyInfo(BaseModel):
     strategy: str
     repeat_factor: int
@@ -214,6 +225,16 @@ class AnswerResponse(BaseModel):
     prompt_strategy: Optional[PromptStrategyInfo] = None
     no_evidence: bool = False
     message: str | None = None
+    mode: str | None = None
+    coverage: dict[str, Any] | None = None
+    confidence: dict[str, Any] | None = None
+    budgets: dict[str, Any] | None = None
+    degraded_stages: list[str] | None = None
+    hints: list[dict[str, Any]] | None = None
+    actions: list[dict[str, Any]] | None = None
+    conflict_summary: dict[str, Any] | None = None
+    answer_id: str | None = None
+    query_id: str | None = None
 
 
 class EventResponse(BaseModel):
@@ -843,8 +864,9 @@ def create_app(
             return IngestResponse(observation_id=observation_id, status="skipped")
 
         record_kwargs = None
+        frame = None
+        frame_hash = None
         if config.features.enable_frame_record_v1:
-            frame_hash = None
             if config.features.enable_frame_hash:
                 try:
                     from ..image_utils import hash_rgb_image
@@ -856,6 +878,7 @@ def create_app(
                 config.privacy,
                 excluded=False,
                 masked_regions_applied=masked_regions_applied,
+                capture_paused=False,
                 offline=config.offline,
             )
             frame = build_frame_record_v1(
@@ -895,8 +918,30 @@ def create_app(
                 "ocr_status": "pending",
             }
 
+        frame_flags = frame.privacy_flags.model_dump() if frame else {}
+        frame_hash_value = frame_hash
+
         def _write(session) -> None:
             session.add(CaptureRecord(**record_kwargs))
+            session.add(
+                FrameRecord(
+                    frame_id=observation_id,
+                    event_id=None,
+                    captured_at_utc=captured_at,
+                    monotonic_ts=monotonic_ts,
+                    monitor_id=monitor_id,
+                    monitor_bounds=None,
+                    app_name=app_name,
+                    window_title=window_title,
+                    media_path=str(path),
+                    privacy_flags=frame_flags,
+                    frame_hash=frame_hash_value,
+                    excluded=False,
+                    masked=masked_regions_applied,
+                    schema_version=1,
+                    created_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
 
         db.transaction(_write)
         return IngestResponse(observation_id=observation_id, status="ok")
@@ -1008,6 +1053,16 @@ def create_app(
         buf = io.BytesIO()
         overlay.save(buf, format="PNG")
         return Response(content=buf.getvalue(), media_type="image/png")
+
+    @app.post("/api/citations/validate")
+    def citation_validate(request: CitationValidateRequest) -> CitationValidateResponse:
+        if not request.span_ids:
+            return CitationValidateResponse(valid_span_ids=[], invalid_span_ids={})
+        result = check_citations(db, request.span_ids)
+        return CitationValidateResponse(
+            valid_span_ids=sorted(result.valid_span_ids),
+            invalid_span_ids=result.invalid_span_ids,
+        )
 
     @app.post("/api/retrieve")
     def retrieve(request: RetrieveRequest) -> RetrieveResponse:
@@ -1203,6 +1258,7 @@ def create_app(
                 prompt_strategy=None,
                 no_evidence=True,
                 message=notice,
+                mode="NO_EVIDENCE",
             )
         pack = build_context_pack(
             query=query_text,
@@ -1229,6 +1285,7 @@ def create_app(
         graph_attempted = False
         graph_used_llm = False
         prompt_strategy_info: PromptStrategyInfo | None = None
+        graph_result = None
         if config.agents.answer_agent.enabled:
             try:
                 graph_attempted = True
@@ -1248,6 +1305,7 @@ def create_app(
                 answer_text = result.answer
                 citations = result.citations
                 graph_used_llm = result.used_llm
+                graph_result = result
                 if result.prompt_strategy:
                     prompt_strategy_info = _prompt_strategy_info(result.prompt_strategy)
                 pack = build_context_pack(
@@ -1405,6 +1463,16 @@ def create_app(
             prompt_strategy=prompt_strategy_info,
             no_evidence=False,
             message=None,
+            mode=getattr(graph_result, "mode", None),
+            coverage=getattr(graph_result, "coverage", None),
+            confidence=getattr(graph_result, "confidence", None),
+            budgets=getattr(graph_result, "budgets", None),
+            degraded_stages=getattr(graph_result, "degraded_stages", None),
+            hints=getattr(graph_result, "hints", None),
+            actions=getattr(graph_result, "actions", None),
+            conflict_summary=getattr(graph_result, "conflict_summary", None),
+            answer_id=getattr(graph_result, "answer_id", None),
+            query_id=getattr(graph_result, "query_id", None),
         )
 
     @app.get("/api/highlights")
@@ -1653,11 +1721,12 @@ def _record_skipped_capture(
             config.privacy,
             excluded=excluded,
             masked_regions_applied=masked_regions_applied,
+            capture_paused=False,
             offline=config.offline,
         )
         frame = build_frame_record_v1(
             frame_id=observation_id,
-            event_id=observation_id,
+            event_id=None,
             captured_at=captured_at,
             monotonic_ts=monotonic_ts,
             monitor_id=monitor_id,
@@ -1696,6 +1765,25 @@ def _record_skipped_capture(
 
     def _write(session) -> None:
         session.add(CaptureRecord(**record_kwargs))
+        session.add(
+            FrameRecord(
+                frame_id=observation_id,
+                event_id=None,
+                captured_at_utc=captured_at,
+                monotonic_ts=monotonic_ts,
+                monitor_id=monitor_id,
+                monitor_bounds=None,
+                app_name=app_name,
+                window_title=window_title,
+                media_path=None,
+                privacy_flags=frame.privacy_flags.model_dump() if frame else {},
+                frame_hash=None,
+                excluded=excluded,
+                masked=masked_regions_applied,
+                schema_version=1,
+                created_at=dt.datetime.now(dt.timezone.utc),
+            )
+        )
 
     db.transaction(_write)
 

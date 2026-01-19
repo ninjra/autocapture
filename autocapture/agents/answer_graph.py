@@ -6,10 +6,17 @@ import datetime as dt
 import json
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
 from ..config import AppConfig
 from ..logging_utils import get_logger
+from ..answer.coverage import coverage_metrics, extract_sentence_citations
+from ..answer.conflict import detect_conflicts
+from ..answer.integrity import check_citations
+from ..answer.no_evidence import build_no_evidence_payload
+from ..answer.provenance import append_provenance_chain, verify_provenance
 from ..memory.compression import CompressedAnswer, extractive_answer
 from ..memory.context_pack import (
     EvidenceItem,
@@ -24,9 +31,18 @@ from ..memory.time_intent import (
     resolve_timezone,
 )
 from ..memory.threads import ThreadRetrievalService
-from ..memory.retrieval import RetrieveFilters, RetrievalService
+from ..memory.retrieval import (
+    RetrieveFilters,
+    RetrievalService,
+    _classify_query,
+    _ensure_query_record,
+)
+from ..memory.tier_stats import update_tier_stats
 from ..model_ops import StageRouter
-from ..storage.models import EventRecord
+from ..storage.models import AnswerCitationRecord, AnswerRecord, CitableSpanRecord, EventRecord
+from ..storage.ledger import LedgerWriter
+from ..contracts_utils import stable_id
+from ..runtime_budgets import BudgetManager
 from ..memory.verification import Claim, RulesVerifier
 from ..observability.otel import otel_span, record_histogram
 
@@ -38,6 +54,16 @@ class AnswerGraphResult:
     context_pack: dict
     warnings: list[str]
     used_llm: bool
+    mode: str = "NORMAL"
+    coverage: dict | None = None
+    confidence: dict | None = None
+    budgets: dict | None = None
+    degraded_stages: list[str] | None = None
+    hints: list[dict] | None = None
+    actions: list[dict] | None = None
+    conflict_summary: dict | None = None
+    answer_id: str | None = None
+    query_id: str | None = None
     response_json: dict | None = None
     response_tron: str | None = None
     context_pack_tron: str | None = None
@@ -65,6 +91,7 @@ class AnswerGraph:
         self._prompt_registry = prompt_registry
         self._entities = entities
         self._log = get_logger("answer_graph")
+        self._ledger = LedgerWriter(retrieval._db)  # type: ignore[attr-defined]
         self._stage_router = StageRouter(config)
         self._thread_retrieval = ThreadRetrievalService(
             config,
@@ -89,6 +116,8 @@ class AnswerGraph:
         context_pack_format: str = "json",
     ) -> AnswerGraphResult:
         warnings: list[str] = []
+        budget_manager = BudgetManager(self._config)
+        budget_state = budget_manager.start()
         normalized_query = self._normalize_query(query)
         tzinfo = resolve_timezone(self._config.time.timezone)
         now = dt.datetime.now(tzinfo)
@@ -100,6 +129,11 @@ class AnswerGraph:
         )
         time_only = is_time_only_expression(normalized_query)
         retrieve_query = "" if time_only else normalized_query
+        retrieve_filters = None
+        if filters:
+            retrieve_filters = RetrieveFilters(
+                apps=filters.get("app"), domains=filters.get("domain")
+            )
         speculative = bool(
             self._config.retrieval.speculative_enabled
             and self._config.model_stages.draft_generate.enabled
@@ -137,8 +171,11 @@ class AnswerGraph:
                 sanitized=sanitized,
                 aggregates=aggregates,
             )
+            payload = build_no_evidence_payload(
+                query, has_time_range=resolved_time_range is not None
+            )
             return _build_graph_result(
-                _no_evidence_message(query, resolved_time_range is not None),
+                payload["message"],
                 [],
                 empty_pack.to_json(),
                 warnings,
@@ -146,6 +183,9 @@ class AnswerGraph:
                 output_format=output_format,
                 context_pack_tron=None,
                 prompt_strategy=None,
+                mode="NO_EVIDENCE",
+                hints=payload["hints"],
+                actions=payload["actions"],
             )
         if (
             not time_only
@@ -211,27 +251,39 @@ class AnswerGraph:
         context_pack_tron = pack_tron_text if context_pack_format == "tron" else None
         if time_only and resolved_time_range is not None:
             timeline = _build_timeline_answer(evidence)
-            return _build_graph_result(
-                timeline.answer,
-                timeline.citations,
-                context_pack_json,
-                warnings,
+            return self._finalize_answer(
+                answer_text=timeline.answer,
+                citations=timeline.citations,
+                context_pack_json=context_pack_json,
+                warnings=warnings,
                 used_llm=False,
                 output_format=output_format,
                 context_pack_tron=context_pack_tron,
-                prompt_strategy=None,
+                prompt_strategy_payload=None,
+                query=query,
+                retrieve_filters=retrieve_filters,
+                resolved_time_range=resolved_time_range,
+                budget_manager=budget_manager,
+                budget_state=budget_state,
+                evidence=evidence,
             )
         if extractive_only:
             compressed = extractive_answer(evidence)
-            return _build_graph_result(
-                compressed.answer,
-                compressed.citations,
-                context_pack_json,
-                warnings,
+            return self._finalize_answer(
+                answer_text=compressed.answer,
+                citations=compressed.citations,
+                context_pack_json=context_pack_json,
+                warnings=warnings,
                 used_llm=False,
                 output_format=output_format,
                 context_pack_tron=context_pack_tron,
-                prompt_strategy=None,
+                prompt_strategy_payload=None,
+                query=query,
+                retrieve_filters=retrieve_filters,
+                resolved_time_range=resolved_time_range,
+                budget_manager=budget_manager,
+                budget_state=budget_state,
+                evidence=evidence,
             )
 
         system_prompt = self._prompt_registry.get("ANSWER_WITH_CONTEXT_PACK").system_prompt
@@ -270,6 +322,9 @@ class AnswerGraph:
                     (time.monotonic() - draft_start) * 1000,
                     {"stage_name": "answer_generate"},
                 )
+                budget_manager.record_stage(
+                    budget_state, "answer_draft", (time.monotonic() - draft_start) * 1000
+                )
                 draft_citations = _extract_citations(draft_text)
                 draft_valid = _verify_answer(draft_text, draft_citations, evidence)
             except Exception as exc:
@@ -277,15 +332,21 @@ class AnswerGraph:
                 self._log.warning("Draft generation failed; skipping: {}", exc)
 
         if speculative and draft_valid and draft_text is not None and speculative_confident:
-            return _build_graph_result(
-                draft_text,
-                draft_citations,
-                context_pack_json,
-                warnings,
+            return self._finalize_answer(
+                answer_text=draft_text,
+                citations=draft_citations,
+                context_pack_json=context_pack_json,
+                warnings=warnings,
                 used_llm=True,
                 output_format=output_format,
                 context_pack_tron=context_pack_tron,
-                prompt_strategy=None,
+                prompt_strategy_payload=None,
+                query=query,
+                retrieve_filters=retrieve_filters,
+                resolved_time_range=resolved_time_range,
+                budget_manager=budget_manager,
+                budget_state=budget_state,
+                evidence=evidence,
             )
 
         if speculative:
@@ -354,6 +415,9 @@ class AnswerGraph:
                 (time.monotonic() - answer_start) * 1000,
                 {"stage_name": "answer_generate"},
             )
+            budget_manager.record_stage(
+                budget_state, "answer_final", (time.monotonic() - answer_start) * 1000
+            )
             prompt_strategy_payload = _prompt_strategy_payload(final_provider)
             citations = _extract_citations(answer_text)
             final_valid = _verify_answer(answer_text, citations, evidence)
@@ -372,6 +436,249 @@ class AnswerGraph:
             answer_text = compressed.answer
             citations = compressed.citations
             used_llm = False
+        return self._finalize_answer(
+            answer_text=answer_text,
+            citations=citations,
+            context_pack_json=context_pack_json,
+            warnings=warnings,
+            used_llm=used_llm,
+            output_format=output_format,
+            context_pack_tron=context_pack_tron,
+            prompt_strategy_payload=prompt_strategy_payload,
+            query=query,
+            retrieve_filters=retrieve_filters,
+            resolved_time_range=resolved_time_range,
+            budget_manager=budget_manager,
+            budget_state=budget_state,
+            evidence=evidence,
+        )
+
+    def _finalize_answer(
+        self,
+        *,
+        answer_text: str,
+        citations: list[str],
+        context_pack_json: dict,
+        warnings: list[str],
+        used_llm: bool,
+        output_format: str,
+        context_pack_tron: str | None,
+        prompt_strategy_payload: dict | None,
+        query: str,
+        retrieve_filters: RetrieveFilters | None,
+        resolved_time_range: tuple[dt.datetime, dt.datetime] | None,
+        budget_manager: BudgetManager,
+        budget_state,
+        evidence: list[EvidenceItem],
+    ) -> AnswerGraphResult:
+        query_class = _classify_query(query, retrieve_filters)
+        query_id = _ensure_query_record(
+            self._retrieval._db,  # type: ignore[attr-defined]
+            query,
+            retrieve_filters,
+            query_class,
+            budget_manager.snapshot(),
+        )
+        evidence_by_id = {item.evidence_id: item for item in evidence}
+        evidence_ids = set(evidence_by_id)
+        span_ids: list[str] = []
+        for item in evidence_by_id.values():
+            for span in item.spans:
+                if span.span_id:
+                    span_ids.append(str(span.span_id))
+        has_citable_spans = False
+        if hasattr(self._retrieval, "_db"):
+            event_ids = [item.event_id for item in evidence_by_id.values()]
+            if event_ids:
+                with self._retrieval._db.session() as session:  # type: ignore[attr-defined]
+                    has_citable_spans = (
+                        session.execute(
+                            select(CitableSpanRecord.span_id).where(
+                                CitableSpanRecord.frame_id.in_(event_ids)
+                            )
+                        )
+                        .scalars()
+                        .first()
+                        is not None
+                    )
+        if has_citable_spans:
+            integrity = check_citations(self._retrieval._db, span_ids)  # type: ignore[attr-defined]
+            valid_span_ids = integrity.valid_span_ids
+            if self._config.next10.enabled:
+                provenance = verify_provenance(
+                    self._retrieval._db,  # type: ignore[attr-defined]
+                    query_id=query_id,
+                    span_ids=list(valid_span_ids),
+                )
+                if provenance.missing:
+                    warnings.append("provenance_missing")
+                valid_span_ids = provenance.valid_span_ids
+            valid_evidence_ids = {
+                evidence_id
+                for evidence_id, item in evidence_by_id.items()
+                if any(
+                    span.span_id and str(span.span_id) in valid_span_ids for span in item.spans
+                )
+            }
+            filtered_citations = [c for c in citations if c in valid_evidence_ids]
+            if set(filtered_citations) != set(citations):
+                warnings.append("citation_integrity_failed")
+        else:
+            integrity = check_citations(self._retrieval._db, [])  # type: ignore[attr-defined]
+            valid_span_ids = set()
+            valid_evidence_ids = set(evidence_by_id)
+            filtered_citations = list(citations)
+
+        coverage = coverage_metrics(
+            answer_text,
+            valid_evidence_ids,
+            no_evidence_mode=False,
+        )
+        coverage["evidence_count"] = len(valid_span_ids)
+        thresholds = _coverage_thresholds(self._config)
+        confidence = {
+            "coverage": coverage.get("sentence_coverage", 0.0),
+            "integrity_ok": not bool(integrity.invalid_span_ids),
+            "citation_count": len(filtered_citations),
+        }
+        mode = "NORMAL"
+        conflict = detect_conflicts(evidence)
+        conflict_summary = conflict.summary if conflict.conflict or conflict.changed_over_time else None
+        if conflict.conflict:
+            mode = "CONFLICT"
+            answer_text = _conflict_message(conflict.summary)
+        if mode != "CONFLICT":
+            if not valid_evidence_ids or coverage.get("sentence_coverage", 0.0) < thresholds[1]:
+                mode = "NO_EVIDENCE"
+            elif coverage.get("sentence_coverage", 0.0) < thresholds[0]:
+                mode = "NO_EVIDENCE"
+
+        hints: list[dict] | None = None
+        actions: list[dict] | None = None
+        if mode == "NO_EVIDENCE":
+            payload = build_no_evidence_payload(
+                query, has_time_range=resolved_time_range is not None
+            )
+            answer_text = payload["message"]
+            citations = []
+            hints = payload["hints"]
+            actions = payload["actions"]
+            coverage = coverage_metrics(
+                answer_text,
+                valid_evidence_ids,
+                no_evidence_mode=True,
+            )
+            coverage["evidence_count"] = len(valid_span_ids)
+            confidence["coverage"] = coverage.get("sentence_coverage", 0.0)
+        else:
+            citations = filtered_citations
+            hints = []
+            actions = []
+
+        answer_id = stable_id(
+            "answer",
+            {"query_id": query_id, "answer_text": answer_text, "citations": citations},
+        )
+        sentence_citations = extract_sentence_citations(answer_text, valid_evidence_ids)
+        evidence_to_span = {
+            evidence_id: next(
+                (
+                    str(span.span_id)
+                    for span in item.spans
+                    if span.span_id and str(span.span_id) in valid_span_ids
+                ),
+                None,
+            )
+            for evidence_id, item in evidence_by_id.items()
+        }
+        budgets_json = {
+            "stage_ms_used": budget_state.stage_ms_used,
+            "degraded_stages": budget_state.degraded_stages,
+        }
+
+        def _persist_answer(session) -> None:
+            existing = session.get(AnswerRecord, answer_id)
+            if not existing:
+                session.add(
+                    AnswerRecord(
+                        answer_id=answer_id,
+                        query_id=query_id,
+                        mode=mode,
+                        coverage_json=coverage,
+                        confidence_json=confidence,
+                        budgets_json=budgets_json,
+                        answer_text=answer_text,
+                        stale=bool(integrity.invalid_span_ids),
+                        answer_format_version=1,
+                        schema_version=1,
+                        created_at=dt.datetime.now(dt.timezone.utc),
+                    )
+                )
+                session.flush()
+            existing_pairs: set[tuple[str, str | None]] = set()
+            if existing:
+                rows = session.execute(
+                    select(AnswerCitationRecord.sentence_id, AnswerCitationRecord.span_id).where(
+                        AnswerCitationRecord.answer_id == answer_id
+                    )
+                ).all()
+                existing_pairs = {(row[0], row[1]) for row in rows}
+            for sentence in sentence_citations:
+                for citation in sentence.citations:
+                    span_id = evidence_to_span.get(citation)
+                    if span_id is None:
+                        continue
+                    if (sentence.sentence_id, span_id) in existing_pairs:
+                        continue
+                    session.add(
+                        AnswerCitationRecord(
+                            answer_id=answer_id,
+                            sentence_id=sentence.sentence_id,
+                            sentence_index=sentence.index,
+                            span_id=span_id,
+                            citable=True,
+                            created_at=dt.datetime.now(dt.timezone.utc),
+                        )
+                    )
+
+        self._retrieval._db.transaction(_persist_answer)  # type: ignore[attr-defined]
+        update_tier_stats(
+            self._retrieval._db,  # type: ignore[attr-defined]
+            query_id=query_id,
+            query_class=query_class,
+            cited_span_ids=valid_span_ids,
+        )
+        sentence_payload = [
+            {"sentence_id": s.sentence_id, "citations": s.citations} for s in sentence_citations
+        ]
+        chain_appended = False
+        if self._config.next10.enabled:
+            chain_appended = append_provenance_chain(
+                self._config,
+                self._retrieval._db,  # type: ignore[attr-defined]
+                self._ledger,
+                answer_id=answer_id,
+                query_id=query_id,
+                evidence_to_span=evidence_to_span,
+                sentence_citations=sentence_payload,
+            )
+        if chain_appended:
+            try:
+                self._ledger.append_entry(
+                    "answer",
+                    {
+                        "answer_id": answer_id,
+                        "query_id": query_id,
+                        "mode": mode,
+                        "citations": citations,
+                        "span_ids": sorted(valid_span_ids),
+                        "coverage": coverage,
+                        "confidence": confidence,
+                    },
+                    answer_id=answer_id,
+                )
+            except Exception as exc:  # pragma: no cover - best effort
+                self._log.debug("Failed to append answer ledger entry: {}", exc)
 
         return _build_graph_result(
             answer_text,
@@ -382,6 +689,16 @@ class AnswerGraph:
             output_format=output_format,
             context_pack_tron=context_pack_tron,
             prompt_strategy=prompt_strategy_payload,
+            mode=mode,
+            coverage=coverage,
+            confidence=confidence,
+            budgets=budgets_json,
+            degraded_stages=budget_state.degraded_stages,
+            hints=hints,
+            actions=actions,
+            conflict_summary=conflict_summary,
+            answer_id=answer_id,
+            query_id=query_id,
         )
 
     def _build_evidence(
@@ -398,9 +715,14 @@ class AnswerGraph:
             retrieve_filters = RetrieveFilters(
                 apps=filters.get("app"), domains=filters.get("domain")
             )
-        batch = self._retrieval.retrieve(
-            query, time_range, retrieve_filters, limit=k, mode=retrieval_mode
-        )
+        if self._config.next10.enabled and hasattr(self._retrieval, "retrieve_tiered"):
+            batch = self._retrieval.retrieve_tiered(
+                query, time_range, retrieve_filters, limit=k, mode=retrieval_mode
+            )
+        else:
+            batch = self._retrieval.retrieve(
+                query, time_range, retrieve_filters, limit=k, mode=retrieval_mode
+            )
         results = list(batch.results)
         no_evidence = bool(batch.no_evidence)
         if not results and time_range and not query:
@@ -410,6 +732,20 @@ class AnswerGraph:
         results = [item for item in results if not item.non_citable]
         if not results:
             return [], [], True
+        span_lookup: dict[tuple[str, str], CitableSpanRecord] = {}
+        fallback_spans: dict[str, CitableSpanRecord] = {}
+        if hasattr(self._retrieval, "_db"):
+            event_ids = [item.event.event_id for item in results]
+            if event_ids:
+                with self._retrieval._db.session() as session:  # type: ignore[attr-defined]
+                    rows = session.execute(
+                        select(CitableSpanRecord).where(CitableSpanRecord.frame_id.in_(event_ids))
+                    ).scalars().all()
+                for row in rows:
+                    if row.frame_id not in fallback_spans:
+                        fallback_spans[row.frame_id] = row
+                    if row.legacy_span_key:
+                        span_lookup[(row.frame_id, row.legacy_span_key)] = row
         evidence: list[EvidenceItem] = []
         events: list[EventRecord] = []
         for idx, result in enumerate(results, start=1):
@@ -418,16 +754,33 @@ class AnswerGraph:
             snippet = result.snippet or (event.ocr_text or "")[:500]
             frame_size = _frame_size_from_tags(event.tags)
             spans: list[EvidenceSpan] = []
-            if result.bbox:
-                bbox_norm = _bbox_norm(result.bbox, frame_size)
-                span_id = result.matched_span_keys[0] if result.matched_span_keys else "S0"
+            matched_span = None
+            if result.matched_span_keys:
+                for key in result.matched_span_keys:
+                    matched_span = span_lookup.get((event.event_id, str(key)))
+                    if matched_span:
+                        break
+            if matched_span is None:
+                matched_span = fallback_spans.get(event.event_id)
+            bbox = result.bbox
+            bbox_norm = None
+            span_id = result.matched_span_keys[0] if result.matched_span_keys else "S0"
+            if matched_span:
+                span_id = matched_span.span_id
+                if matched_span.bbox is not None:
+                    bbox = matched_span.bbox
+                if matched_span.bbox_norm is not None:
+                    bbox_norm = matched_span.bbox_norm
+            if bbox and bbox_norm is None:
+                bbox_norm = _bbox_norm(bbox, frame_size)
+            if bbox:
                 spans.append(
                     EvidenceSpan(
                         span_id=str(span_id),
                         start=0,
                         end=len(snippet),
                         conf=0.5,
-                        bbox=result.bbox,
+                        bbox=bbox,
                         bbox_norm=bbox_norm,
                     )
                 )
@@ -466,6 +819,8 @@ class AnswerGraph:
                         "matched_spans": getattr(result, "matched_span_keys", []),
                         "ts_start": event.ts_start.isoformat(),
                         "non_citable": getattr(result, "non_citable", False),
+                        "query_id": getattr(batch, "query_id", None),
+                        "tier_plan": getattr(batch, "tier_plan", None),
                     },
                 )
             )
@@ -835,6 +1190,30 @@ def _no_evidence_message(query: str, has_time_range: bool) -> str:
     return "No evidence found. Try rephrasing the query or adding a time range."
 
 
+def _conflict_message(summary: dict | None) -> str:
+    if not summary or not summary.get("conflicts"):
+        return "Conflicting evidence found. Please review the cited alternatives."
+    lines = ["Conflicting evidence found for:"]
+    for field, values in summary.get("conflicts", {}).items():
+        if not values:
+            continue
+        formatted = ", ".join(item.get("value", "") for item in values if item.get("value"))
+        lines.append(f"- {field}: {formatted}")
+    return "\n".join(lines)
+
+
+def _coverage_thresholds(config: AppConfig) -> tuple[float, float]:
+    path = config.next10.tiers_defaults_path
+    try:
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    coverage = payload.get("coverage", {}) if isinstance(payload.get("coverage"), dict) else {}
+    min_normal = float(coverage.get("min_coverage_normal", 0.6))
+    min_no_evidence = float(coverage.get("min_coverage_no_evidence", 0.2))
+    return min_normal, min_no_evidence
+
+
 def _build_graph_result(
     answer: str,
     citations: list[str],
@@ -845,6 +1224,16 @@ def _build_graph_result(
     output_format: str,
     context_pack_tron: str | None,
     prompt_strategy: dict | None = None,
+    mode: str = "NORMAL",
+    coverage: dict | None = None,
+    confidence: dict | None = None,
+    budgets: dict | None = None,
+    degraded_stages: list[str] | None = None,
+    hints: list[dict] | None = None,
+    actions: list[dict] | None = None,
+    conflict_summary: dict | None = None,
+    answer_id: str | None = None,
+    query_id: str | None = None,
 ) -> AnswerGraphResult:
     response_json = None
     response_tron = None
@@ -854,6 +1243,16 @@ def _build_graph_result(
             "citations": citations,
             "warnings": warnings,
             "used_llm": used_llm,
+            "mode": mode,
+            "coverage": coverage,
+            "confidence": confidence,
+            "budgets": budgets,
+            "degraded_stages": degraded_stages or [],
+            "hints": hints or [],
+            "actions": actions or [],
+            "conflict_summary": conflict_summary,
+            "answer_id": answer_id,
+            "query_id": query_id,
             "context_pack": context_pack,
             "evidence": build_evidence_payload(context_pack),
         }
@@ -867,6 +1266,16 @@ def _build_graph_result(
         context_pack=context_pack,
         warnings=warnings,
         used_llm=used_llm,
+        mode=mode,
+        coverage=coverage,
+        confidence=confidence,
+        budgets=budgets,
+        degraded_stages=degraded_stages,
+        hints=hints,
+        actions=actions,
+        conflict_summary=conflict_summary,
+        answer_id=answer_id,
+        query_id=query_id,
         response_json=response_json,
         response_tron=response_tron,
         context_pack_tron=context_pack_tron,

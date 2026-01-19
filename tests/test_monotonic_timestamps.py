@@ -17,6 +17,7 @@ def test_frame_ordering_uses_monotonic_ts():
         privacy,
         excluded=False,
         masked_regions_applied=False,
+        capture_paused=False,
         offline=True,
     )
     t0 = dt.datetime(2026, 1, 17, 12, 0, tzinfo=dt.timezone.utc)

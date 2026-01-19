@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 import sys
@@ -34,6 +35,12 @@ def is_dev_mode(env: dict[str, str] | None = None) -> bool:
     env = env or os.environ
     value = (env.get("APP_ENV") or env.get("AUTOCAPTURE_ENV") or "").strip().lower()
     return value in {"dev", "development"}
+
+
+def _default_allow_insecure_dev() -> bool:
+    if os.environ.get("AUTOCAPTURE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    return is_dev_mode()
 
 
 class HIDConfig(BaseModel):
@@ -503,6 +510,14 @@ class DatabaseConfig(BaseModel):
         "AUTOCAPTURE_SQLCIPHER_KEY",
         description="Environment variable for SQLCipher key hex.",
     )
+    secure_mode_required: bool = Field(
+        True,
+        description="Refuse to start if SQLite is not encrypted and secure mode is required.",
+    )
+    allow_insecure_dev: bool = Field(
+        default_factory=_default_allow_insecure_dev,
+        description="Allow insecure (unencrypted) SQLite for dev/test only.",
+    )
     require_tls_for_remote: bool = Field(
         True,
         description="Require TLS for remote Postgres connections.",
@@ -607,6 +622,28 @@ class FeatureFlagsConfig(BaseModel):
     enable_otel: bool = Field(False, description="Enable OpenTelemetry tracing/metrics.")
 
 
+class Next10Config(BaseModel):
+    enabled: bool = Field(True, description="Enable SPEC-260117 Next-10 enforcement.")
+    policy_defaults_path: Path = Field(
+        Path("config/defaults/policy.json"),
+        description="Path to default privacy policy JSON.",
+    )
+    budgets_defaults_path: Path = Field(
+        Path("config/defaults/budgets.json"),
+        description="Path to default stage budgets JSON.",
+    )
+    tiers_defaults_path: Path = Field(
+        Path("config/defaults/tiers.json"),
+        description="Path to default retrieval tiers JSON.",
+    )
+    tier_stats_window: int = Field(200, ge=50, description="Window size for tier stats.")
+    tier_help_rate_min: float = Field(0.05, ge=0.0, le=1.0)
+    index_versions: dict[str, str] = Field(
+        default_factory=lambda: {"event_fts": "v1", "span_fts": "v1", "vector": "v1"},
+        description="Pinned index/engine versions for provenance records.",
+    )
+
+
 class APIConfig(BaseModel):
     bind_host: str = Field("127.0.0.1", description="Bind host for the local API server.")
     port: int = Field(8008, ge=1024, le=65535)
@@ -673,6 +710,7 @@ class PrivacyConfig(BaseModel):
     exclude_processes: list[str] = Field(default_factory=list)
     exclude_window_title_regex: list[str] = Field(default_factory=list)
     exclude_regions: list[dict] = Field(default_factory=list)
+    mask_regions: list[dict] = Field(default_factory=list)
 
 
 class OutputConfig(BaseModel):
@@ -1195,6 +1233,7 @@ class AppConfig(BaseModel):
     encryption: EncryptionConfig = EncryptionConfig()
     observability: ObservabilityConfig = ObservabilityConfig()
     features: FeatureFlagsConfig = FeatureFlagsConfig()
+    next10: Next10Config = Next10Config()
     api: APIConfig = APIConfig()
     llm: LLMConfig = LLMConfig()
     llm_governor: LLMGovernorConfig = LLMGovernorConfig()
@@ -1488,11 +1527,52 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
         exclude_regions = privacy.get("exclude_regions")
         if isinstance(exclude_regions, list):
             config.privacy.exclude_regions = list(exclude_regions)
+        mask_regions = privacy.get("mask_regions")
+        if isinstance(mask_regions, list):
+            config.privacy.mask_regions = list(mask_regions)
     active_preset = raw.get("active_preset")
     if isinstance(active_preset, str) and active_preset:
         config.presets.active_preset = active_preset
     apply_preset(config, config.presets.active_preset)
+    apply_policy_defaults(config)
     return apply_dev_overrides(config)
+
+
+def apply_policy_defaults(config: AppConfig) -> AppConfig:
+    path = Path(config.next10.policy_defaults_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return config
+    if not isinstance(payload, dict):
+        return config
+
+    def _merge_list(current: list, defaults: list) -> list:
+        merged = list(current)
+        for item in defaults:
+            if item not in merged:
+                merged.append(item)
+        return merged
+
+    if isinstance(payload.get("exclude_processes"), list):
+        config.privacy.exclude_processes = _merge_list(
+            config.privacy.exclude_processes,
+            payload.get("exclude_processes", []),
+        )
+    if isinstance(payload.get("exclude_window_title_regex"), list):
+        config.privacy.exclude_window_title_regex = _merge_list(
+            config.privacy.exclude_window_title_regex,
+            payload.get("exclude_window_title_regex", []),
+        )
+    exclude_regions = payload.get("exclude_regions") if isinstance(payload.get("exclude_regions"), list) else []
+    mask_regions = payload.get("mask_regions") if isinstance(payload.get("mask_regions"), list) else []
+    if exclude_regions or mask_regions:
+        combined = _merge_list(config.privacy.exclude_regions, exclude_regions)
+        combined = _merge_list(combined, mask_regions)
+        config.privacy.exclude_regions = combined
+    if isinstance(payload.get("mask_regions"), list):
+        config.privacy.mask_regions = _merge_list(config.privacy.mask_regions, mask_regions)
+    return config
 
 
 def apply_dev_overrides(config: AppConfig) -> AppConfig:
