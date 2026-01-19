@@ -68,6 +68,23 @@ runtime_mode_changes_total = Counter("runtime_mode_changes_total", "Runtime mode
 runtime_pause_reason_total = Counter(
     "runtime_pause_reason_total", "Runtime pause reasons", ["reason"]
 )
+plugins_discovered_total = Counter("plugins_discovered_total", "Plugins discovered")
+plugins_enabled_total = Gauge("plugins_enabled_total", "Enabled plugins count")
+plugin_load_failures_total = Counter(
+    "plugin_load_failures_total",
+    "Plugin load failures",
+    ["plugin_id"],
+)
+extension_resolution_conflicts_total = Counter(
+    "extension_resolution_conflicts_total",
+    "Extension resolution conflicts",
+    ["kind", "extension_id"],
+)
+plugin_healthcheck_latency_ms = Histogram(
+    "plugin_healthcheck_latency_ms",
+    "Plugin healthcheck latency (ms)",
+    ["plugin_id"],
+)
 
 # Folder size stats are expensive on large trees; only refresh periodically.
 _FOLDER_SIZE_UPDATE_INTERVAL_S = 60.0

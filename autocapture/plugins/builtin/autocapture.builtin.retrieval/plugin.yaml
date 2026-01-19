@@ -1,0 +1,19 @@
+schema_version: 1
+plugin_id: autocapture.builtin.retrieval
+name: Autocapture Builtin Retrieval
+version: 1.0.0
+description: Built-in retrieval strategies.
+enabled_by_default: true
+extensions:
+  - kind: retrieval.strategy
+    id: local
+    name: Local Retrieval
+    aliases: [default]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_retrieval_local

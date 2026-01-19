@@ -1,0 +1,31 @@
+schema_version: 1
+plugin_id: autocapture.builtin.reranker
+name: Autocapture Builtin Reranker
+version: 1.0.0
+description: Built-in reranker backends.
+enabled_by_default: true
+extensions:
+  - kind: reranker
+    id: local
+    name: Local Cross-Encoder
+    aliases: [enabled]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_reranker_local
+  - kind: reranker
+    id: disabled
+    name: Disabled
+    aliases: ["off"]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_reranker_disabled

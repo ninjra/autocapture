@@ -7,7 +7,7 @@ from typing import Any
 
 from sqlalchemy import select
 
-from ..contracts_utils import canonical_json_dumps, hash_canonical, stable_id
+from ..contracts_utils import hash_canonical, stable_id
 from ..logging_utils import get_logger
 from ..storage.database import DatabaseManager
 from ..storage.models import ProvenanceLedgerEntryRecord

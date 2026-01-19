@@ -11,6 +11,8 @@ from ..config import AppConfig, LLMConfig, ProviderRoutingConfig, PrivacyConfig
 from ..llm.providers import LLMProvider, OpenAICompatibleProvider, OpenAIProvider, OllamaProvider
 from ..llm.governor import get_global_governor
 from ..llm.prompt_strategy import PromptStrategySettings
+from ..model_ops import StageRouter
+from ..plugins import PluginManager
 
 
 @dataclass(frozen=True)
@@ -44,6 +46,7 @@ class ProviderRouter:
         offline: bool,
         privacy: PrivacyConfig,
         prompt_strategy: PromptStrategySettings | None = None,
+        plugin_manager: PluginManager | None = None,
     ) -> None:
         self._config = config
         self._routing = routing
@@ -56,8 +59,18 @@ class ProviderRouter:
         self._governor = get_global_governor(config) if config else None
         self._log = get_logger("provider_router")
         self._secrets = EnvSecretStore()
+        self._plugins = plugin_manager or (PluginManager(config) if config else None)
+        self._stage_router = StageRouter(config, plugin_manager=self._plugins) if config else None
 
     def select_llm(self) -> tuple[LLMProvider, RoutingDecision]:
+        if self._stage_router is not None:
+            provider, decision = self._stage_router.select_llm(
+                "final_answer",
+                routing_override=self._routing.llm,
+            )
+            selection = RoutingDecision(llm_provider=decision.provider)
+            self._log.info("Provider selection: kind=llm provider={}", selection.llm_provider)
+            return provider, selection
         if self._routing.llm == "openai" and not self._privacy.cloud_enabled and not self._offline:
             raise RuntimeError(
                 "Cloud provider blocked. Enable a cloud profile (privacy.cloud_enabled=true) "
@@ -132,6 +145,8 @@ class ProviderRouter:
 
     def select_embedding(self) -> ProviderSelection:
         provider_id = (self._routing.embedding or "local").strip().lower()
+        if self._plugins is not None:
+            self._plugins.resolve_record("embedder.text", provider_id)
         caps = ProviderCapabilities(supports_embeddings=True, cloud=False)
         selection = ProviderSelection(kind="embedding", provider_id=provider_id, capabilities=caps)
         self._log.info(
@@ -143,6 +158,8 @@ class ProviderRouter:
 
     def select_reranker(self) -> ProviderSelection:
         provider_id = (self._routing.reranker or "disabled").strip().lower()
+        if self._plugins is not None:
+            self._plugins.resolve_record("reranker", provider_id)
         caps = ProviderCapabilities(supports_rerank=True, cloud=False)
         selection = ProviderSelection(kind="reranker", provider_id=provider_id, capabilities=caps)
         self._log.info(
@@ -154,6 +171,8 @@ class ProviderRouter:
 
     def select_ocr(self) -> ProviderSelection:
         provider_id = (self._routing.ocr or "local").strip().lower()
+        if self._plugins is not None:
+            self._plugins.resolve_record("ocr.engine", provider_id)
         caps = ProviderCapabilities(supports_ocr=True, cloud=False)
         selection = ProviderSelection(kind="ocr", provider_id=provider_id, capabilities=caps)
         self._log.info(

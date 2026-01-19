@@ -1,0 +1,18 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autocapture-example-entrypoint-plugin"
+version = "0.1.0"
+description = "Example entry-point plugin for AutoCapture."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = ["autocapture"]
+
+[project.entry-points."autocapture.plugins"]
+example.entrypoint = "autocapture_example_plugin.factories:create_example_provider"
+
+[tool.hatch.build.targets.wheel]
+packages = ["autocapture_example_plugin"]
+include = ["autocapture_plugins/**"]

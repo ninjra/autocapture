@@ -82,7 +82,7 @@ async def test_speculative_verifier_blocks_early_exit(monkeypatch, tmp_path) -> 
 
     verifier_calls = []
 
-    def fake_verify(_answer, _citations, _evidence):
+    def fake_verify(_answer, _citations, _evidence, _verifier=None):
         verifier_calls.append(True)
         return False
 

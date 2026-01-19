@@ -45,6 +45,7 @@ from ..contracts_utils import stable_id
 from ..runtime_budgets import BudgetManager
 from ..memory.verification import Claim, RulesVerifier
 from ..observability.otel import otel_span, record_histogram
+from ..plugins import PluginManager
 
 
 @dataclass
@@ -85,6 +86,7 @@ class AnswerGraph:
         *,
         prompt_registry,
         entities,
+        plugin_manager: PluginManager | None = None,
     ) -> None:
         self._config = config
         self._retrieval = retrieval
@@ -92,13 +94,16 @@ class AnswerGraph:
         self._entities = entities
         self._log = get_logger("answer_graph")
         self._ledger = LedgerWriter(retrieval._db)  # type: ignore[attr-defined]
-        self._stage_router = StageRouter(config)
+        self._plugins = plugin_manager or PluginManager(config)
+        self._stage_router = StageRouter(config, plugin_manager=self._plugins)
         self._thread_retrieval = ThreadRetrievalService(
             config,
             retrieval._db,  # type: ignore[attr-defined]
             embedder=getattr(retrieval, "_embedder", None),
             vector_index=getattr(retrieval, "_vector", None),
         )
+        self._compressor = None
+        self._verifier = None
 
     async def run(
         self,
@@ -268,7 +273,8 @@ class AnswerGraph:
                 evidence=evidence,
             )
         if extractive_only:
-            compressed = extractive_answer(evidence)
+            compressor = self._get_compressor()
+            compressed = compressor.compress(evidence)
             return self._finalize_answer(
                 answer_text=compressed.answer,
                 citations=compressed.citations,
@@ -326,7 +332,8 @@ class AnswerGraph:
                     budget_state, "answer_draft", (time.monotonic() - draft_start) * 1000
                 )
                 draft_citations = _extract_citations(draft_text)
-                draft_valid = _verify_answer(draft_text, draft_citations, evidence)
+                verifier = self._get_verifier()
+                draft_valid = _verify_answer(draft_text, draft_citations, evidence, verifier)
             except Exception as exc:
                 warnings.append("draft_failed")
                 self._log.warning("Draft generation failed; skipping: {}", exc)
@@ -420,7 +427,8 @@ class AnswerGraph:
             )
             prompt_strategy_payload = _prompt_strategy_payload(final_provider)
             citations = _extract_citations(answer_text)
-            final_valid = _verify_answer(answer_text, citations, evidence)
+            verifier = self._get_verifier()
+            final_valid = _verify_answer(answer_text, citations, evidence, verifier)
         except Exception as exc:
             warnings.append("final_failed")
             self._log.warning("Final answer failed; falling back: {}", exc)
@@ -480,7 +488,6 @@ class AnswerGraph:
             budget_manager.snapshot(),
         )
         evidence_by_id = {item.evidence_id: item for item in evidence}
-        evidence_ids = set(evidence_by_id)
         span_ids: list[str] = []
         for item in evidence_by_id.values():
             for span in item.spans:
@@ -924,6 +931,38 @@ class AnswerGraph:
         second = scores[1] if len(scores) > 1 else 0.0
         return top, max(0.0, top - second)
 
+    def _get_compressor(self):
+        if self._compressor is not None:
+            return self._compressor
+        compressor_id = (self._config.routing.compressor or "extractive").strip().lower()
+        try:
+            self._compressor = self._plugins.resolve_extension(
+                "compressor",
+                compressor_id,
+            )
+        except Exception as exc:
+            self._log.warning("Compressor plugin failed ({}): {}", compressor_id, exc)
+            self._compressor = None
+        if self._compressor is None:
+            self._compressor = _ExtractiveWrapper()
+        return self._compressor
+
+    def _get_verifier(self):
+        if self._verifier is not None:
+            return self._verifier
+        verifier_id = (self._config.routing.verifier or "rules").strip().lower()
+        try:
+            self._verifier = self._plugins.resolve_extension("verifier", verifier_id)
+        except Exception as exc:
+            self._log.warning("Verifier plugin failed ({}): {}", verifier_id, exc)
+            self._verifier = RulesVerifier()
+        return self._verifier
+
+
+class _ExtractiveWrapper:
+    def compress(self, evidence: list[EvidenceItem]) -> CompressedAnswer:
+        return extractive_answer(evidence)
+
 
 def _extract_citations(answer_text: str) -> list[str]:
     import re
@@ -938,10 +977,14 @@ def _valid_citations(citations: list[str], evidence: list) -> bool:
     return all(citation in evidence_ids for citation in citations)
 
 
-def _verify_answer(answer_text: str, citations: list[str], evidence: list[EvidenceItem]) -> bool:
+def _verify_answer(
+    answer_text: str,
+    citations: list[str],
+    evidence: list[EvidenceItem],
+    verifier: RulesVerifier,
+) -> bool:
     if not _valid_citations(citations, evidence):
         return False
-    verifier = RulesVerifier()
     errors = verifier.verify(
         [
             Claim(

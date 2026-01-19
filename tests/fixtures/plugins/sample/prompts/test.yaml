@@ -1,0 +1,5 @@
+name: TEST_PROMPT
+version: 1
+system_prompt: "Test prompt."
+tags:
+  - test

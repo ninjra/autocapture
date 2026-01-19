@@ -1,0 +1,1 @@
+"""Plugin fixtures for tests."""

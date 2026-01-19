@@ -21,6 +21,7 @@ from .memory.context_pack import EvidenceItem, EvidenceSpan, build_context_pack
 from .memory.entities import EntityResolver, SecretStore
 from .security.token_vault import TokenVaultStore
 from .memory.prompts import PromptRegistry, PromptTemplate
+from .plugins import PluginManager
 from .memory.retrieval import RetrievalService
 from .memory.router import ProviderRouter
 from .memory.verification import Claim, RulesVerifier
@@ -56,7 +57,7 @@ def run_eval(
     secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
     entities = EntityResolver(db, secret, token_vault=TokenVaultStore(config, db))
     verifier = RulesVerifier()
-    prompts = _load_prompt_registry(overrides)
+    prompts = _load_prompt_registry(config, overrides)
 
     items = json.loads(eval_path.read_text(encoding="utf-8"))
     total = len(items)
@@ -144,8 +145,13 @@ def run_eval(
     )
 
 
-def _load_prompt_registry(overrides: Iterable[object] | None) -> PromptRegistry:
-    registry = PromptRegistry.from_package("autocapture.prompts.derived")
+def _load_prompt_registry(config: AppConfig, overrides: Iterable[object] | None) -> PromptRegistry:
+    plugins = PluginManager(config)
+    registry = PromptRegistry.from_package(
+        "autocapture.prompts.derived",
+        extra_dirs=plugins.prompt_bundles(),
+        allow_external=True,
+    )
     registry.load()
     if not overrides:
         return registry

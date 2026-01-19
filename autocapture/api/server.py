@@ -71,6 +71,8 @@ from ..indexing.vector_index import VectorIndex
 from ..indexing.pruner import IndexPruner
 from ..model_ops import StageRouter
 from ..memory.verification import Claim, RulesVerifier
+from ..plugins import PluginManager
+from ..plugins.errors import PluginLockError, PluginResolutionError
 from ..security.oidc import GoogleOIDCVerifier
 from ..security.session import SecuritySessionManager, is_test_mode
 from ..storage.database import DatabaseManager
@@ -265,6 +267,61 @@ class SettingsSnapshot(BaseModel):
     settings: dict[str, Any]
 
 
+class PluginEnableRequest(BaseModel):
+    plugin_id: str
+    accept_hashes: bool = False
+
+
+class PluginDisableRequest(BaseModel):
+    plugin_id: str
+
+
+class PluginLockRequest(BaseModel):
+    plugin_id: str
+
+
+class PluginExtensionInfo(BaseModel):
+    kind: str
+    id: str
+    name: str
+    plugin_id: str
+    plugin_name: str | None = None
+    aliases: list[str] = Field(default_factory=list)
+    pillars: dict[str, Any] | None = None
+    ui: dict[str, Any] | None = None
+    source: str | None = None
+    enabled: bool = True
+
+
+class PluginCatalogEntry(BaseModel):
+    plugin_id: str
+    name: str
+    version: str
+    description: str | None = None
+    source: str
+    enabled: bool
+    blocked: bool
+    reason: str | None = None
+    lock_status: str
+    lock_manifest: str | None = None
+    lock_code: str | None = None
+    manifest_sha256: str
+    code_sha256: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    extensions: list[PluginExtensionInfo] = Field(default_factory=list)
+
+
+class PluginCatalogResponse(BaseModel):
+    safe_mode: bool
+    plugins: list[PluginCatalogEntry]
+    warnings: list[str] = Field(default_factory=list)
+
+
+class PluginExtensionsResponse(BaseModel):
+    kind: str
+    extensions: list[PluginExtensionInfo]
+
+
 class SuggestRequest(BaseModel):
     q: str
 
@@ -342,16 +399,66 @@ def create_app(
     embedder: EmbeddingService | None = None,
     vector_index: VectorIndex | None = None,
     worker_supervisor: object | None = None,
+    plugin_manager: PluginManager | None = None,
 ) -> FastAPI:
     init_otel(config.features.enable_otel)
     db_owned = db_manager is None
     db = db_manager or DatabaseManager(config.database)
-    retrieval = RetrievalService(
-        db,
-        config,
-        embedder=embedder,
-        vector_index=vector_index,
-    )
+    plugins = plugin_manager or PluginManager(config)
+    embedder_obj = embedder
+    if embedder_obj is None:
+        embedder_id = (config.routing.embedding or "local").strip().lower()
+        try:
+            embedder_obj = plugins.resolve_extension("embedder.text", embedder_id)
+        except Exception as exc:
+            log = get_logger("api")
+            log.warning("Embedder plugin failed ({}): {}", embedder_id, exc)
+            embedder_obj = None
+    if embedder_obj is None:
+        embedder_obj = EmbeddingService(config.embed)
+    dim = getattr(embedder_obj, "dim", None) or int(config.qdrant.text_vector_size)
+    if vector_index is None:
+        try:
+            backend = plugins.resolve_extension(
+                "vector.backend",
+                "qdrant",
+                factory_kwargs={"dim": dim},
+            )
+        except Exception as exc:
+            log = get_logger("api")
+            log.warning("Vector backend plugin failed: {}", exc)
+            backend = None
+        vector_index = VectorIndex(config, dim, backend=backend)
+    reranker = None
+    reranker_id = (config.routing.reranker or "disabled").strip().lower()
+    try:
+        reranker = plugins.resolve_extension("reranker", reranker_id)
+    except Exception as exc:
+        log = get_logger("api")
+        log.warning("Reranker plugin failed ({}): {}", reranker_id, exc)
+        reranker = None
+    retrieval_id = (config.routing.retrieval or "local").strip().lower()
+    try:
+        retrieval = plugins.resolve_extension(
+            "retrieval.strategy",
+            retrieval_id,
+            factory_kwargs={
+                "db": db,
+                "embedder": embedder_obj,
+                "vector_index": vector_index,
+                "reranker": reranker,
+            },
+        )
+    except Exception as exc:
+        log = get_logger("api")
+        log.warning("Retrieval plugin failed ({}): {}", retrieval_id, exc)
+        retrieval = RetrievalService(
+            db,
+            config,
+            embedder=embedder_obj,
+            vector_index=vector_index,
+            reranker=reranker,
+        )
     thread_retrieval = ThreadRetrievalService(
         config,
         db,
@@ -367,6 +474,8 @@ def create_app(
         "autocapture.prompts.derived",
         hardening_enabled=config.templates.enabled,
         log_provenance=config.templates.log_provenance,
+        extra_dirs=plugins.prompt_bundles(),
+        allow_external=True,
     )
     PromptLibraryService(db).sync_registry(prompt_registry)
     answer_graph = AnswerGraph(
@@ -374,6 +483,7 @@ def create_app(
         retrieval,
         prompt_registry=prompt_registry,
         entities=entities,
+        plugin_manager=plugins,
     )
     retention = RetentionManager(
         config.storage, config.retention, db, Path(config.capture.data_dir)
@@ -421,10 +531,11 @@ def create_app(
     app = FastAPI(**app_kwargs)
     app.state.db = db
     app.state.vector_index = vector_index
-    app.state.embedder = embedder
+    app.state.embedder = embedder_obj
     app.state.worker_supervisor = worker_supervisor
     app.state.memory_store = memory_store
     app.state.memory_compiler = memory_compiler
+    app.state.plugins = plugins
 
     oidc_verifier: GoogleOIDCVerifier | None = None
     if config.mode.mode == "remote":
@@ -453,6 +564,7 @@ def create_app(
         "/api/delete_all",
         "/api/events/ingest",
         "/api/storage",
+        "/api/plugins",
     )
 
     def _maybe_build_memory_snapshot(
@@ -502,6 +614,61 @@ def create_app(
     ui_dir = resource_root() / "autocapture" / "ui" / "web"
     if ui_dir.exists():
         app.mount("/static", StaticFiles(directory=ui_dir), name="static")
+
+    def _dump_model(value: Any) -> Any:
+        if value is None:
+            return None
+        if hasattr(value, "model_dump"):
+            return value.model_dump(mode="json")
+        return value
+
+    def _plugin_status_map() -> dict[str, Any]:
+        return {status.plugin.plugin_id: status for status in plugins.catalog()}
+
+    def _extension_info_from_manifest(
+        ext: Any,
+        *,
+        plugin_id: str,
+        plugin_name: str | None,
+        source: str | None,
+        enabled: bool,
+    ) -> PluginExtensionInfo:
+        return PluginExtensionInfo(
+            kind=ext.kind,
+            id=ext.id,
+            name=ext.name,
+            plugin_id=plugin_id,
+            plugin_name=plugin_name,
+            aliases=list(ext.aliases or []),
+            pillars=_dump_model(ext.pillars),
+            ui=_dump_model(ext.ui),
+            source=source,
+            enabled=enabled,
+        )
+
+    @app.get("/plugins/{plugin_id}/assets/{asset_path:path}")
+    def plugin_assets(plugin_id: str, asset_path: str) -> Response:
+        plugins.refresh()
+        status = _plugin_status_map().get(plugin_id)
+        if not status or not status.enabled or status.blocked:
+            raise HTTPException(status_code=404, detail="Plugin assets unavailable")
+        assets_root = status.plugin.source.assets_path
+        if assets_root is None:
+            raise HTTPException(status_code=404, detail="No assets for plugin")
+        assets_path = Path(assets_root)
+        try:
+            resolved = (assets_path / asset_path).resolve()
+        except Exception:
+            raise HTTPException(status_code=404, detail="Invalid asset path")
+        try:
+            root_resolved = assets_path.resolve()
+        except Exception:
+            root_resolved = assets_path
+        if root_resolved not in resolved.parents and resolved != root_resolved:
+            raise HTTPException(status_code=404, detail="Invalid asset path")
+        if not resolved.exists() or not resolved.is_file():
+            raise HTTPException(status_code=404, detail="Asset not found")
+        return FileResponse(resolved)
 
     @app.get("/healthz/deep")
     def deep_health() -> JSONResponse:
@@ -559,7 +726,7 @@ def create_app(
                 "skipped": True,
             }
 
-        embedder_for_health = embedder
+        embedder_for_health = embedder_obj
         if embedder_for_health is None and config.embed.text_model == "local-test":
             try:
                 embedder_for_health = EmbeddingService(config.embed)
@@ -757,6 +924,230 @@ def create_app(
             },
             "gpu": gpu,
         }
+
+    @app.get("/api/plugins/catalog")
+    def plugins_catalog() -> PluginCatalogResponse:
+        plugins.refresh()
+        statuses = plugins.catalog()
+        warnings: list[str] = []
+        entries: list[PluginCatalogEntry] = []
+        for status in statuses:
+            plugin = status.plugin
+            if plugin.plugin_id == "__discovery__":
+                warnings.extend(plugin.warnings or [])
+                continue
+            manifest = plugin.manifest
+            enabled = status.enabled and not status.blocked
+            extensions = [
+                _extension_info_from_manifest(
+                    ext,
+                    plugin_id=plugin.plugin_id,
+                    plugin_name=manifest.name,
+                    source=plugin.source.source_type.value,
+                    enabled=enabled,
+                )
+                for ext in manifest.extensions
+            ]
+            entries.append(
+                PluginCatalogEntry(
+                    plugin_id=plugin.plugin_id,
+                    name=manifest.name,
+                    version=manifest.version,
+                    description=manifest.description,
+                    source=plugin.source.source_type.value,
+                    enabled=status.enabled,
+                    blocked=status.blocked,
+                    reason=status.reason,
+                    lock_status=status.lock_status,
+                    lock_manifest=status.lock_manifest,
+                    lock_code=status.lock_code,
+                    manifest_sha256=status.manifest_sha256,
+                    code_sha256=status.code_sha256 or None,
+                    warnings=list(plugin.warnings or []),
+                    extensions=sorted(extensions, key=lambda item: (item.kind, item.id)),
+                )
+            )
+        entries.sort(key=lambda item: item.plugin_id)
+        return PluginCatalogResponse(
+            safe_mode=plugins.safe_mode,
+            plugins=entries,
+            warnings=warnings,
+        )
+
+    @app.get("/api/plugins/extensions")
+    def plugins_extensions(kind: str, include_disabled: bool = False) -> PluginExtensionsResponse:
+        if not kind:
+            raise HTTPException(status_code=400, detail="kind is required")
+        plugins.refresh()
+        status_map = _plugin_status_map()
+        extensions: list[PluginExtensionInfo] = []
+        if include_disabled:
+            for status in plugins.catalog():
+                plugin = status.plugin
+                if plugin.plugin_id == "__discovery__":
+                    continue
+                for ext in plugin.manifest.extensions:
+                    if ext.kind != kind:
+                        continue
+                    extensions.append(
+                        _extension_info_from_manifest(
+                            ext,
+                            plugin_id=plugin.plugin_id,
+                            plugin_name=plugin.manifest.name,
+                            source=plugin.source.source_type.value,
+                            enabled=status.enabled and not status.blocked,
+                        )
+                    )
+        else:
+            for record in plugins.list_extensions(kind):
+                status = status_map.get(record.plugin_id)
+                plugin_name = status.plugin.manifest.name if status else None
+                extensions.append(
+                    _extension_info_from_manifest(
+                        record.manifest,
+                        plugin_id=record.plugin_id,
+                        plugin_name=plugin_name,
+                        source=record.source,
+                        enabled=True,
+                    )
+                )
+        extensions.sort(key=lambda item: (item.name.lower(), item.id))
+        return PluginExtensionsResponse(kind=kind, extensions=extensions)
+
+    @app.post("/api/plugins/enable")
+    def plugins_enable(request: PluginEnableRequest) -> PluginCatalogEntry:
+        plugin_id = request.plugin_id
+        if not plugin_id:
+            raise HTTPException(status_code=400, detail="plugin_id is required")
+        try:
+            status = plugins.enable_plugin(plugin_id, accept_hashes=request.accept_hashes)
+        except PluginLockError:
+            status = _plugin_status_map().get(plugin_id)
+            detail = {"detail": "acceptance_required"}
+            if status:
+                detail.update(
+                    {
+                        "manifest_sha256": status.manifest_sha256,
+                        "code_sha256": status.code_sha256,
+                    }
+                )
+            raise HTTPException(status_code=409, detail=detail)
+        except PluginResolutionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        plugin = status.plugin
+        manifest = plugin.manifest
+        enabled = status.enabled and not status.blocked
+        extensions = [
+            _extension_info_from_manifest(
+                ext,
+                plugin_id=plugin.plugin_id,
+                plugin_name=manifest.name,
+                source=plugin.source.source_type.value,
+                enabled=enabled,
+            )
+            for ext in manifest.extensions
+        ]
+        return PluginCatalogEntry(
+            plugin_id=plugin.plugin_id,
+            name=manifest.name,
+            version=manifest.version,
+            description=manifest.description,
+            source=plugin.source.source_type.value,
+            enabled=status.enabled,
+            blocked=status.blocked,
+            reason=status.reason,
+            lock_status=status.lock_status,
+            lock_manifest=status.lock_manifest,
+            lock_code=status.lock_code,
+            manifest_sha256=status.manifest_sha256,
+            code_sha256=status.code_sha256 or None,
+            warnings=list(plugin.warnings or []),
+            extensions=sorted(extensions, key=lambda item: (item.kind, item.id)),
+        )
+
+    @app.post("/api/plugins/disable")
+    def plugins_disable(request: PluginDisableRequest) -> PluginCatalogEntry:
+        plugin_id = request.plugin_id
+        if not plugin_id:
+            raise HTTPException(status_code=400, detail="plugin_id is required")
+        try:
+            status = plugins.disable_plugin(plugin_id)
+        except PluginResolutionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        plugin = status.plugin
+        manifest = plugin.manifest
+        extensions = [
+            _extension_info_from_manifest(
+                ext,
+                plugin_id=plugin.plugin_id,
+                plugin_name=manifest.name,
+                source=plugin.source.source_type.value,
+                enabled=False,
+            )
+            for ext in manifest.extensions
+        ]
+        return PluginCatalogEntry(
+            plugin_id=plugin.plugin_id,
+            name=manifest.name,
+            version=manifest.version,
+            description=manifest.description,
+            source=plugin.source.source_type.value,
+            enabled=status.enabled,
+            blocked=status.blocked,
+            reason=status.reason,
+            lock_status=status.lock_status,
+            lock_manifest=status.lock_manifest,
+            lock_code=status.lock_code,
+            manifest_sha256=status.manifest_sha256,
+            code_sha256=status.code_sha256 or None,
+            warnings=list(plugin.warnings or []),
+            extensions=sorted(extensions, key=lambda item: (item.kind, item.id)),
+        )
+
+    @app.post("/api/plugins/lock")
+    def plugins_lock(request: PluginLockRequest) -> PluginCatalogEntry:
+        plugin_id = request.plugin_id
+        if not plugin_id:
+            raise HTTPException(status_code=400, detail="plugin_id is required")
+        try:
+            status = plugins.lock_plugin(plugin_id)
+        except PluginResolutionError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+        plugin = status.plugin
+        manifest = plugin.manifest
+        enabled = status.enabled and not status.blocked
+        extensions = [
+            _extension_info_from_manifest(
+                ext,
+                plugin_id=plugin.plugin_id,
+                plugin_name=manifest.name,
+                source=plugin.source.source_type.value,
+                enabled=enabled,
+            )
+            for ext in manifest.extensions
+        ]
+        return PluginCatalogEntry(
+            plugin_id=plugin.plugin_id,
+            name=manifest.name,
+            version=manifest.version,
+            description=manifest.description,
+            source=plugin.source.source_type.value,
+            enabled=status.enabled,
+            blocked=status.blocked,
+            reason=status.reason,
+            lock_status=status.lock_status,
+            lock_manifest=status.lock_manifest,
+            lock_code=status.lock_code,
+            manifest_sha256=status.manifest_sha256,
+            code_sha256=status.code_sha256 or None,
+            warnings=list(plugin.warnings or []),
+            extensions=sorted(extensions, key=lambda item: (item.kind, item.id)),
+        )
+
+    @app.get("/api/plugins/health")
+    def plugins_health() -> dict[str, Any]:
+        plugins.refresh()
+        return plugins.run_healthchecks()
 
     def _storage_usage_bytes() -> int:
         now = time.monotonic()
@@ -1371,7 +1762,7 @@ def create_app(
         elif graph_attempted and graph_used_llm:
             pass
         else:
-            stage_router = StageRouter(config)
+            stage_router = StageRouter(config, plugin_manager=plugins)
             provider, decision = stage_router.select_llm(
                 "final_answer", routing_override=routing_override
             )
@@ -1637,6 +2028,7 @@ def create_app(
             lambda current: {**current, **incoming},
         )
         apply_settings_overrides(config)
+        plugins.refresh()
         return SettingsResponse(status="ok")
 
     @app.get("/api/settings")
@@ -1656,6 +2048,14 @@ def create_app(
             settings["backup"] = {"last_export_at_utc": None}
         if "llm" not in settings:
             settings["llm"] = _model_dump(config.llm)
+        if "plugins" not in settings:
+            settings["plugins"] = {
+                "enabled": [],
+                "disabled": [],
+                "extension_overrides": {},
+                "locks": {},
+                "configs": {},
+            }
         return SettingsSnapshot(settings=settings)
 
     return app

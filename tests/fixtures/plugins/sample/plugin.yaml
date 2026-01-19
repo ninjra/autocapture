@@ -1,0 +1,20 @@
+schema_version: 1
+plugin_id: test.sample
+name: Test Sample Plugin
+version: 0.1.0
+description: Sample plugin fixture for tests.
+enabled_by_default: false
+extensions:
+  - kind: embedder.text
+    id: test-embedder
+    name: Test Embedder
+    aliases: [test-embedder-alias]
+    factory:
+      type: python
+      entrypoint: tests.fixtures.plugins.sample.plugin_module:create_embedder
+  - kind: prompt.bundle
+    id: test-prompts
+    name: Test Prompt Bundle
+    factory:
+      type: bundle
+      path: prompts

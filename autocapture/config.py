@@ -679,6 +679,17 @@ class ModeConfig(BaseModel):
     google_allowed_emails: list[str] = Field(default_factory=list)
 
 
+class PluginsConfig(BaseModel):
+    directory: Optional[Path] = Field(
+        None,
+        description="Optional plugin directory override (defaults to data_dir/plugins).",
+    )
+    safe_mode: bool = Field(
+        False,
+        description="Load built-in plugins only (ignore external plugins).",
+    )
+
+
 class ProviderRoutingConfig(BaseModel):
     capture: str = Field("local")
     ocr: str = Field("local")
@@ -1239,6 +1250,7 @@ class AppConfig(BaseModel):
     llm_governor: LLMGovernorConfig = LLMGovernorConfig()
     model_stages: ModelStagesConfig = ModelStagesConfig()
     mode: ModeConfig = ModeConfig()
+    plugins: PluginsConfig = PluginsConfig()
     routing: ProviderRoutingConfig = ProviderRoutingConfig()
     privacy: PrivacyConfig = PrivacyConfig()
     output: OutputConfig = OutputConfig()

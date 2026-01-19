@@ -31,6 +31,9 @@ def test_provider_router_uses_env_api_key(monkeypatch):
     config = AppConfig()
     config.routing.llm = "openai"
     config.llm.openai_api_key = None
+    config.offline = False
+    config.privacy.cloud_enabled = True
+    config.model_stages.final_answer.allow_cloud = True
     router = ProviderRouter(
         config.routing,
         config.llm,

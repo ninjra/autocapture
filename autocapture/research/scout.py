@@ -10,9 +10,11 @@ from typing import Any
 import xml.etree.ElementTree as ET
 
 import httpx
+import yaml
 
 from ..config import AppConfig
 from ..logging_utils import get_logger
+from ..plugins import PluginManager
 
 HF_TAGS = ["vision-language", "ocr", "reranker", "embeddings"]
 ARXIV_KEYWORDS = [
@@ -125,6 +127,7 @@ def run_scout(
     *,
     http_client: httpx.Client | None = None,
     now: dt.datetime | None = None,
+    plugin_manager: PluginManager | None = None,
 ) -> dict[str, Any]:
     log = get_logger("research.scout")
     now = now or dt.datetime.now(dt.timezone.utc)
@@ -150,14 +153,28 @@ def run_scout(
         if close_client:
             client.close()
 
+    plugins = plugin_manager or PluginManager(config)
+    watchlist = _merge_watchlists(WATCHLIST, _load_plugin_watchlists(plugins, log=log))
+    extra_sources = _load_plugin_sources(
+        plugins,
+        client=client,
+        offline=offline,
+        cache=cache,
+        warnings=warnings,
+        now=now,
+        log=log,
+    )
     hf_items = _normalize_items(hf_items)
     arxiv_items = _normalize_items(arxiv_items)
-    ranked_items = _rank_items(hf_items + arxiv_items)
+    extra_items = []
+    for payload in extra_sources.values():
+        extra_items.extend(payload.get("items", []))
+    ranked_items = _rank_items(hf_items + arxiv_items + _normalize_items(extra_items))
 
     report = {
         "generated_at": now.isoformat(),
         "offline": offline,
-        "watchlist": WATCHLIST,
+        "watchlist": watchlist,
         "sources": {
             "huggingface": {
                 "status": hf_status,
@@ -169,6 +186,7 @@ def run_scout(
                 "keywords": ARXIV_KEYWORDS,
                 "items": arxiv_items,
             },
+            **extra_sources,
         },
         "ranked_items": ranked_items,
         "warnings": warnings,
@@ -217,6 +235,110 @@ def _load_cache(cache_path: Path) -> dict[str, Any] | None:
     if data.get("cache_version") != _CACHE_VERSION:
         return None
     return data
+
+
+def _merge_watchlists(
+    base: list[dict[str, Any]], extra: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in base + extra:
+        title = str(item.get("title") or "")
+        url = str(item.get("url") or "")
+        key = (title.lower(), url.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged
+
+
+def _load_plugin_watchlists(plugins: PluginManager, *, log=None) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for record in plugins.list_extensions("research.watchlist"):
+        try:
+            path = plugins.resolve_extension(
+                "research.watchlist",
+                record.extension_id,
+                use_cache=False,
+            )
+        except Exception as exc:
+            if log:
+                log.warning("Watchlist plugin {} failed: {}", record.extension_id, exc)
+            continue
+        if not isinstance(path, Path) or not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            try:
+                payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except Exception:
+                payload = []
+        if isinstance(payload, list):
+            for item in payload:
+                if isinstance(item, dict):
+                    items.append(item)
+    return items
+
+
+def _load_plugin_sources(
+    plugins: PluginManager,
+    *,
+    client: httpx.Client,
+    offline: bool,
+    cache: dict[str, Any] | None,
+    warnings: list[str],
+    now: dt.datetime,
+    log=None,
+) -> dict[str, dict[str, Any]]:
+    sources: dict[str, dict[str, Any]] = {}
+    for record in plugins.list_extensions("research.source"):
+        try:
+            source_obj = plugins.resolve_extension(
+                "research.source",
+                record.extension_id,
+                use_cache=False,
+                factory_kwargs={"config": plugins._config if hasattr(plugins, "_config") else None},
+            )
+        except Exception as exc:
+            if log:
+                log.warning("Research source {} failed: {}", record.extension_id, exc)
+            continue
+        try:
+            if hasattr(source_obj, "fetch"):
+                result = source_obj.fetch(
+                    client=client,
+                    offline=offline,
+                    cache=cache,
+                    warnings=warnings,
+                    now=now,
+                    log=log,
+                )
+            elif callable(source_obj):
+                result = source_obj(
+                    client=client,
+                    offline=offline,
+                    cache=cache,
+                    warnings=warnings,
+                    now=now,
+                    log=log,
+                )
+            else:
+                result = {"items": [], "status": "unknown"}
+        except Exception as exc:
+            if log:
+                log.warning("Research source {} errored: {}", record.extension_id, exc)
+            result = {"items": [], "status": f"error: {exc}"}
+        if isinstance(result, tuple) and len(result) == 2:
+            items, status = result
+            payload = {"items": items or [], "status": status}
+        elif isinstance(result, dict):
+            payload = result
+        else:
+            payload = {"items": [], "status": "unknown"}
+        sources[record.extension_id] = payload
+    return sources
 
 
 def _write_cache(cache_path: Path, report: dict[str, Any]) -> None:

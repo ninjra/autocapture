@@ -33,12 +33,14 @@ class WorkerSupervisor:
         config: AppConfig,
         db_manager: DatabaseManager | None = None,
         vector_index: VectorIndex | None = None,
+        embedder: object | None = None,
         *,
         ocr_workers: list[object] | None = None,
         embed_workers: list[object] | None = None,
         agent_workers: list[object] | None = None,
         runtime_governor: RuntimeGovernor | None = None,
         pause_controller: PauseController | None = None,
+        plugin_manager: object | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
@@ -60,6 +62,7 @@ class WorkerSupervisor:
                         db_manager=self._db,
                         runtime_governor=runtime_governor,
                         pause_controller=pause_controller,
+                        plugin_manager=plugin_manager,
                     )
                     for _ in range(config.worker.ocr_workers)
                 ]
@@ -73,6 +76,7 @@ class WorkerSupervisor:
                 EmbeddingWorker(
                     config,
                     db_manager=self._db,
+                    embedder=embedder,
                     vector_index=vector_index,
                     runtime_governor=runtime_governor,
                     pause_controller=pause_controller,
@@ -89,6 +93,7 @@ class WorkerSupervisor:
                     vector_index=vector_index,
                     runtime_governor=runtime_governor,
                     pause_controller=pause_controller,
+                    plugin_manager=plugin_manager,
                 )
                 for _ in range(config.worker.agent_workers)
             ]

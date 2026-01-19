@@ -1,0 +1,24 @@
+- source: watchlist
+  title: Baby Dragon Hatchling Architecture
+  url: https://arxiv.org/abs/2509.26507
+  rationale: Track diffusion transformer work relevant to screen understanding.
+- source: watchlist
+  title: DiffusionVL-Qwen2.5VL-7B
+  url: https://huggingface.co/hustvl/DiffusionVL-Qwen2.5VL-7B
+  rationale: Monitor diffusion-based VLM checkpoint adoption and usage.
+- source: watchlist
+  title: DeepSeek-OCR
+  url: https://huggingface.co/deepseek-ai/DeepSeek-OCR
+  rationale: Monitor OCR model updates and throughput improvements.
+- source: watchlist
+  title: DeepSeek-OCR (GitHub)
+  url: https://github.com/deepseek-ai/DeepSeek-OCR
+  rationale: Track repository releases and implementation notes.
+- source: watchlist
+  title: NVIDIA RTX open-source AI tooling
+  url: https://developer.nvidia.com/blog/open-source-ai-tool-upgrades-speed-up-llm-and-diffusion-models-on-nvidia-rtx-pcs/
+  rationale: Monitor RTX-optimized inference updates for local acceleration.
+- source: watchlist
+  title: Tiny diffusion experiments
+  url: https://github.com/nathan-barry/tiny-diffusion
+  rationale: Track lightweight diffusion experiments for fast local adapters.

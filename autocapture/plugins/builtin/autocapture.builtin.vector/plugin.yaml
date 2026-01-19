@@ -1,0 +1,19 @@
+schema_version: 1
+plugin_id: autocapture.builtin.vector
+name: Autocapture Builtin Vector Backend
+version: 1.0.0
+description: Built-in vector backend (Qdrant).
+enabled_by_default: true
+extensions:
+  - kind: vector.backend
+    id: qdrant
+    name: Qdrant
+    aliases: [local]
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_vector_backend_qdrant

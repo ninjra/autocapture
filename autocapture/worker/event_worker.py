@@ -108,6 +108,7 @@ class EventIngestWorker:
         ocr_processor: Optional[object] = None,
         runtime_governor: RuntimeGovernor | None = None,
         pause_controller: PauseController | None = None,
+        plugin_manager: object | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
@@ -123,7 +124,9 @@ class EventIngestWorker:
         self._max_attempts = config.worker.ocr_max_attempts
         self._max_task_runtime_s = config.worker.max_task_runtime_s
         if ocr_processor is None:
-            self._extractor = ScreenExtractorRouter(config, runtime_governor=runtime_governor)
+            self._extractor = ScreenExtractorRouter(
+                config, runtime_governor=runtime_governor, plugin_manager=plugin_manager
+            )
         else:
             if hasattr(ocr_processor, "extract"):
                 self._extractor = ocr_processor

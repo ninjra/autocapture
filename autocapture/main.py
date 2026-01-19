@@ -7,6 +7,7 @@ It replaces earlier experimental bootstrap code and avoids circular imports.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import time
@@ -89,6 +90,24 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     promptops_sub.add_parser("run", help="Run PromptOps once.")
     promptops_sub.add_parser("status", help="Show latest PromptOps run.")
     promptops_sub.add_parser("list", help="List recent PromptOps runs.")
+
+    plugins = sub.add_parser("plugins", help="Plugin management utilities.")
+    plugins_sub = plugins.add_subparsers(dest="plugins_cmd", required=True)
+    plugins_list = plugins_sub.add_parser("list", help="List discovered plugins.")
+    plugins_list.add_argument("--json", action="store_true", help="Output JSON.")
+    plugins_enable = plugins_sub.add_parser("enable", help="Enable a plugin.")
+    plugins_enable.add_argument("plugin_id", help="Plugin identifier.")
+    plugins_enable.add_argument(
+        "--accept-hashes",
+        action="store_true",
+        help="Accept current manifest/code hashes and enable.",
+    )
+    plugins_disable = plugins_sub.add_parser("disable", help="Disable a plugin.")
+    plugins_disable.add_argument("plugin_id", help="Plugin identifier.")
+    plugins_lock = plugins_sub.add_parser("lock", help="Re-approve plugin hashes.")
+    plugins_lock.add_argument("plugin_id", help="Plugin identifier.")
+    plugins_doctor = plugins_sub.add_parser("doctor", help="Run plugin health checks.")
+    plugins_doctor.add_argument("--json", action="store_true", help="Output JSON.")
 
     overlay = sub.add_parser("overlay-tracker", help="Overlay tracker utilities.")
     overlay_sub = overlay.add_subparsers(dest="overlay_cmd", required=True)
@@ -240,6 +259,156 @@ def main(argv: list[str] | None = None) -> None:
                 logger.info("{} {} {}", run.run_id, run.status, run.pr_url or "")
             raise SystemExit(0)
 
+    if cmd == "plugins":
+        from .plugins import PluginManager
+        from .plugins.errors import PluginLockError, PluginResolutionError
+
+        plugins = PluginManager(config)
+
+        def _status_payload(status) -> dict:
+            plugin = status.plugin
+            manifest = plugin.manifest
+            return {
+                "plugin_id": plugin.plugin_id,
+                "name": manifest.name,
+                "version": manifest.version,
+                "description": manifest.description,
+                "source": plugin.source.source_type.value,
+                "enabled": status.enabled,
+                "blocked": status.blocked,
+                "reason": status.reason,
+                "lock_status": status.lock_status,
+                "lock_manifest": status.lock_manifest,
+                "lock_code": status.lock_code,
+                "manifest_sha256": status.manifest_sha256,
+                "code_sha256": status.code_sha256,
+                "warnings": list(plugin.warnings or []),
+                "extensions": [
+                    {
+                        "kind": ext.kind,
+                        "id": ext.id,
+                        "name": ext.name,
+                        "aliases": list(ext.aliases or []),
+                    }
+                    for ext in manifest.extensions
+                ],
+            }
+
+        if args.plugins_cmd == "list":
+            statuses = plugins.catalog()
+            payload = {
+                "safe_mode": plugins.safe_mode,
+                "plugins": [
+                    _status_payload(status)
+                    for status in statuses
+                    if status.plugin.plugin_id != "__discovery__"
+                ],
+                "warnings": [
+                    warning
+                    for status in statuses
+                    if status.plugin.plugin_id == "__discovery__"
+                    for warning in status.plugin.warnings
+                ],
+            }
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+                raise SystemExit(0)
+            safe_state = "on" if plugins.safe_mode else "off"
+            logger.info("Plugin safe mode: {}", safe_state)
+            for item in payload["plugins"]:
+                if item["blocked"]:
+                    state = "BLOCKED"
+                elif item["enabled"]:
+                    state = "ENABLED"
+                else:
+                    state = "DISABLED"
+                detail = item["reason"] or ""
+                logger.info(
+                    "{} {} ({}) {}",
+                    state,
+                    item["plugin_id"],
+                    item["version"],
+                    detail,
+                )
+            for warning in payload.get("warnings", []):
+                logger.warning("Discovery warning: {}", warning)
+            raise SystemExit(0)
+
+        if args.plugins_cmd == "enable":
+            try:
+                status = plugins.enable_plugin(
+                    args.plugin_id,
+                    accept_hashes=bool(args.accept_hashes),
+                )
+            except PluginLockError:
+                status = next(
+                    (item for item in plugins.catalog() if item.plugin.plugin_id == args.plugin_id),
+                    None,
+                )
+                if status:
+                    logger.info(
+                        "Manifest hash: {}",
+                        status.manifest_sha256,
+                    )
+                    logger.info(
+                        "Code hash: {}",
+                        status.code_sha256,
+                    )
+                logger.error("Enable requires --accept-hashes")
+                raise SystemExit(2)
+            except PluginResolutionError as exc:
+                logger.error("Enable failed: {}", exc)
+                raise SystemExit(2)
+            logger.info(
+                "Plugin {} enabled (blocked={} reason={})",
+                status.plugin.plugin_id,
+                status.blocked,
+                status.reason or "",
+            )
+            raise SystemExit(0)
+
+        if args.plugins_cmd == "disable":
+            try:
+                status = plugins.disable_plugin(args.plugin_id)
+            except PluginResolutionError as exc:
+                logger.error("Disable failed: {}", exc)
+                raise SystemExit(2)
+            logger.info("Plugin {} disabled", status.plugin.plugin_id)
+            raise SystemExit(0)
+
+        if args.plugins_cmd == "lock":
+            try:
+                status = plugins.lock_plugin(args.plugin_id)
+            except PluginResolutionError as exc:
+                logger.error("Lock failed: {}", exc)
+                raise SystemExit(2)
+            logger.info("Plugin {} hashes updated", status.plugin.plugin_id)
+            raise SystemExit(0)
+
+        if args.plugins_cmd == "doctor":
+            results = plugins.run_healthchecks()
+            if args.json:
+                print(json.dumps(results, indent=2, sort_keys=True))
+                raise SystemExit(0)
+            ok = True
+            for plugin_id, report in results.items():
+                plugin_ok = bool(report.get("ok", True))
+                if not plugin_ok:
+                    ok = False
+                logger.info(
+                    "Plugin {} health: {}",
+                    plugin_id,
+                    "ok" if plugin_ok else "fail",
+                )
+                for entry in report.get("extensions", []):
+                    health = entry.get("health", {})
+                    logger.info(
+                        "  {} -> {}",
+                        entry.get("extension"),
+                        "ok" if health.get("ok") else "fail",
+                    )
+            raise SystemExit(0 if ok else 2)
+
     if cmd == "memory":
         from .memory.cli import run_memory_cli
 
@@ -253,9 +422,11 @@ def main(argv: list[str] | None = None) -> None:
 
     if cmd == "research":
         from .research.scout import append_report_log, run_scout, write_report
+        from .plugins import PluginManager
 
         out_path = Path(args.out)
-        report = run_scout(config)
+        plugins = PluginManager(config)
+        report = run_scout(config, plugin_manager=plugins)
         write_report(report, out_path)
         if args.append:
             append_report_log(report, Path(args.append))
@@ -407,10 +578,14 @@ def main(argv: list[str] | None = None) -> None:
             profile_scheduler=runtime_context.scheduler,
         )
         runtime_governor.start()
+        from .plugins import PluginManager
+
+        plugins = PluginManager(config)
         worker = WorkerSupervisor(
             config=config,
             runtime_governor=runtime_governor,
             pause_controller=runtime_context.pause,
+            plugin_manager=plugins,
         )
         logger.info("Worker supervisor running. Press Ctrl+C to stop.")
         worker.start()

@@ -1,0 +1,13 @@
+schema_version: 1
+plugin_id: example.folder
+name: Example Folder Plugin
+version: 0.1.0
+description: Example folder plugin manifest.
+enabled_by_default: false
+extensions:
+  - kind: embedder.text
+    id: example-embedder
+    name: Example Embedder
+    factory:
+      type: python
+      entrypoint: plugin_module:create_embedder

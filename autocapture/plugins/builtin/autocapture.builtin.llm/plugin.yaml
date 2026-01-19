@@ -1,0 +1,55 @@
+schema_version: 1
+plugin_id: autocapture.builtin.llm
+name: Autocapture Builtin LLM Providers
+version: 1.0.0
+description: Built-in LLM providers (Ollama, OpenAI, OpenAI-compatible).
+enabled_by_default: true
+extensions:
+  - kind: llm.provider
+    id: ollama
+    name: Ollama
+    aliases: [local]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_ollama_provider
+    ui:
+      badge:
+        text: local
+        tone: neutral
+  - kind: llm.provider
+    id: openai
+    name: OpenAI
+    aliases: [cloud]
+    pillars:
+      data_handling:
+        cloud: required
+        cloud_images: none
+        supports_local: false
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_openai_provider
+    ui:
+      badge:
+        text: cloud
+        tone: warning
+  - kind: llm.provider
+    id: openai_compatible
+    name: OpenAI Compatible
+    aliases: [openai-compatible]
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_openai_compatible_provider
+    ui:
+      badge:
+        text: hybrid
+        tone: info

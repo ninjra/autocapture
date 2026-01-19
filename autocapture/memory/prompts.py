@@ -39,9 +39,13 @@ class PromptRegistry:
         *,
         hardening_enabled: bool = True,
         log_provenance: bool = True,
+        extra_dirs: list[Path] | None = None,
+        allow_external: bool = False,
     ) -> None:
         self._prompts_dir = prompts_dir
         self._package = package
+        self._extra_dirs = list(extra_dirs or [])
+        self._allow_external = allow_external
         self._cache: dict[str, PromptTemplate] = {}
         self._hardening_enabled = hardening_enabled
         self._log_provenance = log_provenance
@@ -70,6 +74,18 @@ class PromptRegistry:
                         raw=payload,
                         version=template.version,
                     )
+        for extra_dir in self._extra_dirs:
+            if not extra_dir or not extra_dir.exists():
+                continue
+            if not self._allow_external and not _is_trusted_prompt_path(extra_dir):
+                raise ValueError(f"Untrusted prompt path: {extra_dir}")
+            for path in extra_dir.glob("*.yaml"):
+                raw = path.read_text(encoding="utf-8")
+                template = _parse_prompt(raw, hardening_enabled=self._hardening_enabled)
+                self._cache[template.name] = template
+                self._maybe_log_provenance(
+                    template, source=str(path), raw=raw, version=template.version
+                )
 
     def get(self, name: str) -> PromptTemplate:
         if not self._cache:
@@ -90,11 +106,15 @@ class PromptRegistry:
         *,
         hardening_enabled: bool = True,
         log_provenance: bool = True,
+        extra_dirs: list[Path] | None = None,
+        allow_external: bool = False,
     ) -> "PromptRegistry":
         return cls(
             package=package,
             hardening_enabled=hardening_enabled,
             log_provenance=log_provenance,
+            extra_dirs=extra_dirs,
+            allow_external=allow_external,
         )
 
     def _maybe_log_provenance(

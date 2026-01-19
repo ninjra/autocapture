@@ -1,0 +1,328 @@
+"""Builtin plugin factories wrapping core implementations."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from urllib.parse import urlparse
+
+from ...config import AppConfig, ModelStageConfig, is_loopback_host
+from ...llm.providers import LLMProvider, OllamaProvider, OpenAICompatibleProvider, OpenAIProvider
+from ...llm.prompt_strategy import PromptStrategySettings
+from ...llm.governor import LLMGovernor
+from ...security.secret_store import SecretStore as EnvSecretStore
+from ...vision.extractors import (
+    DeepSeekOCRExtractor,
+    RapidOCRScreenExtractor,
+    VLMExtractor,
+)
+from ...vision.rapidocr import RapidOCRExtractor
+from ...vision.types import ExtractionResult, VISION_SCHEMA_VERSION
+from ...embeddings.service import EmbeddingService
+from ...memory.reranker import CrossEncoderReranker
+from ...memory.compression import CompressedAnswer, extractive_answer
+from ...memory.verification import RulesVerifier
+from ...memory.retrieval import RetrievalService
+from ...indexing.vector_index import QdrantBackend, VectorBackend
+from ...paths import resource_root
+from ..policy import PolicyGate
+from ..sdk.context import PluginContext, LLMProviderInfo
+
+
+class DisabledExtractor:
+    def extract(self, _image) -> ExtractionResult:
+        return ExtractionResult(
+            text="",
+            spans=[],
+            tags={
+                "vision_extract": {
+                    "schema_version": VISION_SCHEMA_VERSION,
+                    "engine": "disabled",
+                    "parse_failed": True,
+                    "parse_format": "disabled",
+                    "reason": "disabled",
+                    "regions": [],
+                    "visible_text": "",
+                    "content_flags": [],
+                    "tiles": [],
+                }
+            },
+        )
+
+
+class DisabledOCREngine:
+    def extract(self, _image):
+        return []
+
+
+class ExtractiveCompressor:
+    def compress(self, evidence) -> CompressedAnswer:
+        return extractive_answer(evidence)
+
+
+class AbstractiveCompressor:
+    def compress(self, evidence) -> CompressedAnswer:
+        compressed = extractive_answer(evidence)
+        if not compressed.answer:
+            return compressed
+        # Simple deterministic summarization: truncate and de-duplicate lines.
+        seen = set()
+        lines = []
+        for line in compressed.answer.splitlines():
+            if line in seen:
+                continue
+            seen.add(line)
+            lines.append(line)
+            if len(lines) >= 5:
+                break
+        summary = " ".join(lines)
+        if len(summary) > 800:
+            summary = summary[:800].rstrip() + "…"
+        return CompressedAnswer(answer=summary, citations=compressed.citations)
+
+
+class RulesVerifierAdapter(RulesVerifier):
+    pass
+
+
+def create_ollama_provider(
+    context: PluginContext,
+    *,
+    stage: str,
+    stage_config: ModelStageConfig,
+    prompt_strategy: PromptStrategySettings,
+    governor: LLMGovernor | None,
+    routing_override: str | None = None,
+) -> tuple[LLMProvider, LLMProviderInfo]:
+    config: AppConfig = context.config
+    base_url = stage_config.base_url or config.llm.ollama_url
+    model = stage_config.model or config.llm.ollama_model
+    provider = OllamaProvider(
+        base_url,
+        model,
+        keep_alive_s=config.llm.ollama_keep_alive_s,
+        timeout_s=config.llm.timeout_s,
+        retries=config.llm.retries,
+        prompt_strategy=prompt_strategy,
+        governor=governor,
+    )
+    info = LLMProviderInfo(
+        provider_id="ollama",
+        model=model,
+        base_url=base_url,
+        cloud=False,
+    )
+    return provider, info
+
+
+def create_openai_provider(
+    context: PluginContext,
+    *,
+    stage: str,
+    stage_config: ModelStageConfig,
+    prompt_strategy: PromptStrategySettings,
+    governor: LLMGovernor | None,
+    routing_override: str | None = None,
+) -> tuple[LLMProvider, LLMProviderInfo]:
+    config: AppConfig = context.config
+    policy: PolicyGate = context.policy
+    secrets = EnvSecretStore()
+    api_key = stage_config.api_key or config.llm.openai_api_key
+    if not api_key:
+        record = secrets.get("OPENAI_API_KEY")
+        api_key = record.value if record else None
+    if not api_key:
+        raise RuntimeError(f"Stage '{stage}' requires OpenAI API key")
+    policy.guard_cloud_text(
+        stage=stage,
+        stage_config=stage_config,
+        provider="openai",
+        base_url=None,
+        cloud=True,
+    )
+    model = stage_config.model or config.llm.openai_model
+    provider = OpenAIProvider(
+        api_key,
+        model,
+        timeout_s=config.llm.timeout_s,
+        retries=config.llm.retries,
+        prompt_strategy=prompt_strategy,
+        governor=governor,
+    )
+    info = LLMProviderInfo(
+        provider_id="openai",
+        model=model,
+        base_url=None,
+        cloud=True,
+    )
+    return provider, info
+
+
+def create_openai_compatible_provider(
+    context: PluginContext,
+    *,
+    stage: str,
+    stage_config: ModelStageConfig,
+    prompt_strategy: PromptStrategySettings,
+    governor: LLMGovernor | None,
+    routing_override: str | None = None,
+) -> tuple[LLMProvider, LLMProviderInfo]:
+    config: AppConfig = context.config
+    policy: PolicyGate = context.policy
+    secrets = EnvSecretStore()
+    base_url = stage_config.base_url or config.llm.openai_compatible_base_url
+    api_key = stage_config.api_key or config.llm.openai_compatible_api_key
+    if not api_key:
+        record = secrets.get("OPENAI_COMPATIBLE_API_KEY")
+        api_key = record.value if record else None
+    if not base_url:
+        raise RuntimeError(f"Stage '{stage}' requires openai_compatible base_url")
+    cloud = _is_cloud_endpoint(base_url)
+    policy.guard_cloud_text(
+        stage=stage,
+        stage_config=stage_config,
+        provider="openai_compatible",
+        base_url=base_url,
+        cloud=cloud,
+    )
+    model = stage_config.model or config.llm.openai_compatible_model
+    provider = OpenAICompatibleProvider(
+        base_url,
+        model,
+        api_key=api_key,
+        timeout_s=config.llm.timeout_s,
+        retries=config.llm.retries,
+        prompt_strategy=prompt_strategy,
+        governor=governor,
+    )
+    info = LLMProviderInfo(
+        provider_id="openai_compatible",
+        model=model,
+        base_url=base_url,
+        cloud=cloud,
+    )
+    return provider, info
+
+
+def create_vlm_extractor(context: PluginContext, **kwargs) -> VLMExtractor:
+    config: AppConfig = context.config
+    policy: PolicyGate = context.policy
+    backend = config.vision_extract.vlm
+    provider = backend.provider
+    base_url = backend.base_url or config.llm.ollama_url
+    policy.guard_cloud_images(
+        provider=provider,
+        base_url=base_url,
+        allow_cloud=backend.allow_cloud,
+    )
+    return VLMExtractor(config)
+
+
+def create_deepseek_extractor(context: PluginContext, **kwargs) -> DeepSeekOCRExtractor:
+    config: AppConfig = context.config
+    policy: PolicyGate = context.policy
+    backend = config.vision_extract.deepseek_ocr
+    provider = backend.provider
+    base_url = backend.base_url or config.llm.ollama_url
+    policy.guard_cloud_images(
+        provider=provider,
+        base_url=base_url,
+        allow_cloud=backend.allow_cloud,
+    )
+    return DeepSeekOCRExtractor(config)
+
+
+def create_rapidocr_extractor(context: PluginContext, **kwargs) -> RapidOCRScreenExtractor:
+    config: AppConfig = context.config
+    ocr_engine = kwargs.get("ocr_engine")
+    return RapidOCRScreenExtractor(config, ocr_engine=ocr_engine)
+
+
+def create_disabled_extractor(context: PluginContext, **kwargs) -> DisabledExtractor:
+    _ = context
+    return DisabledExtractor()
+
+
+def create_rapidocr_engine(context: PluginContext, **kwargs) -> RapidOCRExtractor:
+    config: AppConfig = context.config
+    return RapidOCRExtractor(config.ocr)
+
+
+def create_disabled_ocr_engine(context: PluginContext, **kwargs) -> DisabledOCREngine:
+    _ = context
+    return DisabledOCREngine()
+
+
+def create_embedder_local(context: PluginContext, **kwargs) -> EmbeddingService:
+    config: AppConfig = context.config
+    pause_controller = kwargs.get("pause_controller")
+    return EmbeddingService(config.embed, pause_controller=pause_controller)
+
+
+def create_embedder_disabled(context: PluginContext, **kwargs) -> None:
+    _ = context
+    return None
+
+
+def create_reranker_local(context: PluginContext, **kwargs) -> CrossEncoderReranker:
+    config: AppConfig = context.config
+    return CrossEncoderReranker(config.reranker)
+
+
+def create_reranker_disabled(context: PluginContext, **kwargs) -> None:
+    _ = context
+    return None
+
+
+def create_compressor_extractive(context: PluginContext, **kwargs) -> ExtractiveCompressor:
+    _ = context
+    return ExtractiveCompressor()
+
+
+def create_compressor_abstractive(context: PluginContext, **kwargs) -> AbstractiveCompressor:
+    _ = context
+    return AbstractiveCompressor()
+
+
+def create_verifier_rules(context: PluginContext, **kwargs) -> RulesVerifierAdapter:
+    _ = context
+    return RulesVerifierAdapter()
+
+
+def create_retrieval_local(context: PluginContext, **kwargs) -> RetrievalService:
+    config: AppConfig = context.config
+    db = kwargs.get("db")
+    embedder = kwargs.get("embedder")
+    vector_index = kwargs.get("vector_index")
+    reranker = kwargs.get("reranker")
+    spans_index = kwargs.get("spans_index")
+    runtime_governor = kwargs.get("runtime_governor")
+    return RetrievalService(
+        db,
+        config,
+        embedder=embedder,
+        vector_index=vector_index,
+        reranker=reranker,
+        spans_index=spans_index,
+        runtime_governor=runtime_governor,
+    )
+
+
+def create_vector_backend_qdrant(context: PluginContext, **kwargs) -> VectorBackend | None:
+    config: AppConfig = context.config
+    dim = kwargs.get("dim")
+    if dim is None:
+        raise ValueError("Vector backend requires dim")
+    if not config.qdrant.enabled:
+        return None
+    return QdrantBackend(config, int(dim))
+
+
+def create_prompt_bundle_builtin(context: PluginContext, **kwargs) -> Path:
+    _ = context
+    return resource_root() / "autocapture" / "prompts" / "derived"
+
+
+def _is_cloud_endpoint(base_url: str) -> bool:
+    parsed = urlparse(base_url)
+    host = parsed.hostname or ""
+    return bool(host) and not is_loopback_host(host)

@@ -16,6 +16,7 @@ from ..enrichment.sql_artifacts import extract_sql_artifacts
 from ..indexing.vector_index import SpanEmbeddingUpsert, VectorIndex
 from ..logging_utils import get_logger
 from ..memory.prompts import PromptRegistry
+from ..plugins import PluginManager
 from ..memory.threads import ThreadSegmenter, ThreadStore
 from ..observability.metrics import (
     enrichment_backlog,
@@ -43,6 +44,7 @@ class EnrichmentScheduler:
         *,
         embedder: EmbeddingService | None = None,
         vector_index: VectorIndex | None = None,
+        plugin_manager: PluginManager | None = None,
     ) -> None:
         self._config = config
         self._db = db
@@ -52,10 +54,13 @@ class EnrichmentScheduler:
         self._log = get_logger("enrichment.scheduler")
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        plugins = plugin_manager or PluginManager(config)
         self._prompt_registry = PromptRegistry.from_package(
             "autocapture.prompts.derived",
             hardening_enabled=config.templates.enabled,
             log_provenance=config.templates.log_provenance,
+            extra_dirs=plugins.prompt_bundles(),
+            allow_external=True,
         )
         self._thread_segmenter = ThreadSegmenter(
             max_gap_minutes=config.threads.max_gap_minutes,

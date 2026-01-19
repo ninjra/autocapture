@@ -21,6 +21,7 @@ A local-first desktop recall app for Windows 11 that runs as a single binary: tr
 - **PP-Structure layout** (optional): `ocr.paddle_ppstructure_*` for local PaddleOCR layouts.
 
 See `docs/PHASE3.md` for the full requirement mapping and rollout flags.
+Plugin system details are in `docs/plugins.md`.
 
 ## Repository Layout
 

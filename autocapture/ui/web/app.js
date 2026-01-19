@@ -22,6 +22,68 @@ async function apiFetch(path, options = {}) {
   return fetch(path, { ...options, headers });
 }
 
+function extensionLabel(ext) {
+  const badge = ext.ui && ext.ui.badge ? ext.ui.badge.text : null;
+  const base = ext.name || ext.id;
+  return badge ? `${base} (${ext.id}, ${badge})` : `${base} (${ext.id})`;
+}
+
+function ensureOption(selectEl, value) {
+  if (!selectEl || !value) return;
+  const options = Array.from(selectEl.options || []);
+  if (options.some((opt) => opt.value === value)) return;
+  const option = document.createElement('option');
+  option.value = value;
+  option.textContent = `${value} (unavailable)`;
+  option.dataset.missing = 'true';
+  selectEl.appendChild(option);
+  selectEl.value = value;
+}
+
+async function populateSelect(kind, selectEl) {
+  if (!selectEl) return;
+  const currentValue = selectEl.value;
+  let data;
+  try {
+    const response = await apiFetch(`/api/plugins/extensions?kind=${encodeURIComponent(kind)}`);
+    if (!response.ok) return;
+    data = await response.json();
+  } catch (err) {
+    return;
+  }
+  const extensions = Array.isArray(data.extensions) ? data.extensions : [];
+  selectEl.textContent = '';
+  extensions.forEach((ext) => {
+    const option = document.createElement('option');
+    option.value = ext.id;
+    option.textContent = extensionLabel(ext);
+    selectEl.appendChild(option);
+  });
+  if (currentValue) {
+    const hasCurrent = extensions.some((ext) => ext.id === currentValue);
+    if (hasCurrent) {
+      selectEl.value = currentValue;
+    } else {
+      const option = document.createElement('option');
+      option.value = currentValue;
+      option.textContent = `${currentValue} (unavailable)`;
+      option.dataset.missing = 'true';
+      selectEl.appendChild(option);
+      selectEl.value = currentValue;
+    }
+  }
+}
+
+async function loadRoutingOptions() {
+  await populateSelect('llm.provider', modelSelect);
+  await populateSelect('ocr.engine', document.getElementById('routingOcr'));
+  await populateSelect('embedder.text', document.getElementById('routingEmbedding'));
+  await populateSelect('retrieval.strategy', document.getElementById('routingRetrieval'));
+  await populateSelect('reranker', routingReranker);
+  await populateSelect('compressor', document.getElementById('routingCompressor'));
+  await populateSelect('verifier', document.getElementById('routingVerifier'));
+}
+
 tabs.forEach((btn) => {
   btn.addEventListener('click', () => {
     tabs.forEach((b) => b.classList.remove('active'));
@@ -39,6 +101,9 @@ const sanitizeToggle = document.getElementById('sanitizeToggle');
 const extractiveToggle = document.getElementById('extractiveToggle');
 const timeRange = document.getElementById('timeRange');
 const safeModeIndicator = document.getElementById('safeModeIndicator');
+const pluginSafeMode = document.getElementById('pluginSafeMode');
+const pluginList = document.getElementById('pluginList');
+const pluginWarnings = document.getElementById('pluginWarnings');
 
 function appendMessage(author, text) {
   const div = document.createElement('div');
@@ -210,7 +275,7 @@ chatForm.addEventListener('submit', async (event) => {
     query,
     sanitize: sanitizeToggle.checked,
     extractive_only: extractiveToggle.checked,
-    routing: { llm: modelSelect.value === 'cloud' ? 'openai' : 'ollama' },
+    routing: { llm: modelSelect.value || 'ollama' },
     time_range: rangeToTuple(timeRange.value)
   };
 
@@ -326,6 +391,7 @@ searchForm.addEventListener('submit', async (event) => {
 
 const saveSettings = document.getElementById('saveSettings');
 const presetToggle = document.getElementById('privacyPresetToggle');
+const routingReranker = document.getElementById('routingReranker');
 const storageTtl = document.getElementById('storageTtl');
 const storageUsage = document.getElementById('storageUsage');
 const storagePath = document.getElementById('storagePath');
@@ -344,8 +410,10 @@ saveSettings.addEventListener('click', async () => {
       ocr: document.getElementById('routingOcr').value,
       embedding: document.getElementById('routingEmbedding').value,
       retrieval: document.getElementById('routingRetrieval').value,
+      reranker: routingReranker ? routingReranker.value : 'disabled',
       compressor: document.getElementById('routingCompressor').value,
-      verifier: document.getElementById('routingVerifier').value
+      verifier: document.getElementById('routingVerifier').value,
+      llm: modelSelect ? modelSelect.value : undefined
     },
     llm: {
       prompt_strategy_default: promptStrategyDefault,
@@ -452,13 +520,38 @@ async function loadSettings() {
     const response = await apiFetch('/api/settings');
     const data = await response.json();
     const routing = (data.settings && data.settings.routing) || {};
-    if (routing.ocr) document.getElementById('routingOcr').value = routing.ocr;
-    if (routing.embedding) document.getElementById('routingEmbedding').value = routing.embedding;
-    if (routing.retrieval) document.getElementById('routingRetrieval').value = routing.retrieval;
-    if (routing.compressor) document.getElementById('routingCompressor').value = routing.compressor;
-    if (routing.verifier) document.getElementById('routingVerifier').value = routing.verifier;
-    if (routing.llm) {
-      modelSelect.value = routing.llm.startsWith('openai') ? 'cloud' : 'local';
+    const routingOcr = document.getElementById('routingOcr');
+    const routingEmbedding = document.getElementById('routingEmbedding');
+    const routingRetrieval = document.getElementById('routingRetrieval');
+    const routingCompressor = document.getElementById('routingCompressor');
+    const routingVerifier = document.getElementById('routingVerifier');
+    if (routing.ocr && routingOcr) {
+      routingOcr.value = routing.ocr;
+      ensureOption(routingOcr, routing.ocr);
+    }
+    if (routing.embedding && routingEmbedding) {
+      routingEmbedding.value = routing.embedding;
+      ensureOption(routingEmbedding, routing.embedding);
+    }
+    if (routing.retrieval && routingRetrieval) {
+      routingRetrieval.value = routing.retrieval;
+      ensureOption(routingRetrieval, routing.retrieval);
+    }
+    if (routing.reranker && routingReranker) {
+      routingReranker.value = routing.reranker;
+      ensureOption(routingReranker, routing.reranker);
+    }
+    if (routing.compressor && routingCompressor) {
+      routingCompressor.value = routing.compressor;
+      ensureOption(routingCompressor, routing.compressor);
+    }
+    if (routing.verifier && routingVerifier) {
+      routingVerifier.value = routing.verifier;
+      ensureOption(routingVerifier, routing.verifier);
+    }
+    if (routing.llm && modelSelect) {
+      modelSelect.value = routing.llm;
+      ensureOption(modelSelect, routing.llm);
     }
     if (data.settings && data.settings.active_preset) {
       presetToggle.checked = data.settings.active_preset === 'privacy_first';
@@ -518,15 +611,205 @@ async function loadStorage() {
   }
 }
 
+function badgeToneClass(tone) {
+  if (!tone) return 'neutral';
+  if (tone === 'info' || tone === 'warning' || tone === 'danger') return tone;
+  return 'neutral';
+}
+
+function renderBadge(badge) {
+  if (!badge || !badge.text) return null;
+  const span = document.createElement('span');
+  span.className = `badge ${badgeToneClass(badge.tone)}`;
+  span.textContent = badge.text;
+  return span;
+}
+
+async function loadPlugins() {
+  if (!pluginList) return;
+  pluginList.textContent = '';
+  if (pluginWarnings) pluginWarnings.textContent = '';
+  let payload;
+  try {
+    const response = await apiFetch('/api/plugins/catalog');
+    if (!response.ok) return;
+    payload = await response.json();
+  } catch (err) {
+    return;
+  }
+  if (pluginSafeMode) {
+    if (payload.safe_mode) {
+      pluginSafeMode.textContent = 'On';
+      pluginSafeMode.classList.add('safe');
+    } else {
+      pluginSafeMode.textContent = 'Off';
+      pluginSafeMode.classList.remove('safe');
+    }
+  }
+  if (pluginWarnings && Array.isArray(payload.warnings) && payload.warnings.length > 0) {
+    pluginWarnings.textContent = payload.warnings.join(' | ');
+  }
+  const plugins = Array.isArray(payload.plugins) ? payload.plugins : [];
+  plugins.forEach((plugin) => {
+    const card = document.createElement('div');
+    card.className = 'plugin-card';
+
+    const header = document.createElement('div');
+    header.className = 'plugin-header';
+    const titleWrap = document.createElement('div');
+    const title = document.createElement('h3');
+    title.className = 'plugin-title';
+    title.textContent = plugin.name || plugin.plugin_id;
+    const pluginId = document.createElement('div');
+    pluginId.className = 'plugin-id';
+    pluginId.textContent = plugin.plugin_id;
+    titleWrap.appendChild(title);
+    titleWrap.appendChild(pluginId);
+
+    const status = document.createElement('div');
+    const blocked = Boolean(plugin.blocked);
+    const enabled = Boolean(plugin.enabled) && !blocked;
+    let statusText = enabled ? 'Enabled' : 'Disabled';
+    let statusClass = enabled ? 'enabled' : 'disabled';
+    if (blocked) {
+      statusText = 'Blocked';
+      statusClass = 'blocked';
+    }
+    status.className = `plugin-status ${statusClass}`;
+    status.textContent = statusText;
+    header.appendChild(titleWrap);
+    header.appendChild(status);
+    card.appendChild(header);
+
+    const meta = document.createElement('div');
+    meta.className = 'plugin-meta';
+    meta.textContent = `Version ${plugin.version || '--'} · Source ${plugin.source || '--'} · Lock ${plugin.lock_status || '--'}`;
+    card.appendChild(meta);
+
+    if (plugin.reason) {
+      const reason = document.createElement('div');
+      reason.className = 'plugin-meta';
+      reason.textContent = `Reason: ${plugin.reason}`;
+      card.appendChild(reason);
+    }
+
+    if (plugin.manifest_sha256) {
+      const hashes = document.createElement('div');
+      hashes.className = 'plugin-meta';
+      hashes.textContent = `Manifest ${plugin.manifest_sha256} · Code ${plugin.code_sha256 || '--'}`;
+      card.appendChild(hashes);
+    }
+
+    if (Array.isArray(plugin.warnings) && plugin.warnings.length > 0) {
+      const warn = document.createElement('div');
+      warn.className = 'plugin-meta';
+      warn.textContent = `Warnings: ${plugin.warnings.join(' | ')}`;
+      card.appendChild(warn);
+    }
+
+    const extensions = document.createElement('div');
+    extensions.className = 'plugin-extensions';
+    (plugin.extensions || []).forEach((ext) => {
+      const chip = document.createElement('span');
+      chip.className = 'plugin-extension';
+      chip.textContent = `${ext.kind}:${ext.id}`;
+      if (ext.ui && ext.ui.badge) {
+        const badge = renderBadge(ext.ui.badge);
+        if (badge) {
+          chip.appendChild(document.createTextNode(' '));
+          chip.appendChild(badge);
+        }
+      }
+      extensions.appendChild(chip);
+    });
+    card.appendChild(extensions);
+
+    const actions = document.createElement('div');
+    actions.className = 'plugin-actions';
+    const needsApproval = plugin.reason === 'lock_missing' || plugin.reason === 'lock_mismatch';
+    if (blocked && needsApproval) {
+      const approveBtn = document.createElement('button');
+      approveBtn.type = 'button';
+      approveBtn.textContent = 'Re-approve';
+      approveBtn.className = 'secondary';
+      approveBtn.addEventListener('click', async () => {
+        if (!confirm(`Re-approve plugin ${plugin.plugin_id}?`)) return;
+        await apiFetch('/api/plugins/lock', {
+          method: 'POST',
+          body: JSON.stringify({ plugin_id: plugin.plugin_id })
+        });
+        await loadPlugins();
+        await loadRoutingOptions();
+        await loadSettings();
+      });
+      actions.appendChild(approveBtn);
+    } else if (!enabled) {
+      const enableBtn = document.createElement('button');
+      enableBtn.type = 'button';
+      enableBtn.textContent = 'Enable';
+      enableBtn.addEventListener('click', async () => {
+        const ok = confirm(`Enable plugin ${plugin.plugin_id}?`);
+        if (!ok) return;
+        const response = await apiFetch('/api/plugins/enable', {
+          method: 'POST',
+          body: JSON.stringify({ plugin_id: plugin.plugin_id, accept_hashes: true })
+        });
+        if (!response.ok) {
+          const detail = await response.json().catch(() => ({}));
+          let message = detail.detail || 'Enable failed';
+          if (message && typeof message === 'object') {
+            const inner = message.detail || 'Enable failed';
+            const manifest = message.manifest_sha256
+              ? `\nManifest: ${message.manifest_sha256}`
+              : '';
+            const code = message.code_sha256 ? `\nCode: ${message.code_sha256}` : '';
+            message = `${inner}${manifest}${code}`;
+          }
+          alert(message);
+        }
+        await loadPlugins();
+        await loadRoutingOptions();
+        await loadSettings();
+      });
+      actions.appendChild(enableBtn);
+    } else {
+      const disableBtn = document.createElement('button');
+      disableBtn.type = 'button';
+      disableBtn.textContent = 'Disable';
+      disableBtn.className = 'secondary';
+      disableBtn.addEventListener('click', async () => {
+        if (!confirm(`Disable plugin ${plugin.plugin_id}?`)) return;
+        await apiFetch('/api/plugins/disable', {
+          method: 'POST',
+          body: JSON.stringify({ plugin_id: plugin.plugin_id })
+        });
+        await loadPlugins();
+        await loadRoutingOptions();
+        await loadSettings();
+      });
+      actions.appendChild(disableBtn);
+    }
+    card.appendChild(actions);
+
+    pluginList.appendChild(card);
+  });
+}
+
 if (refreshStorage) {
   refreshStorage.addEventListener('click', async () => {
     await loadStorage();
   });
 }
 
-loadSettings();
-loadStatus();
-loadStorage();
+async function init() {
+  await loadRoutingOptions();
+  await loadSettings();
+  await loadStatus();
+  await loadStorage();
+  await loadPlugins();
+}
+
+init();
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/static/sw.js');
