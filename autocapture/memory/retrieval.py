@@ -1474,9 +1474,7 @@ def _persist_retrieval_hits(
     return hit_ids
 
 
-def _select_span_id(
-    spans: list[CitableSpanRecord], matched_span_keys: list[str]
-) -> str | None:
+def _select_span_id(spans: list[CitableSpanRecord], matched_span_keys: list[str]) -> str | None:
     if not spans:
         return None
     matched_set = {str(key) for key in matched_span_keys if key}
@@ -1487,9 +1485,7 @@ def _select_span_id(
     return spans[0].span_id if spans else None
 
 
-def _is_citable_span(
-    span: CitableSpanRecord | None, frame: FrameRecord | None
-) -> bool:
+def _is_citable_span(span: CitableSpanRecord | None, frame: FrameRecord | None) -> bool:
     if span is None or span.tombstoned:
         return False
     if span.bbox is None:

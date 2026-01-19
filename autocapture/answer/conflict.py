@@ -38,7 +38,9 @@ def detect_conflicts(evidence: Iterable[EvidenceItem]) -> ConflictResult:
                     _, value = match
                 else:
                     value = match
-                values_by_field.setdefault(field, []).append((value, item.evidence_id, item.timestamp))
+                values_by_field.setdefault(field, []).append(
+                    (value, item.evidence_id, item.timestamp)
+                )
 
     conflicts: dict[str, list[dict]] = {}
     changed = False
@@ -60,4 +62,6 @@ def detect_conflicts(evidence: Iterable[EvidenceItem]) -> ConflictResult:
         "conflicts": conflicts,
         "changed_over_time": changed,
     }
-    return ConflictResult(conflict=bool(conflicts) and not changed, changed_over_time=changed, summary=summary)
+    return ConflictResult(
+        conflict=bool(conflicts) and not changed, changed_over_time=changed, summary=summary
+    )

@@ -99,4 +99,3 @@ class LedgerWriter:
                 .first()
             )
         return row
-

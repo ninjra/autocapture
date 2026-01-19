@@ -648,9 +648,7 @@ class ArtifactRecord(Base):
     __table_args__ = (Index("ix_artifact_records_frame", "frame_id"),)
 
     artifact_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    frame_id: Mapped[str] = mapped_column(
-        ForeignKey("frame_records.frame_id", ondelete="CASCADE")
-    )
+    frame_id: Mapped[str] = mapped_column(ForeignKey("frame_records.frame_id", ondelete="CASCADE"))
     event_id: Mapped[str | None] = mapped_column(
         ForeignKey("events.event_id", ondelete="SET NULL"),
         nullable=True,
@@ -679,9 +677,7 @@ class CitableSpanRecord(Base):
     artifact_id: Mapped[str] = mapped_column(
         ForeignKey("artifact_records.artifact_id", ondelete="CASCADE")
     )
-    frame_id: Mapped[str] = mapped_column(
-        ForeignKey("frame_records.frame_id", ondelete="CASCADE")
-    )
+    frame_id: Mapped[str] = mapped_column(ForeignKey("frame_records.frame_id", ondelete="CASCADE"))
     event_id: Mapped[str | None] = mapped_column(
         ForeignKey("events.event_id", ondelete="SET NULL"),
         nullable=True,
@@ -725,9 +721,7 @@ class TierPlanDecisionRecord(Base):
     __table_args__ = (Index("ix_tier_plan_decisions_query", "query_id"),)
 
     decision_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    query_id: Mapped[str] = mapped_column(
-        ForeignKey("query_records.query_id", ondelete="CASCADE")
-    )
+    query_id: Mapped[str] = mapped_column(ForeignKey("query_records.query_id", ondelete="CASCADE"))
     plan_json: Mapped[dict] = mapped_column(JSON, default=dict)
     skipped_json: Mapped[dict] = mapped_column(JSON, default=dict)
     reasons_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -748,9 +742,7 @@ class RetrievalHitRecord(Base):
     )
 
     hit_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    query_id: Mapped[str] = mapped_column(
-        ForeignKey("query_records.query_id", ondelete="CASCADE")
-    )
+    query_id: Mapped[str] = mapped_column(ForeignKey("query_records.query_id", ondelete="CASCADE"))
     tier: Mapped[str] = mapped_column(String(32))
     span_id: Mapped[str | None] = mapped_column(
         ForeignKey("citable_spans.span_id", ondelete="SET NULL"), nullable=True
@@ -774,9 +766,7 @@ class AnswerRecord(Base):
     __table_args__ = (Index("ix_answer_records_query", "query_id"),)
 
     answer_id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    query_id: Mapped[str] = mapped_column(
-        ForeignKey("query_records.query_id", ondelete="CASCADE")
-    )
+    query_id: Mapped[str] = mapped_column(ForeignKey("query_records.query_id", ondelete="CASCADE"))
     mode: Mapped[str] = mapped_column(String(32))
     coverage_json: Mapped[dict] = mapped_column(JSON, default=dict)
     confidence_json: Mapped[dict] = mapped_column(JSON, default=dict)

@@ -40,4 +40,3 @@ def hash_canonical(payload: Any) -> str:
 def stable_id(prefix: str, payload: Any) -> str:
     """Generate a stable content-derived ID with a prefix."""
     return f"{prefix}_{hash_canonical(payload)}"
-

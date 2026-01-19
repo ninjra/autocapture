@@ -48,7 +48,9 @@ def verify_provenance(
         spans_by_id = {span.span_id: span for span in spans}
         artifact_ids = [span.artifact_id for span in spans]
         artifacts = (
-            session.execute(select(ArtifactRecord).where(ArtifactRecord.artifact_id.in_(artifact_ids)))
+            session.execute(
+                select(ArtifactRecord).where(ArtifactRecord.artifact_id.in_(artifact_ids))
+            )
             .scalars()
             .all()
         )
@@ -80,9 +82,7 @@ def verify_provenance(
                 continue
             current_rank = _TIER_PRIORITY.get(current.tier, 0)
             hit_rank = _TIER_PRIORITY.get(hit.tier, 0)
-            if hit_rank > current_rank or (
-                hit_rank == current_rank and hit.rank < current.rank
-            ):
+            if hit_rank > current_rank or (hit_rank == current_rank and hit.rank < current.rank):
                 hits_by_span[hit.span_id] = hit
 
     valid: set[str] = set()
@@ -134,7 +134,9 @@ def append_provenance_chain(
         spans_by_id = {span.span_id: span for span in spans}
         artifact_ids = [span.artifact_id for span in spans]
         artifacts = (
-            session.execute(select(ArtifactRecord).where(ArtifactRecord.artifact_id.in_(artifact_ids)))
+            session.execute(
+                select(ArtifactRecord).where(ArtifactRecord.artifact_id.in_(artifact_ids))
+            )
             .scalars()
             .all()
         )
@@ -166,9 +168,7 @@ def append_provenance_chain(
                 continue
             current_rank = _TIER_PRIORITY.get(current.tier, 0)
             hit_rank = _TIER_PRIORITY.get(hit.tier, 0)
-            if hit_rank > current_rank or (
-                hit_rank == current_rank and hit.rank < current.rank
-            ):
+            if hit_rank > current_rank or (hit_rank == current_rank and hit.rank < current.rank):
                 hits_by_span[hit.span_id] = hit
 
     created_at = dt.datetime.now(dt.timezone.utc)

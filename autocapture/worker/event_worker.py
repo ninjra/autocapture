@@ -858,7 +858,9 @@ class EventIngestWorker:
             "span_entries": span_entries,
         }
 
-    def _append_extract_ledger(self, frame_id: str, artifact_result: dict[str, object] | None) -> None:
+    def _append_extract_ledger(
+        self, frame_id: str, artifact_result: dict[str, object] | None
+    ) -> None:
         if not artifact_result:
             return
         artifact_id = artifact_result.get("artifact_id")

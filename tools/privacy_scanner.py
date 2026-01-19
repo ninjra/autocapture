@@ -15,7 +15,13 @@ from autocapture.capture.privacy_filter import apply_exclude_region_masks
 from autocapture.config import AppConfig, DatabaseConfig
 from autocapture.image_utils import hash_rgb_image
 from autocapture.storage.database import DatabaseManager
-from autocapture.storage.models import ArtifactRecord, CaptureRecord, CitableSpanRecord, EventRecord, FrameRecord
+from autocapture.storage.models import (
+    ArtifactRecord,
+    CaptureRecord,
+    CitableSpanRecord,
+    EventRecord,
+    FrameRecord,
+)
 from autocapture.worker.event_worker import EventIngestWorker
 from autocapture.vision.types import ExtractionResult, VISION_SCHEMA_VERSION, build_ocr_payload
 

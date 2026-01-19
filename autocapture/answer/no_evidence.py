@@ -21,4 +21,3 @@ def build_no_evidence_payload(query: str, *, has_time_range: bool) -> dict[str, 
         {"type": "refine_query", "label": "Add app or keyword filters", "value": query},
     ]
     return {"message": message, "hints": hints, "actions": actions}
-

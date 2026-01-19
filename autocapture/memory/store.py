@@ -314,7 +314,9 @@ class MemoryStore:
                         )
                 else:
                     self._log.warning("FTS query failed: {}", exc)
-                    return MemoryQueryResult(spans=[], retrieval_disabled=False, reason="query_failed")
+                    return MemoryQueryResult(
+                        spans=[], retrieval_disabled=False, reason="query_failed"
+                    )
 
         if not rows:
             return MemoryQueryResult(spans=[], retrieval_disabled=False, reason="no_results")
@@ -381,7 +383,9 @@ class MemoryStore:
                 {clause}
                 ORDER BY key ASC, item_id ASC
                 LIMIT ? OFFSET ?
-                """.format(clause=clause),
+                """.format(
+                    clause=clause
+                ),
                 (*params, limit, offset),
             ).fetchall()
         items = [
@@ -649,9 +653,7 @@ class MemoryStore:
         removed_snapshots = 0
         removed_dirs = 0
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT snapshot_id, created_at FROM context_snapshots"
-            ).fetchall()
+            rows = conn.execute("SELECT snapshot_id, created_at FROM context_snapshots").fetchall()
             to_remove = []
             for snapshot_id, created_at in rows:
                 parsed = parse_iso8601(created_at)
@@ -739,7 +741,9 @@ def _chunk_text(
             idx += 1
 
 
-def _store_item_sources(conn: sqlite3.Connection, item_id: str, span_ids: Iterable[str] | None) -> None:
+def _store_item_sources(
+    conn: sqlite3.Connection, item_id: str, span_ids: Iterable[str] | None
+) -> None:
     if not span_ids:
         return
     unique_ids = sorted({sid for sid in span_ids if sid})

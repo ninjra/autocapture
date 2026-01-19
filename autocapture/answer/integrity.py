@@ -84,9 +84,7 @@ def scan_recent_answers(
     with db.session() as session:
         answers = (
             session.execute(
-                select(AnswerRecord)
-                .order_by(AnswerRecord.created_at.desc())
-                .limit(limit)
+                select(AnswerRecord).order_by(AnswerRecord.created_at.desc()).limit(limit)
             )
             .scalars()
             .all()

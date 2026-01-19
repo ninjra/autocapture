@@ -88,7 +88,14 @@ def main() -> int:
         }
 
     variants = []
-    for key, delta in [("k_lex", -1), ("k_lex", 1), ("k_vec", -1), ("k_vec", 1), ("top_n", -1), ("top_n", 1)]:
+    for key, delta in [
+        ("k_lex", -1),
+        ("k_lex", 1),
+        ("k_vec", -1),
+        ("k_vec", 1),
+        ("top_n", -1),
+        ("top_n", 1),
+    ]:
         variant = json.loads(json.dumps(base_tiers))
         if key in {"k_lex", "k_vec"}:
             fast = variant.setdefault("fast", {})

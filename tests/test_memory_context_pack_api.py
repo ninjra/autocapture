@@ -11,9 +11,7 @@ from autocapture.memory.store import MemoryStore
 
 
 @pytest.mark.anyio
-async def test_context_pack_includes_memory_snapshot(
-    tmp_path: Path, async_client_factory
-) -> None:
+async def test_context_pack_includes_memory_snapshot(tmp_path: Path, async_client_factory) -> None:
     memory_root = tmp_path / "memory"
     config = AppConfig(
         capture={"data_dir": tmp_path, "staging_dir": tmp_path / "staging"},

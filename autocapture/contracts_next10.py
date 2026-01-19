@@ -119,4 +119,3 @@ class TierPlanDecision(BaseModel):
     reasons_json: dict[str, Any] = Field(default_factory=dict)
     budgets_json: dict[str, Any] = Field(default_factory=dict)
     created_at_utc: dt.datetime = Field(default_factory=lambda: dt.datetime.now(dt.timezone.utc))
-

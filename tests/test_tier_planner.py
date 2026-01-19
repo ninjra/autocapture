@@ -32,9 +32,7 @@ def test_tier_planner_numeric_guard_keeps_rerank():
             window_n=config.next10.tier_stats_window,
         )
     }
-    plan, skipped, _ = _plan_tiers(
-        config, "auto", budgets, state, "FACT_NUMERIC_TIMEBOUND", stats
-    )
+    plan, skipped, _ = _plan_tiers(config, "auto", budgets, state, "FACT_NUMERIC_TIMEBOUND", stats)
     assert "RERANK" in plan["tiers"]
     assert "RERANK" not in skipped.get("tiers", [])
 

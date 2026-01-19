@@ -1564,8 +1564,12 @@ def apply_policy_defaults(config: AppConfig) -> AppConfig:
             config.privacy.exclude_window_title_regex,
             payload.get("exclude_window_title_regex", []),
         )
-    exclude_regions = payload.get("exclude_regions") if isinstance(payload.get("exclude_regions"), list) else []
-    mask_regions = payload.get("mask_regions") if isinstance(payload.get("mask_regions"), list) else []
+    exclude_regions = (
+        payload.get("exclude_regions") if isinstance(payload.get("exclude_regions"), list) else []
+    )
+    mask_regions = (
+        payload.get("mask_regions") if isinstance(payload.get("mask_regions"), list) else []
+    )
     if exclude_regions or mask_regions:
         combined = _merge_list(config.privacy.exclude_regions, exclude_regions)
         combined = _merge_list(combined, mask_regions)

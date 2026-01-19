@@ -516,9 +516,7 @@ class AnswerGraph:
             valid_evidence_ids = {
                 evidence_id
                 for evidence_id, item in evidence_by_id.items()
-                if any(
-                    span.span_id and str(span.span_id) in valid_span_ids for span in item.spans
-                )
+                if any(span.span_id and str(span.span_id) in valid_span_ids for span in item.spans)
             }
             filtered_citations = [c for c in citations if c in valid_evidence_ids]
             if set(filtered_citations) != set(citations):
@@ -543,7 +541,9 @@ class AnswerGraph:
         }
         mode = "NORMAL"
         conflict = detect_conflicts(evidence)
-        conflict_summary = conflict.summary if conflict.conflict or conflict.changed_over_time else None
+        conflict_summary = (
+            conflict.summary if conflict.conflict or conflict.changed_over_time else None
+        )
         if conflict.conflict:
             mode = "CONFLICT"
             answer_text = _conflict_message(conflict.summary)
@@ -738,9 +738,15 @@ class AnswerGraph:
             event_ids = [item.event.event_id for item in results]
             if event_ids:
                 with self._retrieval._db.session() as session:  # type: ignore[attr-defined]
-                    rows = session.execute(
-                        select(CitableSpanRecord).where(CitableSpanRecord.frame_id.in_(event_ids))
-                    ).scalars().all()
+                    rows = (
+                        session.execute(
+                            select(CitableSpanRecord).where(
+                                CitableSpanRecord.frame_id.in_(event_ids)
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
                 for row in rows:
                     if row.frame_id not in fallback_spans:
                         fallback_spans[row.frame_id] = row

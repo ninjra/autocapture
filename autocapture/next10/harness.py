@@ -14,7 +14,5 @@ def build_harness(*, enable_rerank: bool = True):
     prompts = PromptRegistry.from_package("prompts", log_provenance=False)
     entities = EntityResolver(corpus.db, SecretStore(corpus.data_dir).get_or_create())
     retrieval = RetrievalService(corpus.db, corpus.config)
-    answer_graph = AnswerGraph(
-        corpus.config, retrieval, prompt_registry=prompts, entities=entities
-    )
+    answer_graph = AnswerGraph(corpus.config, retrieval, prompt_registry=prompts, entities=entities)
     return corpus, retrieval, answer_graph

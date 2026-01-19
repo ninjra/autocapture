@@ -71,7 +71,11 @@ class LexicalIndex:
                 )
                 conn.execute(
                     text(
-                        "INSERT INTO event_fts(" "event_id, ocr_text, window_title, app_name, domain, url, agent_text" ") VALUES (" ":event_id, :ocr_text, :window_title, :app_name, :domain, :url, :agent_text" ")"
+                        "INSERT INTO event_fts("
+                        "event_id, ocr_text, window_title, app_name, domain, url, agent_text"
+                        ") VALUES ("
+                        ":event_id, :ocr_text, :window_title, :app_name, :domain, :url, :agent_text"
+                        ")"
                     ),
                     {
                         "event_id": event.event_id,
@@ -156,7 +160,17 @@ class LexicalIndex:
             with engine.begin() as conn:
                 rows = conn.execute(
                     text(
-                        "SELECT event_id, ts_rank_cd(" "to_tsvector('english', coalesce(ocr_text_normalized, ocr_text,'') || ' ' || " "coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' || " "coalesce(domain,'') || ' ' || coalesce(url,'')), " "plainto_tsquery('english', :query)) AS rank " "FROM events " "WHERE to_tsvector('english', coalesce(ocr_text_normalized, ocr_text,'') || ' ' || " "coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' || " "coalesce(domain,'') || ' ' || coalesce(url,'')) @@ " "plainto_tsquery('english', :query) " "ORDER BY rank DESC LIMIT :limit"
+                        "SELECT event_id, ts_rank_cd("
+                        "to_tsvector('english', coalesce(ocr_text_normalized, ocr_text,'') || ' ' || "
+                        "coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' || "
+                        "coalesce(domain,'') || ' ' || coalesce(url,'')), "
+                        "plainto_tsquery('english', :query)) AS rank "
+                        "FROM events "
+                        "WHERE to_tsvector('english', coalesce(ocr_text_normalized, ocr_text,'') || ' ' || "
+                        "coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' || "
+                        "coalesce(domain,'') || ' ' || coalesce(url,'')) @@ "
+                        "plainto_tsquery('english', :query) "
+                        "ORDER BY rank DESC LIMIT :limit"
                     ),
                     {"query": query, "limit": limit},
                 ).fetchall()
