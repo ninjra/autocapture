@@ -122,6 +122,34 @@ output:
   format: "text"
   context_pack_format: "json"
   allow_tron_compression: false
+memory:
+  enabled: true
+  api_context_pack_enabled: false
+  storage:
+    # root_dir uses the platform default unless AUTOCAPTURE_MEMORY_DIR is set.
+    db_filename: "memory.sqlite3"
+    artifacts_dir: "artifacts"
+    snapshots_dir: "snapshots"
+    require_fts: false
+    snapshot_retention_days: 90
+  policy:
+    blocked_labels: []
+    exclude_patterns: []
+    redact_patterns: []
+    redact_token: "[REDACTED]"
+  spans:
+    max_chars: 800
+    min_chars: 200
+  retrieval:
+    enabled: true
+    default_k: 8
+    max_k: 24
+    recency_half_life_days: 30
+  compiler:
+    max_total_chars: 6000
+    max_chars_per_span: 1200
+    max_spans: 12
+    max_memory_items: 32
 time:
   timezone: null
 presets:

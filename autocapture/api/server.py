@@ -6,6 +6,7 @@ import asyncio
 import datetime as dt
 import hmac
 import io
+import json
 import tempfile
 import threading
 import time
@@ -51,6 +52,8 @@ from ..memory.context_pack import (
     build_context_pack,
     build_evidence_payload,
 )
+from ..memory.compiler import ContextCompiler
+from ..memory.store import MemoryStore
 from ..vision.citation_overlay import render_citation_overlay
 from ..memory.entities import EntityResolver, SecretStore
 from ..security.token_vault import TokenVaultStore
@@ -131,6 +134,7 @@ class ContextPackRequest(BaseModel):
     extractive_only: Optional[bool] = None
     pack_format: str = Field("json", description="json|text|tron")
     routing: Optional[dict[str, str]] = None
+    include_memory_snapshot: Optional[bool] = None
 
 
 class HighlightsSummary(BaseModel):
@@ -159,6 +163,7 @@ class ContextPackResponse(BaseModel):
     tron: Optional[str] = None
     warnings: list[str] = Field(default_factory=list)
     message: str | None = None
+    memory_snapshot: dict[str, Any] | None = None
 
 
 class AnswerRequest(BaseModel):
@@ -359,6 +364,14 @@ def create_app(
     )
     media_store = MediaStore(config.capture, config.encryption)
     log = get_logger("api")
+    memory_store: MemoryStore | None = None
+    memory_compiler: ContextCompiler | None = None
+    if config.memory.enabled:
+        try:
+            memory_store = MemoryStore(config.memory)
+            memory_compiler = ContextCompiler(memory_store, config.memory)
+        except Exception as exc:
+            log.warning("Memory store init failed: {}", exc)
     storage_cache = {"ts": 0.0, "bytes": 0}
     storage_cache_ttl_s = 30.0
     media_root = Path(config.capture.data_dir) / "media"
@@ -389,6 +402,8 @@ def create_app(
     app.state.vector_index = vector_index
     app.state.embedder = embedder
     app.state.worker_supervisor = worker_supervisor
+    app.state.memory_store = memory_store
+    app.state.memory_compiler = memory_compiler
 
     oidc_verifier: GoogleOIDCVerifier | None = None
     if config.mode.mode == "remote":
@@ -418,6 +433,37 @@ def create_app(
         "/api/events/ingest",
         "/api/storage",
     )
+
+    def _maybe_build_memory_snapshot(
+        query: str,
+        *,
+        k: int,
+        include: Optional[bool],
+    ) -> tuple[dict[str, Any] | None, list[str]]:
+        include_flag = include if include is not None else config.memory.api_context_pack_enabled
+        if not include_flag:
+            return None, []
+        if not config.memory.enabled or memory_compiler is None:
+            return None, ["memory_disabled"]
+        memory_k = min(int(k), int(config.memory.retrieval.max_k))
+        try:
+            result = memory_compiler.compile(query, k=memory_k)
+            snapshot_dir = Path(result.output_dir)
+            context_md = (snapshot_dir / "context.md").read_text(encoding="utf-8")
+            citations = json.loads((snapshot_dir / "citations.json").read_text(encoding="utf-8"))
+            manifest = json.loads((snapshot_dir / "context.json").read_text(encoding="utf-8"))
+            payload = result.model_dump(mode="json")
+            payload.pop("output_dir", None)
+            snapshot = {
+                "result": payload,
+                "context_md": context_md,
+                "citations": citations,
+                "manifest": manifest,
+            }
+            return snapshot, []
+        except Exception as exc:
+            log.warning("Memory snapshot failed: {}", exc)
+            return None, ["memory_snapshot_failed"]
 
     security_manager: SecuritySessionManager | None = None
     if (
@@ -1004,6 +1050,11 @@ def create_app(
             k,
             sanitized=sanitized,
         )
+        memory_snapshot, memory_warnings = _maybe_build_memory_snapshot(
+            request.query,
+            k=k,
+            include=request.include_memory_snapshot,
+        )
         routing_data = _merge_routing(config.routing, request.routing)
         aggregates = _build_aggregates(db, request.time_range)
         thread_aggregates = _build_thread_aggregates(
@@ -1035,9 +1086,10 @@ def create_app(
                 pack=payload,
                 text=text_pack,
                 tron=tron_pack,
-                warnings=["no_evidence"],
+                warnings=["no_evidence", *memory_warnings],
                 message=message
                 or _no_evidence_message(request.query, bool(request.time_range), None),
+                memory_snapshot=memory_snapshot,
             )
         pack = build_context_pack(
             query=request.query,
@@ -1068,7 +1120,13 @@ def create_app(
                 ),
                 format="tron",
             )
-        return ContextPackResponse(pack=pack.to_json(), text=text_pack, tron=tron_pack)
+        return ContextPackResponse(
+            pack=pack.to_json(),
+            text=text_pack,
+            tron=tron_pack,
+            warnings=list(memory_warnings),
+            memory_snapshot=memory_snapshot,
+        )
 
     @app.post("/api/answer")
     async def answer(request: AnswerRequest) -> AnswerResponse:

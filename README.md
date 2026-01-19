@@ -11,6 +11,7 @@ A local-first desktop recall app for Windows 11 that runs as a single binary: tr
 - **Time-aware Q&A** with deterministic time parsing, citations, and optional TRON/JSON outputs.
 - **Stage-routed LLM pipeline** with query refinement, draft generation, and final answer stages (local-first defaults).
 - **Optional DiffusionVL local server** (`tools/diffusionvl_server.py`) for OpenAI-compatible VLM hosting.
+- **Deterministic memory store CLI** (SQLite + FTS5) with snapshots and citations.
 
 ## Phase 3 Highlights (SPEC-4)
 

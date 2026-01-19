@@ -138,6 +138,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=False,
     )
 
+    memory = sub.add_parser("memory", help="Deterministic memory store utilities.")
+    from .memory.cli import add_memory_subcommands
+
+    add_memory_subcommands(memory)
+
     return p.parse_args(argv)
 
 
@@ -234,6 +239,11 @@ def main(argv: list[str] | None = None) -> None:
             for run in runs:
                 logger.info("{} {} {}", run.run_id, run.status, run.pr_url or "")
             raise SystemExit(0)
+
+    if cmd == "memory":
+        from .memory.cli import run_memory_cli
+
+        raise SystemExit(run_memory_cli(args, config))
 
     if cmd == "overlay-tracker":
         from .overlay_tracker.cli import overlay_status

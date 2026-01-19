@@ -12,7 +12,7 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
-from .paths import default_data_dir, default_staging_dir
+from .paths import default_data_dir, default_memory_dir, default_staging_dir
 from .presets import apply_preset
 from .settings_store import read_settings
 
@@ -754,6 +754,58 @@ class RetrievalConfig(BaseModel):
     traces_enabled: bool = Field(False, description="Persist retrieval traces.")
 
 
+class MemoryStorageConfig(BaseModel):
+    root_dir: Path = Field(
+        default_factory=default_memory_dir,
+        description="Root directory for the memory store (env: AUTOCAPTURE_MEMORY_DIR).",
+    )
+    db_filename: str = Field("memory.sqlite3")
+    artifacts_dir: str = Field("artifacts")
+    snapshots_dir: str = Field("snapshots")
+    require_fts: bool = Field(
+        False, description="Fail memory retrieval if SQLite FTS5 is unavailable."
+    )
+    snapshot_retention_days: int = Field(90, ge=1)
+
+
+class MemoryPolicyConfig(BaseModel):
+    blocked_labels: list[str] = Field(default_factory=list)
+    exclude_patterns: list[str] = Field(default_factory=list)
+    redact_patterns: list[str] = Field(default_factory=list)
+    redact_token: str = Field("[REDACTED]", min_length=1)
+
+
+class MemorySpanConfig(BaseModel):
+    max_chars: int = Field(800, ge=100)
+    min_chars: int = Field(200, ge=0)
+
+
+class MemoryRetrievalConfig(BaseModel):
+    enabled: bool = Field(True)
+    default_k: int = Field(8, ge=1)
+    max_k: int = Field(24, ge=1)
+    recency_half_life_days: int = Field(30, ge=1)
+
+
+class MemoryCompilerConfig(BaseModel):
+    max_total_chars: int = Field(6000, ge=500)
+    max_chars_per_span: int = Field(1200, ge=100)
+    max_spans: int = Field(12, ge=1)
+    max_memory_items: int = Field(32, ge=1)
+
+
+class MemoryConfig(BaseModel):
+    enabled: bool = Field(True)
+    api_context_pack_enabled: bool = Field(
+        False, description="Include memory snapshots in /api/context-pack responses."
+    )
+    storage: MemoryStorageConfig = MemoryStorageConfig()
+    policy: MemoryPolicyConfig = MemoryPolicyConfig()
+    spans: MemorySpanConfig = MemorySpanConfig()
+    retrieval: MemoryRetrievalConfig = MemoryRetrievalConfig()
+    compiler: MemoryCompilerConfig = MemoryCompilerConfig()
+
+
 class PresetConfig(BaseModel):
     active_preset: str = Field(
         "privacy_first", description="privacy_first or high_fidelity preset name."
@@ -1157,6 +1209,7 @@ class AppConfig(BaseModel):
     ui: UIConfig = UIConfig()
     overlay_tracker: OverlayTrackerConfig = OverlayTrackerConfig()
     retrieval: RetrievalConfig = RetrievalConfig()
+    memory: MemoryConfig = MemoryConfig()
     presets: PresetConfig = PresetConfig()
     promptops: PromptOpsConfig = PromptOpsConfig()
     agents: AgentConfig = AgentConfig()

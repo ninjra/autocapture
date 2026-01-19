@@ -130,6 +130,15 @@ def default_staging_dir() -> Path:
     return Path("./staging")
 
 
+def default_memory_dir() -> Path:
+    override = os.environ.get("AUTOCAPTURE_MEMORY_DIR")
+    if override:
+        return Path(override)
+    if sys.platform == "win32":
+        return app_local_data_dir() / "memory"
+    return Path.home() / ".autocapture" / "memory"
+
+
 def default_config_path() -> Path:
     if sys.platform == "win32":
         return app_local_data_dir() / "autocapture.yml"
