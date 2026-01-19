@@ -39,7 +39,7 @@ All commands support `--json` for stable output.
 
 ## API integration
 
-Enable memory snapshots in `/api/context-pack` by setting:
+Memory snapshots in `/api/context-pack` are enabled by default. To override:
 
 ```
 memory:

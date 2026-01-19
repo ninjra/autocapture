@@ -797,7 +797,7 @@ class MemoryCompilerConfig(BaseModel):
 class MemoryConfig(BaseModel):
     enabled: bool = Field(True)
     api_context_pack_enabled: bool = Field(
-        False, description="Include memory snapshots in /api/context-pack responses."
+        True, description="Include memory snapshots in /api/context-pack responses."
     )
     storage: MemoryStorageConfig = MemoryStorageConfig()
     policy: MemoryPolicyConfig = MemoryPolicyConfig()
