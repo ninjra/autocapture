@@ -1,0 +1,18 @@
+schema_version: 1
+plugin_id: autocapture.builtin.verifier
+name: Autocapture Builtin Verifier
+version: 1.0.0
+description: Built-in verifier backends.
+enabled_by_default: true
+extensions:
+  - kind: verifier
+    id: rules
+    name: Rules Verifier
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_verifier_rules

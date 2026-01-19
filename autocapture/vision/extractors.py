@@ -13,6 +13,7 @@ import numpy as np
 from ..agents.structured_output import extract_json_payload
 from ..config import AppConfig, VisionBackendConfig, is_loopback_host
 from ..runtime_governor import RuntimeGovernor
+from ..plugins import PluginManager
 from ..image_utils import ensure_rgb
 from ..logging_utils import get_logger
 from ..llm.prompt_strategy import PromptStrategySettings
@@ -221,9 +222,9 @@ def _cloud_images_allowed(
 
 
 class RapidOCRScreenExtractor:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, *, ocr_engine: object | None = None) -> None:
         self._config = config
-        self._ocr = RapidOCRExtractor(config.ocr)
+        self._ocr = ocr_engine or RapidOCRExtractor(config.ocr)
 
     def extract(self, image: np.ndarray) -> ExtractionResult:
         spans = self._ocr.extract(image)
@@ -391,15 +392,17 @@ def _build_tags(
 
 class ScreenExtractorRouter:
     def __init__(
-        self, config: AppConfig, *, runtime_governor: RuntimeGovernor | None = None
+        self,
+        config: AppConfig,
+        *,
+        runtime_governor: RuntimeGovernor | None = None,
+        plugin_manager: PluginManager | None = None,
     ) -> None:
         self._config = config
         self._vision = config.vision_extract
         self._log = get_logger("vision.router")
-        self._vlm: VLMExtractor | None = None
-        self._rapid: RapidOCRScreenExtractor | None = None
-        self._deepseek: DeepSeekOCRExtractor | None = None
         self._runtime = runtime_governor
+        self._plugins = plugin_manager or PluginManager(config)
 
     def extract(self, image: np.ndarray, *, allow_vlm: bool | None = None) -> ExtractionResult:
         if self._config.routing.ocr == "disabled":
@@ -436,25 +439,32 @@ class ScreenExtractorRouter:
                 return _failed_result(engine, str(fallback_exc))
 
     def _get_extractor(self, engine: str):
-        if engine in {"vlm", "qwen-vl"}:
-            if self._vlm is None:
-                self._vlm = VLMExtractor(self._config)
-            return self._vlm
-        if engine in {"deepseek-ocr", "deepseek"}:
-            if self._deepseek is None:
-                self._deepseek = DeepSeekOCRExtractor(self._config)
-            return self._deepseek
-        if engine in {"rapidocr", "rapidocr-onnxruntime"}:
-            if self._rapid is None:
-                self._rapid = RapidOCRScreenExtractor(self._config)
-            return self._rapid
-        return None
+        factory_kwargs = None
+        if engine in {"rapidocr-onnxruntime", "rapidocr"}:
+            ocr_engine = self._resolve_ocr_engine()
+            if ocr_engine is not None:
+                factory_kwargs = {"ocr_engine": ocr_engine}
+        return self._plugins.resolve_extension(
+            "vision.extractor",
+            engine,
+            factory_kwargs=factory_kwargs,
+        )
 
     def _get_fallback(self, engine: str):
         fallback_engine = (self._vision.fallback_engine or "").lower()
         if fallback_engine == engine:
             return None
         return self._get_extractor(fallback_engine)
+
+    def _resolve_ocr_engine(self):
+        engine_id = (self._config.ocr.engine or "").strip().lower()
+        if not engine_id:
+            engine_id = (self._config.routing.ocr or "local").strip().lower()
+        try:
+            return self._plugins.resolve_extension("ocr.engine", engine_id)
+        except Exception as exc:
+            self._log.warning("OCR engine plugin failed ({}): {}", engine_id, exc)
+            return None
 
 
 def _disabled_result(reason: str) -> ExtractionResult:

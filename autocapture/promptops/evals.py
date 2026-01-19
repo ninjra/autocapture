@@ -54,7 +54,7 @@ def run_eval_detailed(
     secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
     entities = EntityResolver(db, secret, token_vault=TokenVaultStore(config, db))
     verifier = RulesVerifier()
-    prompts = _load_prompt_registry(overrides)
+    prompts = _load_prompt_registry(config, overrides)
 
     items = json.loads(eval_path.read_text(encoding="utf-8"))
     total = len(items)

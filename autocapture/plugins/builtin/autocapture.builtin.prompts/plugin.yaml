@@ -1,0 +1,18 @@
+schema_version: 1
+plugin_id: autocapture.builtin.prompts
+name: Autocapture Builtin Prompts
+version: 1.0.0
+description: Built-in prompt bundles.
+enabled_by_default: true
+extensions:
+  - kind: prompt.bundle
+    id: core
+    name: Core Prompt Bundle
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_prompt_bundle_builtin

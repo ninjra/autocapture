@@ -9,6 +9,7 @@ include = [
   "autocapture/prompts/**/*.yaml",
   "autocapture/ui/web/**",
   "autocapture/bench/fixtures/**",
+  "autocapture/plugins/builtin/**",
 ]
 # Exclude files from the built distribution (moved from tool.poetry.packages[*].exclude)
 exclude = ["autocapture/_legacy/**"]

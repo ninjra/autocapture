@@ -15,6 +15,7 @@
         <button data-tab="search">Search</button>
         <button data-tab="highlights">Highlights</button>
         <button data-tab="settings">Settings</button>
+        <button data-tab="plugins">Plugins</button>
       </nav>
     </header>
     <main>
@@ -23,8 +24,7 @@
           <div class="controls">
             <label>Model
               <select id="modelSelect">
-                <option value="local">Local (Ollama)</option>
-                <option value="cloud">Cloud (OpenAI)</option>
+                <option value="ollama">Ollama (local)</option>
               </select>
             </label>
             <label><input type="checkbox" id="sanitizeToggle" checked /> Sanitize</label>
@@ -80,6 +80,11 @@
                 <option>local</option>
               </select>
             </label>
+            <label>Reranker
+              <select id="routingReranker">
+                <option>disabled</option>
+              </select>
+            </label>
             <label>Compressor
               <select id="routingCompressor">
                 <option>extractive</option>
@@ -132,6 +137,18 @@
               </div>
             </div>
           </div>
+        </div>
+      </section>
+      <section id="plugins" class="tab">
+        <div class="panel">
+          <h2>Plugins</h2>
+          <p class="hint">Plugins are discovered but must be explicitly enabled.</p>
+          <div class="plugin-banner">
+            <span class="label">Safe mode</span>
+            <span id="pluginSafeMode" class="pill">--</span>
+          </div>
+          <div id="pluginWarnings" class="plugin-warnings"></div>
+          <div id="pluginList" class="plugin-list"></div>
         </div>
       </section>
       <section id="highlights" class="tab">

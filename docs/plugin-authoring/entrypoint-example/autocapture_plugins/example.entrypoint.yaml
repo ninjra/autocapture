@@ -1,0 +1,25 @@
+schema_version: 1
+plugin_id: example.entrypoint
+name: Example Entrypoint Plugin
+version: 0.1.0
+description: Example entry-point plugin manifest.
+enabled_by_default: false
+extensions:
+  - kind: llm.provider
+    id: example-llm
+    name: Example LLM Provider
+    aliases:
+      - example
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture_example_plugin.factories:create_example_provider
+    ui:
+      description: Example local provider used for demos.
+      badge:
+        text: Local
+        tone: info

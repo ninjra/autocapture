@@ -35,6 +35,7 @@ from .overlay_tracker import OverlayTrackerService
 from .modules import ModuleHost
 from .worker.supervisor import WorkerSupervisor
 from .memory.router import ProviderRouter
+from .plugins import PluginManager
 from .qdrant.sidecar import QdrantSidecar
 from .runtime_context import RuntimeContext, build_runtime_context
 from .runtime_device import require_cuda_available
@@ -187,10 +188,35 @@ class AppRuntime:
         self._db = DatabaseManager(config.database)
         self._gpu_lease = get_global_gpu_lease()
         self._agent_jobs = AgentJobQueue(self._db)
-        self._retrieval_embedder = EmbeddingService(
-            config.embed, pause_controller=self._runtime_context.pause
-        )
-        self._vector_index = VectorIndex(config, self._retrieval_embedder.dim)
+        self._plugins = PluginManager(config)
+        embedder_id = (config.routing.embedding or "local").strip().lower()
+        try:
+            self._retrieval_embedder = self._plugins.resolve_extension(
+                "embedder.text",
+                embedder_id,
+                factory_kwargs={"pause_controller": self._runtime_context.pause},
+            )
+        except Exception as exc:
+            self._log.warning("Embedder plugin failed ({}): {}", embedder_id, exc)
+            self._retrieval_embedder = EmbeddingService(
+                config.embed, pause_controller=self._runtime_context.pause
+            )
+        if self._retrieval_embedder is None:
+            self._log.warning("Embedder disabled; falling back to config embedder")
+            self._retrieval_embedder = EmbeddingService(
+                config.embed, pause_controller=self._runtime_context.pause
+            )
+        dim = getattr(self._retrieval_embedder, "dim", None) or int(config.qdrant.text_vector_size)
+        try:
+            backend = self._plugins.resolve_extension(
+                "vector.backend",
+                "qdrant",
+                factory_kwargs={"dim": dim},
+            )
+        except Exception as exc:
+            self._log.warning("Vector backend plugin failed: {}", exc)
+            backend = None
+        self._vector_index = VectorIndex(config, dim, backend=backend)
         self._tracker = (
             HostVectorTracker(
                 config=config.tracking,
@@ -249,8 +275,10 @@ class AppRuntime:
             config=config,
             db_manager=self._db,
             vector_index=self._vector_index,
+            embedder=self._retrieval_embedder,
             runtime_governor=self._runtime_governor,
             pause_controller=self._runtime_context.pause,
+            plugin_manager=self._plugins,
         )
         self._retention = RetentionManager(
             config.storage,
@@ -265,6 +293,7 @@ class AppRuntime:
             self._agent_jobs,
             embedder=self._retrieval_embedder,
             vector_index=self._vector_index,
+            plugin_manager=self._plugins,
         )
         self._metrics = MetricsServer(config.observability, Path(config.capture.data_dir))
         self._settings_path = Path(config.capture.data_dir) / "settings.json"
@@ -279,6 +308,7 @@ class AppRuntime:
             config=config,
             offline=config.offline,
             privacy=config.privacy,
+            plugin_manager=self._plugins,
         )
         self._provider_router.select_embedding()
         self._provider_router.select_ocr()

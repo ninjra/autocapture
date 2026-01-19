@@ -1,0 +1,91 @@
+schema_version: 1
+plugin_id: autocapture.builtin.vision
+name: Autocapture Builtin Vision Extractors
+version: 1.0.0
+description: Built-in vision extraction engines (VLM, RapidOCR, DeepSeek OCR).
+enabled_by_default: true
+extensions:
+  - kind: vision.extractor
+    id: vlm
+    name: Vision-Language Model
+    aliases: [qwen-vl]
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: optional
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_vlm_extractor
+    ui:
+      badge:
+        text: cloud
+        tone: warning
+  - kind: vision.extractor
+    id: deepseek-ocr
+    name: DeepSeek OCR
+    aliases: [deepseek]
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: optional
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_deepseek_extractor
+    ui:
+      badge:
+        text: cloud
+        tone: warning
+  - kind: vision.extractor
+    id: rapidocr-onnxruntime
+    name: RapidOCR (ONNXRuntime)
+    aliases: [rapidocr, local]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_rapidocr_extractor
+    ui:
+      badge:
+        text: local
+        tone: neutral
+  - kind: vision.extractor
+    id: disabled
+    name: Disabled
+    aliases: ["off"]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_disabled_extractor
+  - kind: ocr.engine
+    id: rapidocr-onnxruntime
+    name: RapidOCR (ONNXRuntime)
+    aliases: [rapidocr, local]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_rapidocr_engine
+  - kind: ocr.engine
+    id: disabled
+    name: Disabled
+    aliases: ["off"]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_disabled_ocr_engine

@@ -1,0 +1,13 @@
+schema_version: 1
+plugin_id: test.poison
+name: Test Poison Plugin
+version: 0.1.0
+description: Plugin fixture that writes a sentinel on import.
+enabled_by_default: false
+extensions:
+  - kind: embedder.text
+    id: poison-embedder
+    name: Poison Embedder
+    factory:
+      type: python
+      entrypoint: tests.fixtures.plugins.poison.poison_module:create_embedder

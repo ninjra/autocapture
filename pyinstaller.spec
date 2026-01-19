@@ -23,6 +23,7 @@ a = Analysis(
         ("autocapture.yml", "."),
         ("autocapture/prompts/derived/*.yaml", "autocapture/prompts/derived"),
         ("autocapture/ui/web", "autocapture/ui/web"),
+        ("autocapture/plugins/builtin", "autocapture/plugins/builtin"),
     ]
     + vendor_datas("vendor/ffmpeg", "ffmpeg")
     + vendor_datas("vendor/qdrant", "qdrant"),

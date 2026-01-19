@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from urllib.parse import urlparse
-
-from ..config import AppConfig, LLMConfig, ModelStageConfig, is_loopback_host
-from ..llm.providers import LLMProvider, OllamaProvider, OpenAICompatibleProvider, OpenAIProvider
+from ..config import AppConfig, ModelStageConfig
+from ..llm.providers import LLMProvider
 from ..llm.governor import get_global_governor
 from ..llm.prompt_strategy import PromptStrategySettings
 from ..logging_utils import get_logger
-from ..security.secret_store import SecretStore as EnvSecretStore
+from ..plugins import PluginManager
+from ..plugins.sdk import LLMProviderInfo
 
 
 @dataclass(frozen=True)
@@ -24,14 +23,14 @@ class StageDecision:
 
 
 class StageRouter:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, *, plugin_manager: PluginManager | None = None) -> None:
         self._config = config
         self._log = get_logger("model_router")
         self._prompt_strategy = PromptStrategySettings.from_llm_config(
             config.llm, data_dir=config.capture.data_dir
         )
         self._governor = get_global_governor(config)
-        self._secrets = EnvSecretStore()
+        self._plugins = plugin_manager or PluginManager(config)
 
     def select_llm(
         self, stage: str, *, routing_override: str | None = None
@@ -40,75 +39,38 @@ class StageRouter:
         if not stage_config.enabled:
             raise RuntimeError(f"Stage '{stage}' is disabled")
         provider = _resolve_provider(self._config, stage_config, routing_override)
-        model = stage_config.model or _default_model(provider, self._config.llm)
-
-        base_url = stage_config.base_url
-        api_key = stage_config.api_key
-        if provider == "ollama":
-            base_url = base_url or self._config.llm.ollama_url
-            cloud = False
-            client = OllamaProvider(
-                base_url,
-                model,
-                keep_alive_s=self._config.llm.ollama_keep_alive_s,
-                timeout_s=self._config.llm.timeout_s,
-                retries=self._config.llm.retries,
-                prompt_strategy=self._prompt_strategy,
-                governor=self._governor,
-            )
-        elif provider == "openai_compatible":
-            base_url = base_url or self._config.llm.openai_compatible_base_url
-            api_key = api_key or self._config.llm.openai_compatible_api_key
-            if not api_key:
-                record = self._secrets.get("OPENAI_COMPATIBLE_API_KEY")
-                api_key = record.value if record else None
-            if not base_url:
-                raise RuntimeError(f"Stage '{stage}' requires openai_compatible base_url")
-            cloud = _is_cloud_endpoint(base_url)
-            _guard_cloud(self._config, stage_config, stage, provider, base_url, cloud)
-            client = OpenAICompatibleProvider(
-                base_url,
-                model,
-                api_key=api_key,
-                timeout_s=self._config.llm.timeout_s,
-                retries=self._config.llm.retries,
-                prompt_strategy=self._prompt_strategy,
-                governor=self._governor,
-            )
-        elif provider == "openai":
-            api_key = api_key or self._config.llm.openai_api_key
-            if not api_key:
-                record = self._secrets.get("OPENAI_API_KEY")
-                api_key = record.value if record else None
-            if not api_key:
-                raise RuntimeError(f"Stage '{stage}' requires OpenAI API key")
-            cloud = True
-            _guard_cloud(self._config, stage_config, stage, provider, None, cloud)
-            client = OpenAIProvider(
-                api_key,
-                model,
-                timeout_s=self._config.llm.timeout_s,
-                retries=self._config.llm.retries,
-                prompt_strategy=self._prompt_strategy,
-                governor=self._governor,
-            )
-        else:
-            raise RuntimeError(f"Unsupported LLM provider: {provider}")
+        resolved = self._plugins.resolve_extension(
+            "llm.provider",
+            provider,
+            stage=stage,
+            stage_config=stage_config,
+            factory_kwargs={
+                "stage": stage,
+                "stage_config": stage_config,
+                "prompt_strategy": self._prompt_strategy,
+                "governor": self._governor,
+                "routing_override": routing_override,
+            },
+        )
+        if not isinstance(resolved, tuple) or len(resolved) != 2:
+            raise RuntimeError("LLM provider factory must return (provider, info)")
+        client, info = resolved
+        info = _normalize_llm_info(info, provider)
 
         decision = StageDecision(
             stage=stage,
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            cloud=cloud,
+            provider=info.provider_id,
+            model=info.model,
+            base_url=info.base_url,
+            cloud=info.cloud,
             temperature=stage_config.temperature,
         )
         self._log.info(
             "Stage {} routed to {} (cloud={}, model={})",
             stage,
-            provider,
-            cloud,
-            model,
+            info.provider_id,
+            info.cloud,
+            info.model,
         )
         return client, decision
 
@@ -141,43 +103,14 @@ def _resolve_provider(
     return "ollama"
 
 
-def _default_model(provider: str, llm_config: LLMConfig) -> str:
-    if provider == "openai":
-        return llm_config.openai_model
-    if provider == "openai_compatible":
-        return llm_config.openai_compatible_model
-    return llm_config.ollama_model
-
-
-def _is_cloud_endpoint(base_url: str) -> bool:
-    parsed = urlparse(base_url)
-    host = parsed.hostname or ""
-    return bool(host) and not is_loopback_host(host)
-
-
-def _guard_cloud(
-    config: AppConfig,
-    stage_config: ModelStageConfig,
-    stage: str,
-    provider: str,
-    base_url: str | None,
-    cloud: bool,
-) -> None:
-    if not cloud:
-        return
-    if not config.output.allow_tron_compression:
-        raise RuntimeError(
-            f"Cloud provider blocked for stage '{stage}' because output.allow_tron_compression=false. "
-            "Enable TRON compression for cloud usage."
+def _normalize_llm_info(info: object, fallback_provider: str) -> LLMProviderInfo:
+    if isinstance(info, LLMProviderInfo):
+        return info
+    if isinstance(info, dict):
+        return LLMProviderInfo(
+            provider_id=str(info.get("provider_id") or fallback_provider),
+            model=str(info.get("model") or ""),
+            base_url=info.get("base_url"),
+            cloud=bool(info.get("cloud")),
         )
-    if not stage_config.allow_cloud:
-        raise RuntimeError(
-            f"Cloud provider blocked for stage '{stage}'. "
-            f"Set model_stages.{stage}.allow_cloud=true to allow."
-        )
-    if config.offline:
-        raise RuntimeError(f"Cloud provider blocked for stage '{stage}' because offline=true.")
-    if not config.privacy.cloud_enabled:
-        raise RuntimeError(
-            f"Cloud provider blocked for stage '{stage}' because privacy.cloud_enabled=false."
-        )
+    raise RuntimeError("Invalid LLM provider info payload")

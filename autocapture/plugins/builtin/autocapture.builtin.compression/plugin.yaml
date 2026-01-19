@@ -1,0 +1,29 @@
+schema_version: 1
+plugin_id: autocapture.builtin.compression
+name: Autocapture Builtin Compression
+version: 1.0.0
+description: Built-in compression strategies.
+enabled_by_default: true
+extensions:
+  - kind: compressor
+    id: extractive
+    name: Extractive
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_compressor_extractive
+  - kind: compressor
+    id: abstractive
+    name: Abstractive (local)
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_compressor_abstractive

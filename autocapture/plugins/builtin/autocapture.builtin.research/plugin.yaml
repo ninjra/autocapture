@@ -1,0 +1,18 @@
+schema_version: 1
+plugin_id: autocapture.builtin.research
+name: Autocapture Builtin Research
+version: 1.0.0
+description: Built-in research watchlists.
+enabled_by_default: true
+extensions:
+  - kind: research.watchlist
+    id: core
+    name: Core Watchlist
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: file
+      path: watchlist.yaml

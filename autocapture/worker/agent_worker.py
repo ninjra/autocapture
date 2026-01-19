@@ -59,6 +59,7 @@ from ..runtime_governor import RuntimeGovernor
 from ..runtime_pause import PauseController, paused_guard
 from ..vision.extractors import ScreenExtractorRouter
 from ..enrichment.sql_artifacts import extract_sql_artifacts
+from ..plugins import PluginManager
 
 
 class AgentJobWorker:
@@ -72,6 +73,7 @@ class AgentJobWorker:
         llm_client: AgentLLMClient | None = None,
         runtime_governor: RuntimeGovernor | None = None,
         pause_controller: PauseController | None = None,
+        plugin_manager: PluginManager | None = None,
     ) -> None:
         self._config = config
         self._db = db_manager or DatabaseManager(config.database)
@@ -86,13 +88,18 @@ class AgentJobWorker:
         self._lexical = LexicalIndex(self._db)
         self._thread_lexical = ThreadLexicalIndex(self._db)
         self._llm = llm_client or AgentLLMClient(config)
+        plugins = plugin_manager or PluginManager(config)
         self._prompt_registry = PromptRegistry.from_package(
             "autocapture.prompts.derived",
             hardening_enabled=config.templates.enabled,
             log_provenance=config.templates.log_provenance,
+            extra_dirs=plugins.prompt_bundles(),
+            allow_external=True,
         )
         self._media_store = MediaStore(config.capture, config.encryption)
-        self._screen_extractor = ScreenExtractorRouter(config, runtime_governor=runtime_governor)
+        self._screen_extractor = ScreenExtractorRouter(
+            config, runtime_governor=runtime_governor, plugin_manager=plugins
+        )
         secret = SecretStore(Path(config.capture.data_dir)).get_or_create()
         self._entities = EntityResolver(
             self._db,

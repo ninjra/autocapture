@@ -1,0 +1,34 @@
+schema_version: 1
+plugin_id: autocapture.builtin.embedding
+name: Autocapture Builtin Embedders
+version: 1.0.0
+description: Built-in embedding backends.
+enabled_by_default: true
+extensions:
+  - kind: embedder.text
+    id: local
+    name: Local Embedder
+    aliases: [default]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_embedder_local
+    ui:
+      badge:
+        text: local
+        tone: neutral
+  - kind: embedder.text
+    id: disabled
+    name: Disabled
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_embedder_disabled
