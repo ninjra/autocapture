@@ -131,7 +131,9 @@ class GatewayRouter:
         if not model_id:
             raise UpstreamError("model required", status_code=400)
         if self._registry.enabled and self._registry.stage(model_id):
-            return await self.handle_stage_request(model_id, request, tenant_id=request.get("tenant_id"))
+            return await self.handle_stage_request(
+                model_id, request, tenant_id=request.get("tenant_id")
+            )
         if self._registry.enabled and model_id in self._registry.model_ids():
             candidate = self._registry.direct_candidate(model_id)
             return await self._proxy_model(candidate, request, tenant_id=request.get("tenant_id"))
@@ -231,9 +233,13 @@ class GatewayRouter:
             validation = self._validator.validate(parsed.payload, valid_evidence_ids=evidence_ids)
             if not validation.valid and stage.repair_on_failure:
                 repair_payload = _build_repair_payload(payload, validation.errors)
-                response = await self._call_upstream(candidate.provider, repair_payload, tenant_id=tenant_id)
+                response = await self._call_upstream(
+                    candidate.provider, repair_payload, tenant_id=tenant_id
+                )
                 parsed = parse_claims_json(response.content)
-                validation = self._validator.validate(parsed.payload, valid_evidence_ids=evidence_ids)
+                validation = self._validator.validate(
+                    parsed.payload, valid_evidence_ids=evidence_ids
+                )
             if not validation.valid:
                 raise UpstreamError("claims_validation_failed", status_code=422)
         if stage.requirements.require_citations and not _contains_citations(response.content):
@@ -279,7 +285,9 @@ class GatewayRouter:
                     is_retryable=_retryable_exc,
                 )
             except httpx.HTTPStatusError as exc:
-                raise UpstreamError("upstream_http_error", status_code=exc.response.status_code) from exc
+                raise UpstreamError(
+                    "upstream_http_error", status_code=exc.response.status_code
+                ) from exc
             except Exception as exc:
                 raise UpstreamError("upstream_error") from exc
         content = _extract_content(data)
@@ -349,7 +357,9 @@ class GatewayRouter:
 
 
 class ProviderFallback:
-    def __init__(self, *, id: str, base_url: str, api_key: str | None, timeout_s: float, retries: int):
+    def __init__(
+        self, *, id: str, base_url: str, api_key: str | None, timeout_s: float, retries: int
+    ):
         self.id = id
         self.type = "openai_compatible"
         self.base_url = base_url
@@ -419,7 +429,9 @@ def _apply_lora(payload: dict[str, Any], candidate: StageModel) -> dict[str, Any
     return payload
 
 
-def _apply_lmcache(payload: dict[str, Any], candidate: StageModel, tenant_id: str | None) -> dict[str, Any]:
+def _apply_lmcache(
+    payload: dict[str, Any], candidate: StageModel, tenant_id: str | None
+) -> dict[str, Any]:
     if not candidate.model.lmcache_enabled:
         return payload
     tenant = tenant_id or payload.get("tenant_id") or "default"

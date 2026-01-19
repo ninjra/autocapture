@@ -44,12 +44,14 @@ class GraphAdapterClient:
         payload = {
             "query": query,
             "limit": min(int(limit), int(self._config.max_results)),
-            "time_range": {
-                "start": time_range[0],
-                "end": time_range[1],
-            }
-            if time_range
-            else None,
+            "time_range": (
+                {
+                    "start": time_range[0],
+                    "end": time_range[1],
+                }
+                if time_range
+                else None
+            ),
             "filters": filters or {},
         }
         url = f"{self._config.base_url.rstrip('/')}/{self._name}/query"
@@ -61,7 +63,9 @@ class GraphAdapterClient:
                 return response.json()
 
         try:
-            data = retry_sync(_request, policy=self._retry_policy, is_retryable=is_retryable_exception)
+            data = retry_sync(
+                _request, policy=self._retry_policy, is_retryable=is_retryable_exception
+            )
         except Exception as exc:
             self._log.warning("Graph adapter {} query failed: {}", self._name, exc)
             return []

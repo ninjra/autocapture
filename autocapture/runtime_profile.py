@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 
 from .config import AppConfig, RuntimeQosProfile
-from .runtime_env import ProfileName
+from .runtime_env import ProfileName, ProfileTuning, RuntimeEnvConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,8 +26,9 @@ class ExecutionProfile:
 
 
 class ProfileScheduler:
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, runtime_env: RuntimeEnvConfig | None = None) -> None:
         self._config = config
+        self._runtime_env = runtime_env
         self._log = logging.getLogger("runtime.profile")
         base_poll = max(0.1, float(config.worker.poll_interval_s))
         foreground_poll = base_poll
@@ -40,12 +42,43 @@ class ProfileScheduler:
         )
         self._idle = self._build_profile(ProfileName.IDLE, idle_qos, idle_poll)
         self._idle = self._normalize_idle(self._foreground, self._idle)
+        if runtime_env is not None:
+            self._foreground_tuning = runtime_env.foreground_tuning
+            self._idle_tuning = runtime_env.idle_tuning
+        else:
+            self._foreground_tuning = _fallback_tuning(ProfileName.FOREGROUND)
+            self._idle_tuning = _fallback_tuning(ProfileName.IDLE)
 
     def profile(self, name: ProfileName) -> ExecutionProfile:
         return self._idle if name == ProfileName.IDLE else self._foreground
 
     def qos_profile(self, name: ProfileName) -> RuntimeQosProfile:
         return self.profile(name).qos_profile
+
+    def tuning(self, name: ProfileName | None = None) -> ProfileTuning:
+        if name is None and self._runtime_env is not None:
+            name = self._runtime_env.profile
+        if name == ProfileName.IDLE:
+            return self._idle_tuning
+        return self._foreground_tuning
+
+    def max_workers(self, name: ProfileName | None = None) -> int:
+        return self.tuning(name).max_workers
+
+    def batch_size(self, name: ProfileName | None = None) -> int:
+        return self.tuning(name).batch_size
+
+    def poll_interval_s(self, name: ProfileName | None = None) -> float:
+        return self.tuning(name).poll_interval_ms / 1000.0
+
+    def sleep_interval(self, name: ProfileName | None = None) -> float:
+        return self.poll_interval_s(name)
+
+    def max_queue_depth(self, name: ProfileName | None = None) -> int:
+        return self.tuning(name).max_queue_depth
+
+    def max_cpu_pct_hint(self, name: ProfileName | None = None) -> int:
+        return self.tuning(name).max_cpu_pct_hint
 
     def _build_profile(
         self,
@@ -131,3 +164,23 @@ def _cmp_optional(left: int | None, right: int | None) -> int:
     if left > right:
         return 1
     return 0
+
+
+def _fallback_tuning(name: ProfileName) -> ProfileTuning:
+    cpu_count = os.cpu_count() or 1
+    if name == ProfileName.FOREGROUND:
+        max_workers = max(1, min(4, cpu_count))
+        return ProfileTuning(
+            max_workers=max_workers,
+            batch_size=8,
+            poll_interval_ms=100,
+            max_queue_depth=1000,
+            max_cpu_pct_hint=70,
+        )
+    return ProfileTuning(
+        max_workers=max(1, cpu_count),
+        batch_size=32,
+        poll_interval_ms=500,
+        max_queue_depth=5000,
+        max_cpu_pct_hint=30,
+    )

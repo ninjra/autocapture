@@ -1,20 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
+import re
+
 import pytest
 
-from autocapture.runtime_device import DeviceKind, DeviceManager
+from autocapture.runtime_device import DeviceManager, DeviceKind, GpuRequiredError
 from autocapture.runtime_env import GpuMode, ProfileName, RuntimeEnvConfig
 
 
-class FakePause:
-    def __init__(self, paused: bool) -> None:
-        self._paused = paused
-
-    def is_paused(self) -> bool:
-        return self._paused
-
-
-def _env(tmp_path, gpu_mode: GpuMode) -> RuntimeEnvConfig:
+def _env(tmp_path: Path, gpu_mode: GpuMode) -> RuntimeEnvConfig:
     return RuntimeEnvConfig(
         gpu_mode=gpu_mode,
         profile=ProfileName.FOREGROUND,
@@ -42,11 +37,25 @@ def test_device_manager_matrix(
     tmp_path, gpu_mode, cuda_available, expect_kind, expect_error
 ) -> None:
     env = _env(tmp_path, gpu_mode)
-    pause = FakePause(False)
-    manager = DeviceManager(env, pause_controller=pause, cuda_available_fn=lambda: cuda_available)
+    manager = DeviceManager(
+        env, cuda_detect_fn=lambda: (cuda_available, {"cuda_available": cuda_available})
+    )
     if expect_error:
-        with pytest.raises(RuntimeError):
+        with pytest.raises(GpuRequiredError):
             manager.select_device()
         return
     selection = manager.select_device()
     assert selection.device_kind == expect_kind
+
+
+def test_no_direct_torch_device_cuda() -> None:
+    pattern = re.compile(r"torch\.device\(\s*['\"]cuda", re.IGNORECASE)
+    offenders: list[str] = []
+    for path in Path("autocapture").rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for idx, line in enumerate(text.splitlines(), start=1):
+            if pattern.search(line):
+                offenders.append(f"{path}:{idx}:{line.strip()}")
+    if offenders:
+        joined = "\n".join(offenders)
+        raise AssertionError(f"Direct torch.device('cuda') usage found:\n{joined}")

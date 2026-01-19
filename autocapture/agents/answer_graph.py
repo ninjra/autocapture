@@ -564,9 +564,14 @@ class AnswerGraph:
                 budget_state=budget_state,
             )
             if entailment is not None:
-                answer_text, citations, selected_claims_payload, evidence, context_pack_json, context_pack_tron = (
-                    entailment
-                )
+                (
+                    answer_text,
+                    citations,
+                    selected_claims_payload,
+                    evidence,
+                    context_pack_json,
+                    context_pack_tron,
+                ) = entailment
         return self._finalize_answer(
             answer_text=answer_text,
             citations=citations,
@@ -932,7 +937,11 @@ class AnswerGraph:
             conflict_summary=conflict_summary,
             answer_id=answer_id,
             query_id=query_id,
-            claims=claims_payload.model_dump(mode="json") if hasattr(claims_payload, "model_dump") else None,
+            claims=(
+                claims_payload.model_dump(mode="json")
+                if hasattr(claims_payload, "model_dump")
+                else None
+            ),
         )
 
     def _build_evidence(
@@ -1309,12 +1318,26 @@ class AnswerGraph:
                         )
                         if regen is None:
                             return None
-                        answer_text, citations, claims_payload, evidence, context_pack_json, context_pack_tron = regen
+                        (
+                            answer_text,
+                            citations,
+                            claims_payload,
+                            evidence,
+                            context_pack_json,
+                            context_pack_tron,
+                        ) = regen
                         evidence_by_id = {item.evidence_id: item for item in evidence}
                         claims = list(claims_payload.claims)
                         continue
                     answer_text = "Answer blocked: contradictions detected in the evidence."
-                    return answer_text, [], claims_payload, evidence, context_pack_json, context_pack_tron
+                    return (
+                        answer_text,
+                        [],
+                        claims_payload,
+                        evidence,
+                        context_pack_json,
+                        context_pack_tron,
+                    )
                 if has_nei:
                     verification_failures_total.labels("entailment", "nei").inc()
                     warnings.append("entailment_nei")
@@ -1340,12 +1363,26 @@ class AnswerGraph:
                         )
                         if regen is None:
                             return None
-                        answer_text, citations, claims_payload, evidence, context_pack_json, context_pack_tron = regen
+                        (
+                            answer_text,
+                            citations,
+                            claims_payload,
+                            evidence,
+                            context_pack_json,
+                            context_pack_tron,
+                        ) = regen
                         evidence_by_id = {item.evidence_id: item for item in evidence}
                         claims = list(claims_payload.claims)
                         continue
                     answer_text = "Not enough evidence to answer."
-                    return answer_text, [], claims_payload, evidence, context_pack_json, context_pack_tron
+                    return (
+                        answer_text,
+                        [],
+                        claims_payload,
+                        evidence,
+                        context_pack_json,
+                        context_pack_tron,
+                    )
                 return None
 
     async def _regenerate_with_deep_retrieval(
@@ -1426,7 +1463,14 @@ class AnswerGraph:
             )
             if not valid:
                 return None
-            return rendered, citations, claims_payload, evidence, context_pack_json, context_pack_tron
+            return (
+                rendered,
+                citations,
+                claims_payload,
+                evidence,
+                context_pack_json,
+                context_pack_tron,
+            )
         citations = _extract_citations(answer_text)
         if not _verify_answer(answer_text, citations, evidence, verifier):
             return None

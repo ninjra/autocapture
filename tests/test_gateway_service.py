@@ -66,7 +66,9 @@ def test_gateway_repairs_invalid_claims() -> None:
 
     def client_factory(timeout_s: float) -> httpx.AsyncClient:
         transport = httpx.ASGITransport(app=app)
-        return httpx.AsyncClient(transport=transport, base_url="http://localhost", timeout=timeout_s)
+        return httpx.AsyncClient(
+            transport=transport, base_url="http://localhost", timeout=timeout_s
+        )
 
     config = AppConfig(model_registry=_registry_config())
     router = GatewayRouter(config, http_client_factory=client_factory)
@@ -82,15 +84,15 @@ def test_gateway_rejects_invalid_claims_without_repair() -> None:
     @app.post("/v1/chat/completions")
     async def completions(_payload: dict) -> dict:
         content = (
-            "```json\n"
-            '{"schema_version":1,"claims":[{"text":"Claim","evidence_ids":[]}]}'
-            "\n```"
+            "```json\n" '{"schema_version":1,"claims":[{"text":"Claim","evidence_ids":[]}]}' "\n```"
         )
         return {"choices": [{"message": {"content": content}}]}
 
     def client_factory(timeout_s: float) -> httpx.AsyncClient:
         transport = httpx.ASGITransport(app=app)
-        return httpx.AsyncClient(transport=transport, base_url="http://localhost", timeout=timeout_s)
+        return httpx.AsyncClient(
+            transport=transport, base_url="http://localhost", timeout=timeout_s
+        )
 
     config = AppConfig(model_registry=_registry_config(repair_on_failure=False))
     router = GatewayRouter(config, http_client_factory=client_factory)
