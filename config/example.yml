@@ -117,7 +117,7 @@ features:
   enable_normalized_indexing: true
   enable_thresholding: true
   enable_retention_prune: false
-  enable_otel: false
+  enable_otel: true
 next10:
   enabled: true
   policy_defaults_path: "config/defaults/policy.json"
@@ -137,7 +137,7 @@ memory:
     db_filename: "memory.sqlite3"
     artifacts_dir: "artifacts"
     snapshots_dir: "snapshots"
-    require_fts: false
+    require_fts: true
     snapshot_retention_days: 90
   policy:
     blocked_labels: []
@@ -169,9 +169,9 @@ routing:
   reranker: "disabled"
   compressor: "extractive"
   verifier: "rules"
-  llm: "ollama"
+  llm: "gateway"
 llm:
-  provider: "ollama"
+  provider: "gateway"
   ollama_url: "http://127.0.0.1:11434"
   ollama_model: "llama3"
   ollama_keep_alive_s: null
@@ -207,26 +207,117 @@ llm_governor:
   high_pressure_threshold: 0.85
   adjust_interval_s: 5.0
 gateway:
-  enabled: false
+  enabled: true
   bind_host: "127.0.0.1"
   port: 8010
   require_api_key: false
   api_key: null
+  internal_token: null
+  gpu_max_concurrency: 2
   max_body_bytes: 2000000
   request_timeout_s: 60.0
   upstream_probe_timeout_s: 5.0
   startup_probe: true
 graph_service:
-  enabled: false
+  enabled: true
   bind_host: "127.0.0.1"
   port: 8020
   max_events: 50000
   max_results: 200
+  require_workers: true
+  graphrag_cli: "scripts/graphrag_worker.sh"
+  hypergraphrag_cli: "scripts/hypergraphrag_worker.sh"
+  hyperrag_cli: "scripts/hyperrag_worker.sh"
+  worker_timeout_s: 60.0
 model_registry:
-  enabled: false
-  providers: []
-  models: []
-  stages: []
+  enabled: true
+  providers:
+    - id: "vllm_gpu_a"
+      type: "openai_compatible"
+      base_url: "http://127.0.0.1:8001"
+      timeout_s: 60.0
+      retries: 2
+      allow_cloud: false
+      max_concurrency: 2
+    - id: "vllm_gpu_b"
+      type: "openai_compatible"
+      base_url: "http://127.0.0.1:8002"
+      timeout_s: 60.0
+      retries: 2
+      allow_cloud: false
+      max_concurrency: 1
+    - id: "vllm_cpu"
+      type: "openai_compatible"
+      base_url: "http://127.0.0.1:8003"
+      timeout_s: 60.0
+      retries: 2
+      allow_cloud: false
+      max_concurrency: 2
+  models:
+    - id: "base_fast"
+      provider_id: "vllm_gpu_a"
+      upstream_model_name: "MODEL_FAST"
+      context_tokens: 8192
+      runtime:
+        device: "cuda"
+    - id: "base_long"
+      provider_id: "vllm_gpu_b"
+      upstream_model_name: "MODEL_LONG"
+      context_tokens: 16384
+      runtime:
+        device: "cuda"
+      lmcache_enabled: true
+    - id: "base_cpu"
+      provider_id: "vllm_cpu"
+      upstream_model_name: "MODEL_CPU"
+      context_tokens: 8192
+      runtime:
+        device: "cpu"
+    - id: "verifier_small"
+      provider_id: "vllm_gpu_a"
+      upstream_model_name: "MODEL_VERIFIER"
+      context_tokens: 4096
+      runtime:
+        device: "cuda"
+  stages:
+    - id: "draft_generate"
+      primary_model_id: "base_fast"
+      fallback_model_ids: ["base_cpu"]
+      sampling:
+        temperature: 0.2
+      requirements:
+        require_json: false
+        require_citations: true
+      decode:
+        strategy: "standard"
+      max_attempts: 2
+      allow_cloud: false
+      repair_on_failure: true
+    - id: "final_answer"
+      primary_model_id: "base_long"
+      fallback_model_ids: ["base_fast", "base_cpu"]
+      sampling:
+        temperature: 0.2
+      requirements:
+        require_json: true
+        claims_schema: "claims_json_v1"
+      decode:
+        strategy: "standard"
+      max_attempts: 2
+      allow_cloud: false
+      repair_on_failure: true
+    - id: "entailment_judge"
+      primary_model_id: "verifier_small"
+      fallback_model_ids: ["base_cpu"]
+      sampling:
+        temperature: 0.0
+      requirements:
+        require_json: true
+      decode:
+        strategy: "standard"
+      max_attempts: 2
+      allow_cloud: false
+      repair_on_failure: true
 model_stages:
   query_refine:
     provider: null
@@ -242,7 +333,7 @@ model_stages:
     base_url: null
     api_key: null
     allow_cloud: false
-    enabled: false
+    enabled: true
     temperature: 0.2
   final_answer:
     provider: null
@@ -266,7 +357,7 @@ model_stages:
     base_url: null
     api_key: null
     allow_cloud: false
-    enabled: false
+    enabled: true
     temperature: 0.0
 verification:
   claims_enabled: true
@@ -274,6 +365,10 @@ verification:
     max_claims: 20
     max_citations_per_claim: 8
     allow_empty: false
+    allow_legacy_evidence_ids: false
+    max_line_span: 8
+    allow_legacy_evidence_ids: false
+    max_line_span: 8
   entailment:
     enabled: true
     judge_stage: "entailment_judge"
@@ -420,11 +515,11 @@ reranker:
   disable_in_fullscreen: true
   force_cpu_in_active: true
 retrieval:
-  v2_enabled: false
-  use_spans_v2: false
-  sparse_enabled: false
-  late_enabled: false
-  fusion_enabled: false
+  v2_enabled: true
+  use_spans_v2: true
+  sparse_enabled: true
+  late_enabled: true
+  fusion_enabled: true
   multi_query_enabled: true
   rrf_enabled: true
   lexical_min_score: 0.15
@@ -442,28 +537,28 @@ retrieval:
   late_text_max_chars: 200
   late_candidate_k: 100
   late_rerank_k: 50
-  late_stage1_enabled: false
+  late_stage1_enabled: true
   late_stage1_max_days: 7
   late_stage1_k: 50
   rewrite_max_chars: 200
-  speculative_enabled: false
+  speculative_enabled: true
   speculative_draft_k: 6
   speculative_final_k: 12
-  traces_enabled: false
+  traces_enabled: true
   graph_adapters:
     graphrag:
-      enabled: false
-      base_url: null
+      enabled: true
+      base_url: "http://127.0.0.1:8020"
       timeout_s: 10.0
       max_results: 20
     hypergraphrag:
-      enabled: false
-      base_url: null
+      enabled: true
+      base_url: "http://127.0.0.1:8020"
       timeout_s: 10.0
       max_results: 20
     hyperrag:
-      enabled: false
-      base_url: null
+      enabled: true
+      base_url: "http://127.0.0.1:8020"
       timeout_s: 10.0
       max_results: 20
 worker:

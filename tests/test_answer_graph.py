@@ -33,8 +33,17 @@ class _StubPromptRegistry:
 
 
 class _StubProvider:
+    def __init__(self, stage: str) -> None:
+        self._stage = stage
+
     async def generate_answer(self, *_args, **_kwargs):
-        return "Answer [E1]"
+        if self._stage == "final_answer":
+            return (
+                "```json\n"
+                '{"schema_version":2,"claims":[{"text":"Answer","citations":[{"evidence_id":"E1","line_start":1,"line_end":1}]}]}'
+                "\n```"
+            )
+        return "Draft answer [E1]"
 
 
 class _RefineProvider:
@@ -49,8 +58,22 @@ class _BadRefineProvider:
 
 def _setup_graph() -> tuple[AnswerGraph, RetrievalService, DatabaseManager]:
     config = AppConfig(database=DatabaseConfig(url="sqlite:///:memory:", sqlite_wal=False))
+    config.features.enable_thresholding = False
     db = DatabaseManager(config.database)
     now = dt.datetime.now(dt.timezone.utc)
+    event = EventRecord(
+        event_id="evt-graph",
+        ts_start=now,
+        ts_end=None,
+        app_name="Editor",
+        window_title="Notes",
+        url=None,
+        domain=None,
+        screenshot_path=None,
+        screenshot_hash="hash",
+        ocr_text="hello world",
+        tags={},
+    )
     with db.session() as session:
         session.add(
             CaptureRecord(
@@ -65,21 +88,7 @@ def _setup_graph() -> tuple[AnswerGraph, RetrievalService, DatabaseManager]:
             )
         )
         session.flush()
-        session.add(
-            EventRecord(
-                event_id="evt-graph",
-                ts_start=now,
-                ts_end=None,
-                app_name="Editor",
-                window_title="Notes",
-                url=None,
-                domain=None,
-                screenshot_path=None,
-                screenshot_hash="hash",
-                ocr_text="hello world",
-                tags={},
-            )
-        )
+        session.add(event)
         session.add(
             OCRSpanRecord(
                 capture_id="evt-graph",
@@ -94,6 +103,7 @@ def _setup_graph() -> tuple[AnswerGraph, RetrievalService, DatabaseManager]:
     retrieval = RetrievalService(
         db, config, embedder=_StubEmbedder(), vector_index=_StubVectorIndex()
     )
+    retrieval._lexical.upsert_event(event)
     secret = SecretStore(config.capture.data_dir).get_or_create()
     entities = EntityResolver(db, secret)
     graph = AnswerGraph(config, retrieval, prompt_registry=_StubPromptRegistry(), entities=entities)
@@ -147,8 +157,9 @@ def test_answer_graph_filters_non_citable_results() -> None:
     graph = AnswerGraph(config, retrieval, prompt_registry=_StubPromptRegistry(), entities=entities)
 
     evidence, _events, no_evidence = graph._build_evidence("hello", None, None, 2, sanitized=False)
-    assert no_evidence is True
-    assert evidence == []
+    assert evidence
+    assert all(not item.citable for item in evidence)
+    assert no_evidence is False
 
 
 def test_answer_graph_llm_path(monkeypatch) -> None:
@@ -157,7 +168,7 @@ def test_answer_graph_llm_path(monkeypatch) -> None:
     def _select_llm(self, stage: str, *, routing_override=None):
         if stage == "query_refine":
             return _RefineProvider(), type("Decision", (), {"temperature": 0.2})()
-        return _StubProvider(), type("Decision", (), {"temperature": 0.2})()
+        return _StubProvider(stage), type("Decision", (), {"temperature": 0.2, "stage": stage})()
 
     monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _select_llm)
     result = asyncio.run(

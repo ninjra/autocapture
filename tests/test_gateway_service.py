@@ -53,13 +53,13 @@ def test_gateway_repairs_invalid_claims() -> None:
         if calls["count"] == 1:
             content = (
                 "```json\n"
-                '{"schema_version":1,"claims":[{"text":"Claim","evidence_ids":[]}]}'
+                '{"schema_version":2,"claims":[{"text":"Claim","citations":[]}]}'
                 "\n```"
             )
         else:
             content = (
                 "```json\n"
-                '{"schema_version":1,"claims":[{"text":"Claim","evidence_ids":["E1"]}]}'
+                '{"schema_version":2,"claims":[{"text":"Claim","citations":[{"evidence_id":"E1","line_start":1,"line_end":1}]}]}'
                 "\n```"
             )
         return {"choices": [{"message": {"content": content}}]}
@@ -84,7 +84,7 @@ def test_gateway_rejects_invalid_claims_without_repair() -> None:
     @app.post("/v1/chat/completions")
     async def completions(_payload: dict) -> dict:
         content = (
-            "```json\n" '{"schema_version":1,"claims":[{"text":"Claim","evidence_ids":[]}]}' "\n```"
+            "```json\n" '{"schema_version":2,"claims":[{"text":"Claim","citations":[]}]}' "\n```"
         )
         return {"choices": [{"message": {"content": content}}]}
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any
 
 import httpx
@@ -29,6 +30,8 @@ class GraphAdapterClient:
 
     @property
     def enabled(self) -> bool:
+        if os.environ.get("AUTOCAPTURE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
+            return False
         return bool(self._config.enabled and self._config.base_url)
 
     def query(

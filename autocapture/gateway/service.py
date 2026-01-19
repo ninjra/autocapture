@@ -17,7 +17,7 @@ from ..logging_utils import get_logger
 from ..model_ops.registry import ModelRegistry, RegistryError, StageModel
 from ..resilience import RetryPolicy, retry_async, is_retryable_exception, is_retryable_http_status
 from ..answer.claims import parse_claims_json
-from ..answer.claim_validation import ClaimValidator
+from ..answer.claim_validation import ClaimValidator, EvidenceLineInfo
 from ..observability.otel import otel_span
 
 _LOG = get_logger("gateway")
@@ -50,6 +50,9 @@ class GatewayRouter:
         self._provider_breakers: dict[str, int] = {}
         self._provider_open_until: dict[str, float] = {}
         self._decode_limits: dict[str, asyncio.Semaphore] = {}
+        self._provider_limits: dict[str, asyncio.Semaphore] = {}
+        self._provider_limits_capacity: dict[str, int] = {}
+        self._gpu_sem = asyncio.Semaphore(max(1, int(config.gateway.gpu_max_concurrency)))
 
     def registry_enabled(self) -> bool:
         return self._registry.enabled
@@ -95,7 +98,7 @@ class GatewayRouter:
             raise UpstreamError(str(exc), status_code=404) from exc
         if not candidates:
             raise UpstreamError(f"stage '{stage_id}' has no candidates", status_code=404)
-        evidence_ids = _extract_evidence_ids(request.get("messages") or [])
+        evidence_map = _extract_evidence_map(request.get("messages") or [])
         last_error: Exception | None = None
         for candidate in candidates:
             provider = candidate.provider
@@ -110,7 +113,7 @@ class GatewayRouter:
                     candidate,
                     request,
                     tenant_id=tenant_id,
-                    evidence_ids=evidence_ids,
+                    evidence_map=evidence_map,
                 )
                 self._record_success(provider.id)
                 return response.payload
@@ -182,6 +185,33 @@ class GatewayRouter:
         )
         return response.payload
 
+    async def handle_models(self) -> dict[str, Any]:
+        data: list[dict[str, Any]] = []
+        if self._registry.enabled:
+            for model in self._registry.models():
+                data.append(
+                    {
+                        "id": model.id,
+                        "object": "model",
+                        "owned_by": model.provider_id,
+                        "context_length": model.context_tokens,
+                        "metadata": {
+                            "supports_json": model.supports_json,
+                            "supports_tools": model.supports_tools,
+                            "supports_vision": model.supports_vision,
+                            "quantization": (
+                                model.quantization.model_dump()
+                                if model.quantization is not None
+                                else None
+                            ),
+                            "lora": (model.lora.model_dump() if model.lora is not None else None),
+                            "runtime": model.runtime.model_dump(),
+                            "lmcache_enabled": model.lmcache_enabled,
+                        },
+                    }
+                )
+        return {"object": "list", "data": data}
+
     async def _proxy_model(
         self, candidate: StageModel, request: dict[str, Any], *, tenant_id: str | None
     ) -> dict[str, Any]:
@@ -204,47 +234,75 @@ class GatewayRouter:
         request: dict[str, Any],
         *,
         tenant_id: str | None,
-        evidence_ids: set[str],
+        evidence_map: dict[str, EvidenceLineInfo],
     ) -> UpstreamResponse:
         stage = candidate.stage
-        payload = dict(request)
-        payload["model"] = candidate.model.upstream_model_name
-        payload = _apply_sampling(payload, stage)
-        payload = _apply_lora(payload, candidate)
-        payload = _apply_response_format(payload, stage)
-        payload = _apply_lmcache(payload, candidate, tenant_id)
-        if stage.decode.strategy != "standard":
-            backend = self._registry.decode_backend(stage)
-            if backend is None:
-                raise UpstreamError("decode_backend_missing", status_code=500)
-            if not await self._acquire_decode_slot(
-                stage.decode.backend_provider_id, stage.decode.max_concurrency
+        if stage.decode.strategy not in {"standard", "swift", "lookahead", "medusa"}:
+            raise UpstreamError("decode_strategy_not_allowed", status_code=400)
+        base_payload = dict(request)
+        base_payload["model"] = candidate.model.upstream_model_name
+        base_payload = _apply_sampling(base_payload, stage)
+        base_payload = _apply_lora(base_payload, candidate)
+        base_payload = _apply_response_format(base_payload, stage)
+        base_payload = _apply_lmcache(base_payload, candidate, tenant_id)
+        errors: list[str] = []
+        max_attempts = max(1, int(getattr(stage, "max_attempts", 1)))
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
+            payload = dict(base_payload)
+            if attempt > 1 and errors:
+                payload = _build_repair_payload(payload, errors)
+                payload["temperature"] = 0.0
+            if stage.decode.strategy != "standard":
+                backend = self._registry.decode_backend(stage)
+                if backend is None:
+                    raise UpstreamError("decode_backend_missing", status_code=500)
+                decode_limit = stage.decode.max_concurrency
+                if stage.decode.strategy == "medusa":
+                    decode_limit = 1
+                if not await self._acquire_decode_slot(
+                    stage.decode.backend_provider_id, decode_limit
+                ):
+                    raise UpstreamError("decode_backend_busy", status_code=429)
+                try:
+                    payload["decoding_strategy"] = stage.decode.strategy
+                    response = await self._call_with_limits(
+                        backend,
+                        payload,
+                        tenant_id=tenant_id,
+                        gpu_required=True,
+                    )
+                finally:
+                    self._release_decode_slot(stage.decode.backend_provider_id)
+            else:
+                response = await self._call_with_limits(
+                    candidate.provider,
+                    payload,
+                    tenant_id=tenant_id,
+                    gpu_required=_gpu_required(candidate.model),
+                )
+            if (
+                stage.requirements.require_json
+                and stage.requirements.claims_schema == "claims_json_v1"
             ):
-                raise UpstreamError("decode_backend_busy", status_code=429)
-            try:
-                payload["decoding_strategy"] = stage.decode.strategy
-                response = await self._call_upstream(backend, payload, tenant_id=tenant_id)
-            finally:
-                self._release_decode_slot(stage.decode.backend_provider_id)
-        else:
-            response = await self._call_upstream(candidate.provider, payload, tenant_id=tenant_id)
-        if stage.requirements.require_json and stage.requirements.claims_schema == "claims_json_v1":
-            parsed = parse_claims_json(response.content)
-            validation = self._validator.validate(parsed.payload, valid_evidence_ids=evidence_ids)
-            if not validation.valid and stage.repair_on_failure:
-                repair_payload = _build_repair_payload(payload, validation.errors)
-                response = await self._call_upstream(
-                    candidate.provider, repair_payload, tenant_id=tenant_id
-                )
-                parsed = parse_claims_json(response.content)
-                validation = self._validator.validate(
-                    parsed.payload, valid_evidence_ids=evidence_ids
-                )
-            if not validation.valid:
-                raise UpstreamError("claims_validation_failed", status_code=422)
-        if stage.requirements.require_citations and not _contains_citations(response.content):
-            raise UpstreamError("citations_missing", status_code=422)
-        return response
+                try:
+                    parsed = parse_claims_json(response.content)
+                except Exception:
+                    errors = ["claims_parse_failed"]
+                    if stage.repair_on_failure and attempt < max_attempts:
+                        continue
+                    raise UpstreamError("claims_parse_failed", status_code=422)
+                validation = self._validator.validate(parsed.payload, evidence_map=evidence_map)
+                if not validation.valid:
+                    errors = validation.errors
+                    if stage.repair_on_failure and attempt < max_attempts:
+                        continue
+                    raise UpstreamError("claims_validation_failed", status_code=422)
+            if stage.requirements.require_citations and not _contains_citations(response.content):
+                raise UpstreamError("citations_missing", status_code=422)
+            return response
+        raise UpstreamError("claims_validation_failed", status_code=422)
 
     async def _call_upstream(
         self,
@@ -292,6 +350,70 @@ class GatewayRouter:
                 raise UpstreamError("upstream_error") from exc
         content = _extract_content(data)
         return UpstreamResponse(payload=data, content=content)
+
+    async def _call_with_limits(
+        self,
+        provider,
+        payload: dict[str, Any],
+        *,
+        tenant_id: str | None,
+        gpu_required: bool,
+    ) -> UpstreamResponse:
+        if not await self._acquire_provider_slot(provider.id, provider.max_concurrency):
+            raise UpstreamError("provider_busy", status_code=429)
+        gpu_acquired = False
+        if gpu_required:
+            if not await self._acquire_gpu_slot():
+                self._release_provider_slot(provider.id)
+                raise UpstreamError("gpu_busy", status_code=429)
+            gpu_acquired = True
+        try:
+            return await self._call_upstream(provider, payload, tenant_id=tenant_id)
+        finally:
+            if gpu_acquired:
+                self._release_gpu_slot()
+            self._release_provider_slot(provider.id)
+
+    async def _acquire_provider_slot(self, provider_id: str, max_concurrency: int) -> bool:
+        if (
+            provider_id not in self._provider_limits
+            or self._provider_limits_capacity.get(provider_id) != max_concurrency
+        ):
+            self._provider_limits[provider_id] = asyncio.Semaphore(max_concurrency)
+            self._provider_limits_capacity[provider_id] = max_concurrency
+        sem = self._provider_limits[provider_id]
+        if sem.locked():
+            return False
+        try:
+            await asyncio.wait_for(sem.acquire(), timeout=0.001)
+            return True
+        except Exception:
+            return False
+
+    def _release_provider_slot(self, provider_id: str) -> None:
+        sem = self._provider_limits.get(provider_id)
+        if sem is None:
+            return
+        try:
+            sem.release()
+        except ValueError:
+            return
+
+    async def _acquire_gpu_slot(self) -> bool:
+        sem = self._gpu_sem
+        if sem.locked():
+            return False
+        try:
+            await asyncio.wait_for(sem.acquire(), timeout=0.001)
+            return True
+        except Exception:
+            return False
+
+    def _release_gpu_slot(self) -> None:
+        try:
+            self._gpu_sem.release()
+        except ValueError:
+            return
 
     async def _acquire_decode_slot(self, backend_id: str, max_concurrency: int) -> bool:
         if backend_id not in self._decode_limits:
@@ -358,7 +480,14 @@ class GatewayRouter:
 
 class ProviderFallback:
     def __init__(
-        self, *, id: str, base_url: str, api_key: str | None, timeout_s: float, retries: int
+        self,
+        *,
+        id: str,
+        base_url: str,
+        api_key: str | None,
+        timeout_s: float,
+        retries: int,
+        max_concurrency: int,
     ):
         self.id = id
         self.type = "openai_compatible"
@@ -370,6 +499,7 @@ class ProviderFallback:
         self.headers: dict[str, str] = {}
         self.allow_cloud = True
         self.circuit_breaker = type("CB", (), {"failure_threshold": 5, "reset_timeout_s": 30.0})()
+        self.max_concurrency = max_concurrency
 
 
 def _provider_from_fallback(config: AppConfig) -> ProviderFallback:
@@ -379,6 +509,7 @@ def _provider_from_fallback(config: AppConfig) -> ProviderFallback:
         api_key=config.llm.openai_compatible_api_key,
         timeout_s=config.llm.timeout_s,
         retries=config.llm.retries,
+        max_concurrency=4,
     )
 
 
@@ -454,22 +585,45 @@ def _build_repair_payload(payload: dict[str, Any], errors: list[str]) -> dict[st
     return {**payload, "messages": messages + [repair_msg], "temperature": 0.0}
 
 
-def _extract_evidence_ids(messages: list[dict[str, Any]]) -> set[str]:
+def _extract_evidence_map(messages: list[dict[str, Any]]) -> dict[str, EvidenceLineInfo]:
     text = "\n".join(str(msg.get("content") or "") for msg in messages)
     match = re.search(r"EVIDENCE_JSON:\s*```json\s*(\{.*?\})\s*```", text, re.DOTALL)
     if not match:
-        return set()
+        return {}
     try:
         payload = json.loads(match.group(1))
     except json.JSONDecodeError:
-        return set()
+        return {}
     evidence = payload.get("evidence") or []
-    ids = {str(item.get("id")) for item in evidence if isinstance(item, dict)}
-    return {cid for cid in ids if cid}
+    mapping: dict[str, EvidenceLineInfo] = {}
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        evidence_id = str(item.get("id") or "")
+        if not evidence_id:
+            continue
+        text_block = item.get("text")
+        if not isinstance(text_block, str):
+            text_block = ""
+        lines = text_block.splitlines()
+        if not lines and text_block:
+            lines = [text_block]
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        citable = bool(meta.get("citable", True))
+        mapping[evidence_id] = EvidenceLineInfo(
+            evidence_id=evidence_id,
+            lines=lines,
+            citable=citable,
+        )
+    return mapping
+
+
+def _extract_evidence_ids(messages: list[dict[str, Any]]) -> set[str]:
+    return set(_extract_evidence_map(messages))
 
 
 def _contains_citations(text: str) -> bool:
-    return bool(re.search(r"\[E\d+\]", text or ""))
+    return bool(re.search(r"(?:\\[|【)E\\d+(?::L\\d+-L\\d+)?(?:\\]|】)", text or ""))
 
 
 def _cloud_allowed(config: AppConfig, allow_cloud: bool, provider) -> bool:
@@ -490,3 +644,10 @@ def _cloud_allowed(config: AppConfig, allow_cloud: bool, provider) -> bool:
 
 def _is_loopback(base_url: str) -> bool:
     return "127.0.0.1" in base_url or "localhost" in base_url
+
+
+def _gpu_required(model) -> bool:
+    device = str(getattr(getattr(model, "runtime", None), "device", "") or "").lower()
+    if device in {"cpu"}:
+        return False
+    return True

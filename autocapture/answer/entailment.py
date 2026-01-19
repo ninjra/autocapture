@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ..logging_utils import get_logger
 from ..model_ops import StageRouter
@@ -17,8 +17,20 @@ from .claims import ClaimItem
 
 class EntailmentJudgement(BaseModel):
     claim_id: str
-    verdict: str = Field(..., description="entailed|contradicted|nei")
+    verdict: str = Field(
+        ...,
+        description="entailed|contradicted|not_enough_information",
+    )
     rationale: str | None = None
+
+    @field_validator("verdict")
+    @classmethod
+    def _validate_verdict(cls, value: str) -> str:
+        normalized = (value or "").strip().lower()
+        allowed = {"entailed", "contradicted", "not_enough_information", "nei"}
+        if normalized not in allowed:
+            raise ValueError("invalid verdict")
+        return normalized
 
 
 class EntailmentResponse(BaseModel):
@@ -60,15 +72,11 @@ def heuristic_entailment(
     for claim in claims:
         text = claim.text or ""
         numbers = _extract_numbers(text)
-        evidence_text = "\n".join(
-            (evidence_by_id[cid].raw_text or evidence_by_id[cid].text)
-            for cid in claim.evidence_ids
-            if cid in evidence_by_id
-        )
+        evidence_text = _cited_text(claim, evidence_by_id)
         if numbers:
             evidence_numbers = _extract_numbers(evidence_text)
             if not numbers.issubset(evidence_numbers):
-                verdicts[claim.claim_id or ""] = "nei"
+                verdicts[claim.claim_id or ""] = "not_enough_information"
                 rationale[claim.claim_id or ""] = "numeric_mismatch"
                 continue
         verdicts[claim.claim_id or ""] = "entailed"
@@ -85,13 +93,21 @@ def _build_prompt(claims: list[ClaimItem], evidence_by_id: dict[str, EvidenceIte
                 "text": claim.text,
                 "evidence": [
                     {
-                        "evidence_id": evidence_id,
-                        "text": (
-                            evidence_by_id[evidence_id].raw_text or evidence_by_id[evidence_id].text
+                        "evidence_id": citation.evidence_id,
+                        "line_start": citation.line_start,
+                        "line_end": citation.line_end,
+                        "text": _slice_lines(
+                            (
+                                evidence_by_id[citation.evidence_id].text
+                                if citation.evidence_id in evidence_by_id
+                                else ""
+                            ),
+                            citation.line_start,
+                            citation.line_end,
                         ),
                     }
-                    for evidence_id in claim.evidence_ids
-                    if evidence_id in evidence_by_id
+                    for citation in claim.citations
+                    if citation.evidence_id in evidence_by_id
                 ],
             }
             for claim in claims
@@ -141,10 +157,40 @@ async def judge_entailment(
     verdicts: dict[str, str] = {}
     rationale: dict[str, str] = {}
     for item in parsed.verdicts:
-        verdicts[item.claim_id] = item.verdict.lower()
+        verdict = item.verdict.lower()
+        if verdict == "nei":
+            verdict = "not_enough_information"
+        verdicts[item.claim_id] = verdict
         if item.rationale:
             rationale[item.claim_id] = item.rationale
     return EntailmentResult(verdicts=verdicts, rationale=rationale)
+
+
+def _slice_lines(text: str, line_start: int, line_end: int) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if not lines and text:
+        lines = [text]
+    start = max(1, int(line_start))
+    end = max(start, int(line_end))
+    return "\n".join(lines[start - 1 : end])
+
+
+def _cited_text(claim: ClaimItem, evidence_by_id: dict[str, EvidenceItem]) -> str:
+    chunks: list[str] = []
+    for citation in claim.citations:
+        evidence = evidence_by_id.get(citation.evidence_id)
+        if not evidence:
+            continue
+        chunk = _slice_lines(evidence.text, citation.line_start, citation.line_end)
+        if chunk:
+            chunks.append(chunk)
+    if chunks:
+        return "\n".join(chunks)
+    return "\n".join(
+        (evidence_by_id[cid].text) for cid in claim.evidence_ids if cid in evidence_by_id
+    )
 
 
 __all__ = ["EntailmentResult", "heuristic_entailment", "judge_entailment"]

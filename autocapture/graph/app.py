@@ -36,8 +36,16 @@ def create_graph_app(
     def health() -> dict[str, Any]:
         return {"status": "ok", "enabled": config.graph_service.enabled}
 
+    @app.get("/healthz")
+    def healthz() -> dict[str, Any]:
+        return {"status": "ok", "enabled": config.graph_service.enabled}
+
     @app.get("/ready")
     def ready() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.get("/readyz")
+    def readyz() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/metrics")
@@ -55,9 +63,13 @@ def create_graph_app(
         adapter = _validate_adapter(adapter)
         start = time.monotonic()
         try:
-            response = service.index(payload)
+            response = service.index(payload, adapter=adapter)
             graph_requests_total.labels(adapter, "index", "200").inc()
             return JSONResponse(content=response.model_dump())
+        except RuntimeError as exc:
+            graph_requests_total.labels(adapter, "index", "503").inc()
+            graph_failures_total.labels(adapter, "index", "worker_unavailable").inc()
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             graph_requests_total.labels(adapter, "index", "400").inc()
             graph_failures_total.labels(adapter, "index", "invalid_request").inc()
@@ -75,9 +87,13 @@ def create_graph_app(
         adapter = _validate_adapter(adapter)
         start = time.monotonic()
         try:
-            response = service.query(payload)
+            response = service.query(payload, adapter=adapter)
             graph_requests_total.labels(adapter, "query", "200").inc()
             return JSONResponse(content=response.model_dump())
+        except RuntimeError as exc:
+            graph_requests_total.labels(adapter, "query", "503").inc()
+            graph_failures_total.labels(adapter, "query", "worker_unavailable").inc()
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             graph_requests_total.labels(adapter, "query", "400").inc()
             graph_failures_total.labels(adapter, "query", "invalid_request").inc()

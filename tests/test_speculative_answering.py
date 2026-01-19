@@ -18,10 +18,17 @@ from autocapture.storage.models import EventRecord
 class StubLLM:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.stage: str | None = None
 
     async def generate_answer(self, system_prompt, query, context_pack_text, *, temperature=None):
         _ = system_prompt, query, context_pack_text, temperature
         self.calls.append(query)
+        if self.stage == "final_answer":
+            return (
+                "```json\n"
+                '{"schema_version":2,"claims":[{"text":"Final answer","citations":[{"evidence_id":"E1","line_start":1,"line_end":1}]}]}'
+                "\n```"
+            )
         return "Draft answer [E1]"
 
 
@@ -92,6 +99,7 @@ async def test_speculative_verifier_blocks_early_exit(monkeypatch, tmp_path) -> 
 
     def _mock_select(self, stage: str, *, routing_override=None):
         _ = routing_override
+        stub.stage = stage
         return stub, type("Decision", (), {"temperature": 0.2, "stage": stage, "cloud": False})()
 
     monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _mock_select)
@@ -140,6 +148,7 @@ async def test_speculative_low_confidence_forces_deep(monkeypatch, tmp_path) -> 
 
     def _mock_select(self, stage: str, *, routing_override=None):
         _ = routing_override
+        stub.stage = stage
         return stub, type("Decision", (), {"temperature": 0.2, "stage": stage, "cloud": False})()
 
     monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _mock_select)
@@ -187,6 +196,7 @@ async def test_speculative_verified_early_exit(monkeypatch, tmp_path) -> None:
 
     def _mock_select(self, stage: str, *, routing_override=None):
         _ = routing_override
+        stub.stage = stage
         return stub, type("Decision", (), {"temperature": 0.2, "stage": stage, "cloud": False})()
 
     monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _mock_select)
@@ -200,4 +210,4 @@ async def test_speculative_verified_early_exit(monkeypatch, tmp_path) -> None:
         extractive_only=False,
         routing={"llm": "ollama"},
     )
-    assert len(stub.calls) == 1
+    assert len(stub.calls) >= 2

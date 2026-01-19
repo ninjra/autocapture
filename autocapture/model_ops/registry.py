@@ -64,6 +64,9 @@ class ModelRegistry:
     def model_ids(self) -> set[str]:
         return set(self._models)
 
+    def models(self) -> Iterable[ModelSpec]:
+        return self._models.values()
+
     def direct_candidate(self, model_id: str) -> StageModel:
         model = self.model(model_id)
         provider = self.provider(model.provider_id)

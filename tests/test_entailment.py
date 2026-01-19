@@ -26,9 +26,13 @@ def _evidence(evidence_id: str, text: str) -> EvidenceItem:
 
 def test_heuristic_entailment_numeric_mismatch() -> None:
     evidence = _evidence("E1", "Value is 100 units.")
-    claim = ClaimItem(claim_id="c1", text="Value is 200 units.", evidence_ids=["E1"])
+    claim = ClaimItem(
+        claim_id="c1",
+        text="Value is 200 units.",
+        citations=[{"evidence_id": "E1", "line_start": 1, "line_end": 1}],
+    )
     result = heuristic_entailment([claim], {"E1": evidence})
-    assert result.verdicts["c1"] == "nei"
+    assert result.verdicts["c1"] == "not_enough_information"
 
 
 def test_judge_entailment_parses_verdicts() -> None:
@@ -48,7 +52,11 @@ def test_judge_entailment_parses_verdicts() -> None:
             return self._provider, object()
 
     evidence = _evidence("E1", "Value is 100 units.")
-    claim = ClaimItem(claim_id="c1", text="Value is 100 units.", evidence_ids=["E1"])
+    claim = ClaimItem(
+        claim_id="c1",
+        text="Value is 100 units.",
+        citations=[{"evidence_id": "E1", "line_start": 1, "line_end": 1}],
+    )
     result = asyncio.run(
         judge_entailment(
             _StubRouter(_StubProvider()),

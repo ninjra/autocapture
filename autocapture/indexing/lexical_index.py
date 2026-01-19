@@ -197,6 +197,12 @@ class SpanLexicalIndex:
                     "USING fts5(span_id UNINDEXED, event_id UNINDEXED, frame_id UNINDEXED, text)"
                 )
             )
+            conn.execute(
+                text(
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts "
+                    "USING fts5(chunk_id UNINDEXED, event_id UNINDEXED, text)"
+                )
+            )
 
     def upsert_span(self, *, span_id: str, event_id: str, frame_id: str, text: str) -> None:
         if not span_id:
@@ -221,6 +227,21 @@ class SpanLexicalIndex:
                     "text": text or "",
                 },
             )
+            conn.execute(
+                text("DELETE FROM chunks_fts WHERE chunk_id = :chunk_id"),
+                {"chunk_id": span_id},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO chunks_fts(chunk_id, event_id, text) "
+                    "VALUES (:chunk_id, :event_id, :text)"
+                ),
+                {
+                    "chunk_id": span_id,
+                    "event_id": event_id,
+                    "text": text or "",
+                },
+            )
 
     def bulk_upsert(self, spans: Iterable[dict]) -> None:
         for item in spans:
@@ -241,8 +262,8 @@ class SpanLexicalIndex:
                 try:
                     rows = conn.execute(
                         text(
-                            "SELECT span_id, bm25(span_fts) AS rank "
-                            "FROM span_fts WHERE span_fts MATCH :query "
+                            "SELECT chunk_id, bm25(chunks_fts) AS rank "
+                            "FROM chunks_fts WHERE chunks_fts MATCH :query "
                             "ORDER BY rank LIMIT :limit"
                         ),
                         {"query": query, "limit": limit},
@@ -253,8 +274,8 @@ class SpanLexicalIndex:
                         return []
                     rows = conn.execute(
                         text(
-                            "SELECT span_id, bm25(span_fts) AS rank "
-                            "FROM span_fts WHERE span_fts MATCH :query "
+                            "SELECT chunk_id, bm25(chunks_fts) AS rank "
+                            "FROM chunks_fts WHERE chunks_fts MATCH :query "
                             "ORDER BY rank LIMIT :limit"
                         ),
                         {"query": sanitized, "limit": limit},

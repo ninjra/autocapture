@@ -33,6 +33,7 @@ from ..storage.models import (
     OCRSpanRecord,
     QueryRecord,
     RetrievalHitRecord,
+    RetrievalRunRecord,
     RetrievalTraceRecord,
     TierPlanDecisionRecord,
     TierStatsRecord,
@@ -143,6 +144,7 @@ class RetrievalService:
         limit: int = 12,
         offset: int = 0,
         mode: str | None = None,
+        request_id: str | None = None,
     ) -> RetrievalBatch:
         query = query.strip()
         if len(query) < 2:
@@ -215,7 +217,30 @@ class RetrievalService:
                 no_evidence=True,
                 reason="no_results",
             )
-        return RetrievalBatch(results=results, no_evidence=False)
+        query_class = _classify_query(query, filters)
+        query_id = _ensure_query_record(
+            self._db,
+            query,
+            filters,
+            query_class,
+            BudgetManager(self._config).snapshot(),
+        )
+        engine_json = {
+            "graph": bool(graph_results),
+            "lexical": True,
+            "vector": True,
+            "sparse": bool(self._config.retrieval.sparse_enabled),
+            "late": bool(self._config.retrieval.late_enabled),
+        }
+        self._persist_retrieval_run(
+            request_id=request_id,
+            query_id=query_id,
+            mode=mode_value,
+            k=limit,
+            result_count=len(results),
+            engine_json=engine_json,
+        )
+        return RetrievalBatch(results=results, no_evidence=False, query_id=query_id)
 
     def retrieve_tiered(
         self,
@@ -225,6 +250,7 @@ class RetrievalService:
         limit: int = 12,
         offset: int = 0,
         mode: str | None = None,
+        request_id: str | None = None,
     ) -> RetrievalBatch:
         query = query.strip()
         if len(query) < 2:
@@ -422,6 +448,22 @@ class RetrievalService:
                 tier_plan=plan_json,
                 query_id=query_id,
             )
+        engine_json = {
+            "graph": bool(graph_results),
+            "lexical": True,
+            "vector": True,
+            "sparse": bool(self._config.retrieval.sparse_enabled),
+            "late": bool(self._config.retrieval.late_enabled),
+            "tier_plan": plan_json,
+        }
+        self._persist_retrieval_run(
+            request_id=request_id,
+            query_id=query_id,
+            mode=mode_value,
+            k=limit,
+            result_count=len(results),
+            engine_json=engine_json,
+        )
         return RetrievalBatch(
             results=results,
             no_evidence=False,
@@ -483,7 +525,7 @@ class RetrievalService:
         skip_dense: bool = False,
     ) -> list[RetrievedEvent]:
         lexical_start = time.monotonic()
-        with otel_span("index_lexical", {"stage_name": "index_lexical"}):
+        with otel_span("retrieval.lexical", {"stage_name": "retrieval.lexical"}):
             lexical_hits = self._lexical.search(query, limit=k_lex or limit)
         record_histogram(
             "index_lexical_ms",
@@ -513,7 +555,7 @@ class RetrievalService:
                 vector_limit = k_vec or limit
                 if self._spans_v2 and self._config.retrieval.use_spans_v2:
                     vector_start = time.monotonic()
-                    with otel_span("vector_search", {"stage_name": "vector_search"}):
+                    with otel_span("retrieval.vector", {"stage_name": "retrieval.vector"}):
                         dense_hits = self._spans_v2.search_dense(
                             dense_vector,
                             vector_limit,
@@ -527,7 +569,7 @@ class RetrievalService:
                     )
                 else:
                     vector_start = time.monotonic()
-                    with otel_span("vector_search", {"stage_name": "vector_search"}):
+                    with otel_span("retrieval.vector", {"stage_name": "retrieval.vector"}):
                         dense_hits = self._vector.search(
                             dense_vector,
                             vector_limit,
@@ -664,6 +706,8 @@ class RetrievalService:
         except Exception as exc:
             self._log.warning("Late retrieval failed: {}", exc)
             return results
+        if not late_hits:
+            return results
         late_scores = {hit.event_id: max(hit.score, 0.0) for hit in late_hits}
         late_norm = _normalize_scores(late_scores)
         reranked: list[RetrievedEvent] = []
@@ -748,6 +792,48 @@ class RetrievalService:
             self._db.transaction(_write)
         except Exception as exc:  # pragma: no cover - best-effort
             self._log.debug("Failed to persist retrieval trace: {}", exc)
+
+    def _persist_retrieval_run(
+        self,
+        *,
+        request_id: str | None,
+        query_id: str | None,
+        mode: str,
+        k: int,
+        result_count: int,
+        engine_json: dict,
+    ) -> None:
+        run_id = stable_id(
+            "retrieval_run",
+            {
+                "query_id": query_id,
+                "mode": mode,
+                "k": k,
+                "result_count": result_count,
+                "ts": dt.datetime.now(dt.timezone.utc).isoformat(),
+            },
+        )
+
+        def _write(session) -> None:
+            if session.get(RetrievalRunRecord, run_id):
+                return
+            session.add(
+                RetrievalRunRecord(
+                    run_id=run_id,
+                    request_id=request_id,
+                    query_id=query_id,
+                    mode=mode or "auto",
+                    k=int(k),
+                    result_count=int(result_count),
+                    engine_json=engine_json or {},
+                    created_at=dt.datetime.now(dt.timezone.utc),
+                )
+            )
+
+        try:
+            self._db.transaction(_write)
+        except Exception:
+            return
 
     def _rewrite_queries(self, query: str) -> list[str]:
         max_rewrites = self._config.retrieval.fusion_rewrites
@@ -921,12 +1007,13 @@ class RetrievalService:
             filter_payload["apps"] = list(filters.apps)
         if filters and filters.domains:
             filter_payload["domains"] = list(filters.domains)
-        hits = self._graph_adapters.query(
-            query,
-            limit=min(limit, 100),
-            time_range=time_payload,
-            filters=filter_payload,
-        )
+        with otel_span("retrieval.graph", {"stage_name": "retrieval.graph"}):
+            hits = self._graph_adapters.query(
+                query,
+                limit=min(limit, 100),
+                time_range=time_payload,
+                filters=filter_payload,
+            )
         if not hits:
             return []
         scores: dict[str, float] = {}
@@ -1095,11 +1182,14 @@ def _rrf_fuse(results_lists: list[list[RetrievedEvent]], rrf_k: int) -> list[Ret
     scores: dict[str, float] = {}
     best_ranks: dict[str, int] = {}
     meta: dict[str, RetrievedEvent] = {}
+    graph_only: dict[str, bool] = {}
     for results in results_lists:
         for rank, item in enumerate(results, start=1):
             event_id = item.event.event_id
             scores[event_id] = scores.get(event_id, 0.0) + 1.0 / (rrf_k + rank)
             best_ranks[event_id] = min(best_ranks.get(event_id, rank), rank)
+            is_graph = (item.engine or "").startswith("graph")
+            graph_only[event_id] = graph_only.get(event_id, True) and is_graph
             if event_id not in meta:
                 meta[event_id] = item
             else:
@@ -1123,6 +1213,7 @@ def _rrf_fuse(results_lists: list[list[RetrievedEvent]], rrf_k: int) -> list[Ret
     fused: list[RetrievedEvent] = []
     for event_id, score in scores.items():
         base = meta[event_id]
+        engine = base.engine if graph_only.get(event_id, False) else "fusion"
         fused.append(
             RetrievedEvent(
                 event=base.event,
@@ -1133,7 +1224,7 @@ def _rrf_fuse(results_lists: list[list[RetrievedEvent]], rrf_k: int) -> list[Ret
                 sparse_score=base.sparse_score,
                 late_score=base.late_score,
                 rerank_score=base.rerank_score,
-                engine="fusion",
+                engine=engine,
                 frame_hash=base.frame_hash,
                 frame_id=base.frame_id,
                 event_id=base.event_id,

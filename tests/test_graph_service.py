@@ -47,7 +47,11 @@ def _make_event(event_id: str, ts: dt.datetime) -> EventRecord:
 def test_graph_index_writes_manifest(tmp_path: Path) -> None:
     config = AppConfig(
         database=DatabaseConfig(url="sqlite:///:memory:", sqlite_wal=False),
-        graph_service=GraphServiceConfig(workspace_root=tmp_path, max_events=100),
+        graph_service=GraphServiceConfig(
+            workspace_root=tmp_path,
+            max_events=100,
+            require_workers=False,
+        ),
     )
     db = DatabaseManager(config.database)
     now = dt.datetime(2026, 1, 15, 12, 0, tzinfo=dt.timezone.utc)
@@ -71,7 +75,11 @@ def test_graph_index_writes_manifest(tmp_path: Path) -> None:
 def test_graph_query_uses_thread_candidates(tmp_path: Path) -> None:
     config = AppConfig(
         database=DatabaseConfig(url="sqlite:///:memory:", sqlite_wal=False),
-        graph_service=GraphServiceConfig(workspace_root=tmp_path, max_events=100),
+        graph_service=GraphServiceConfig(
+            workspace_root=tmp_path,
+            max_events=100,
+            require_workers=False,
+        ),
     )
     db = DatabaseManager(config.database)
     now = dt.datetime(2026, 1, 15, 12, 0, tzinfo=dt.timezone.utc)

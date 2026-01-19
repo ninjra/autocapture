@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import re
 from dataclasses import dataclass
 from typing import Iterable
 
+from ..contracts_utils import sha256_text
 from .entities import EntityToken
+from .prompt_injection import REDACTION_MARKER, scan_prompt_injection
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,10 @@ class EvidenceItem:
     text: str
     raw_text: str | None = None
     redacted_text: str | None = None
+    kind: str = "source"
+    citable: bool = True
+    injection_risk: float = 0.0
+    content_hash: str | None = None
     screenshot_path: str | None = None
     screenshot_hash: str | None = None
     retrieval: dict | None = None
@@ -55,22 +60,20 @@ class ContextPack:
     def _sanitize_evidence(self) -> tuple[list[EvidenceItem], list[str]]:
         warnings = list(self.warnings)
         sanitized: list[EvidenceItem] = []
-        pattern = re.compile(
-            r"(ignore previous|system prompt|developer message|you are chatgpt|do not cite|tool|function call)",
-            re.IGNORECASE,
-        )
         for item in self.evidence:
             raw_text = item.raw_text or item.text
-            lines = []
-            redacted = False
-            for line in item.text.splitlines():
-                if pattern.search(line):
-                    lines.append("[REDACTED: potential prompt-injection]")
-                    redacted = True
-                else:
-                    lines.append(line)
-            if redacted:
+            if item.redacted_text is not None:
+                redacted_text = item.redacted_text
+                risk_score = float(item.injection_risk or 0.0)
+                match_count = 1 if REDACTION_MARKER in redacted_text else 0
+            else:
+                scan = scan_prompt_injection(item.text)
+                redacted_text = scan.redacted_text
+                risk_score = scan.risk_score
+                match_count = scan.match_count
+            if match_count:
                 warnings.append(f"{item.evidence_id}: potential prompt-injection content redacted")
+            content_hash = item.content_hash or sha256_text(redacted_text)
             sanitized.append(
                 EvidenceItem(
                     evidence_id=item.evidence_id,
@@ -82,9 +85,13 @@ class ContextPack:
                     domain=item.domain,
                     score=item.score,
                     spans=item.spans,
-                    text="\n".join(lines),
+                    text=redacted_text,
                     raw_text=raw_text,
-                    redacted_text="\n".join(lines) if redacted else None,
+                    redacted_text=redacted_text if match_count else item.redacted_text,
+                    kind=item.kind,
+                    citable=item.citable,
+                    injection_risk=max(float(item.injection_risk or 0.0), risk_score),
+                    content_hash=content_hash,
                     screenshot_path=item.screenshot_path,
                     screenshot_hash=item.screenshot_hash,
                     retrieval=item.retrieval,
@@ -112,6 +119,11 @@ class ContextPack:
                         "score": item.score,
                         "screenshot_path": item.screenshot_path,
                         "screenshot_hash": item.screenshot_hash,
+                        "kind": item.kind,
+                        "citable": item.citable,
+                        "injection_risk": item.injection_risk,
+                        "content_hash": item.content_hash,
+                        "redacted": bool(item.redacted_text),
                         "retrieval": item.retrieval or {},
                         "spans": [
                             {

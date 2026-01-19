@@ -1,0 +1,53 @@
+services:
+  qdrant:
+    image: ghcr.io/qdrant/qdrant/qdrant:v1.16.3@sha256:a982bd080fcce0b4021ae25c447dd0851809e5b7683890de26bdade098d13027
+    container_name: autocapture-qdrant
+    ports:
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - autocapture_qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:6333/readyz || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  prometheus:
+    image: prom/prometheus:v2.52.0@sha256:1d95b7e8089d2d97f9e15e0a0c7b7b66a4b1f30d174a23f8f596b5c5fe260d4a
+    container_name: autocapture-prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  loki:
+    image: grafana/loki:2.9.6@sha256:1d2e2e4f0f1c4d8f6b12d3a0b1a1c20c4f23b41a4ea5cbd9b94f0ad2f2d88470
+    container_name: autocapture-loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./loki-config.yml:/etc/loki/loki-config.yml:ro
+      - autocapture_loki:/loki
+
+  promtail:
+    image: grafana/promtail:2.9.6@sha256:6fb1d4eb8b5a3c6a0c1d1a9d70393a206b6b7846b05049aa59a75df4f469b0be
+    container_name: autocapture-promtail
+    volumes:
+      - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - ../data/logs:/var/log/autocapture:ro
+    command: -config.file=/etc/promtail/config.yml
+
+  grafana:
+    image: grafana/grafana:10.4.2@sha256:fdb1bd651215c503d17c12997c19da4e813dd5f0e85ed46c0bc6a3c1f2e1fd62
+    container_name: autocapture-grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - autocapture_grafana:/var/lib/grafana
+
+volumes:
+  autocapture_qdrant:
+  autocapture_loki:
+  autocapture_grafana:

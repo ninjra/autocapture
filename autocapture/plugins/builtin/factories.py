@@ -216,7 +216,7 @@ def create_gateway_provider(
 ) -> tuple[LLMProvider, LLMProviderInfo]:
     config: AppConfig = context.config
     base_url = stage_config.base_url or f"http://{config.gateway.bind_host}:{config.gateway.port}"
-    api_key = stage_config.api_key or config.gateway.api_key
+    api_key = stage_config.api_key or config.gateway.internal_token or config.gateway.api_key
     provider = GatewayProvider(
         base_url,
         stage,
