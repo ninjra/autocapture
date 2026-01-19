@@ -35,6 +35,11 @@ src/**/bin/
 # Logs
 *.log
 
+# Runtime artifacts
+.runtime/
+artifacts/bench/
+artifacts/logs/
+
 # OS files
 .DS_Store
 Thumbs.db

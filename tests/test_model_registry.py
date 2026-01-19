@@ -46,7 +46,9 @@ def test_registry_requires_decode_backend_when_nonstandard() -> None:
     with pytest.raises(ValueError):
         ModelRegistryConfig(
             enabled=True,
-            providers=[ProviderSpec(id="p1", type="openai_compatible", base_url="http://localhost")],
+            providers=[
+                ProviderSpec(id="p1", type="openai_compatible", base_url="http://localhost")
+            ],
             models=[ModelSpec(id="m1", provider_id="p1", upstream_model_name="model")],
             stages=[
                 StagePolicy(

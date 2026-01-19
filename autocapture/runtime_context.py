@@ -25,7 +25,7 @@ def build_runtime_context(
     runtime_env: RuntimeEnvConfig | None = None,
 ) -> RuntimeContext:
     env = runtime_env or load_runtime_env()
-    scheduler = ProfileScheduler(config)
+    scheduler = ProfileScheduler(config, runtime_env=env)
     profile = scheduler.profile(env.profile)
     pause = PauseController(
         env.pause_latch_path,

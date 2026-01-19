@@ -86,7 +86,9 @@ def _build_prompt(claims: list[ClaimItem], evidence_by_id: dict[str, EvidenceIte
                 "evidence": [
                     {
                         "evidence_id": evidence_id,
-                        "text": (evidence_by_id[evidence_id].raw_text or evidence_by_id[evidence_id].text),
+                        "text": (
+                            evidence_by_id[evidence_id].raw_text or evidence_by_id[evidence_id].text
+                        ),
                     }
                     for evidence_id in claim.evidence_ids
                     if evidence_id in evidence_by_id

@@ -221,9 +221,7 @@ def _normalize_llm_info(info: object, fallback_provider: str) -> LLMProviderInfo
     raise RuntimeError("Invalid LLM provider info payload")
 
 
-def _stage_config_from_policy(
-    policy: StagePolicy, model, provider_spec
-) -> ModelStageConfig:
+def _stage_config_from_policy(policy: StagePolicy, model, provider_spec) -> ModelStageConfig:
     allow_cloud = bool(policy.allow_cloud and provider_spec.allow_cloud)
     return ModelStageConfig(
         provider=provider_spec.type,
@@ -234,4 +232,3 @@ def _stage_config_from_policy(
         enabled=True,
         temperature=policy.sampling.temperature,
     )
-

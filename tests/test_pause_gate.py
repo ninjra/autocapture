@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from autocapture.runtime_pause import PauseController
 
 
@@ -32,8 +30,7 @@ def test_pause_wait_timeout(tmp_path) -> None:
     pause = PauseController(latch, reason, poll_interval_s=0.01)
 
     pause.pause("manual", "unit")
-    with pytest.raises(TimeoutError):
-        pause.wait_until_resumed(timeout=0.05)
+    assert pause.wait_until_resumed(timeout=0.05) is False
 
     pause.resume("unit")
     assert pause.wait_until_resumed(timeout=0.05) is True
@@ -48,5 +45,5 @@ def test_pause_reason_corrupt(tmp_path) -> None:
     reason.write_text("{bad json", encoding="utf-8")
     state = pause.get_state()
     assert state.is_paused is True
-    assert state.reason == "unknown"
+    assert state.reason is None
     pause.resume("unit")

@@ -1,26 +1,30 @@
+MODE ?= both
+
 .PHONY: check check-gpu dev-fast dev-idle bench bench-cpu bench-gpu gate
 
 check:
-	GPU_MODE=off PROFILE=foreground poetry run black --check .
-	GPU_MODE=off PROFILE=foreground poetry run ruff check .
-	GPU_MODE=off PROFILE=foreground poetry run pytest -q
+	AUTOCAPTURE_GPU_MODE=off AUTOCAPTURE_PROFILE=foreground poetry run black --check .
+	AUTOCAPTURE_GPU_MODE=off AUTOCAPTURE_PROFILE=foreground poetry run ruff check .
+	AUTOCAPTURE_GPU_MODE=off AUTOCAPTURE_PROFILE=foreground poetry run pytest -q -m "not gpu"
 
 check-gpu:
-	GPU_MODE=auto PROFILE=foreground poetry run pytest -q -m gpu
+	AUTOCAPTURE_GPU_MODE=auto AUTOCAPTURE_PROFILE=foreground poetry run pytest -q -m gpu
 
 dev-fast:
-	PROFILE=foreground GPU_MODE=off poetry run autocapture
+	AUTOCAPTURE_PROFILE=foreground AUTOCAPTURE_GPU_MODE=off \
+		AUTOCAPTURE_FOREGROUND_MAX_WORKERS=2 AUTOCAPTURE_FOREGROUND_BATCH_SIZE=4 \
+		poetry run autocapture
 
 dev-idle:
-	PROFILE=idle GPU_MODE=auto poetry run autocapture
+	AUTOCAPTURE_PROFILE=idle AUTOCAPTURE_GPU_MODE=auto poetry run autocapture
 
 bench:
-	PROFILE=foreground poetry run python -m autocapture.bench.run --both
+	AUTOCAPTURE_PROFILE=foreground poetry run python -m autocapture.bench.run --mode $(MODE)
 
 bench-cpu:
-	PROFILE=foreground poetry run python -m autocapture.bench.run --cpu
+	AUTOCAPTURE_PROFILE=foreground poetry run python -m autocapture.bench.run --mode cpu
 
 bench-gpu:
-	PROFILE=foreground poetry run python -m autocapture.bench.run --gpu
+	AUTOCAPTURE_PROFILE=foreground poetry run python -m autocapture.bench.run --mode gpu
 
 gate: check check-gpu bench

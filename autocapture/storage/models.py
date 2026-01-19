@@ -829,16 +829,12 @@ class AnswerClaimCitationRecord(Base):
     __tablename__ = "answer_claim_citations"
 
     __table_args__ = (
-        UniqueConstraint(
-            "claim_id", "span_id", "evidence_id", name="uq_answer_claim_citations"
-        ),
+        UniqueConstraint("claim_id", "span_id", "evidence_id", name="uq_answer_claim_citations"),
         Index("ix_answer_claim_citations_claim", "claim_id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    claim_id: Mapped[str] = mapped_column(
-        ForeignKey("answer_claims.claim_id", ondelete="CASCADE")
-    )
+    claim_id: Mapped[str] = mapped_column(ForeignKey("answer_claims.claim_id", ondelete="CASCADE"))
     span_id: Mapped[str | None] = mapped_column(
         ForeignKey("citable_spans.span_id", ondelete="SET NULL"), nullable=True
     )
@@ -852,9 +848,7 @@ class EvidenceLineMapRecord(Base):
     __tablename__ = "evidence_line_map"
 
     __table_args__ = (
-        UniqueConstraint(
-            "query_id", "evidence_id", name="uq_evidence_line_map_query_evidence"
-        ),
+        UniqueConstraint("query_id", "evidence_id", name="uq_evidence_line_map_query_evidence"),
         Index("ix_evidence_line_map_query", "query_id"),
     )
 

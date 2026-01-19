@@ -84,4 +84,10 @@ def render_claims_answer(claims: Iterable[ClaimItem]) -> str:
     return "\n".join(lines).strip()
 
 
-__all__ = ["ClaimItem", "ClaimsPayload", "ParsedClaims", "parse_claims_json", "render_claims_answer"]
+__all__ = [
+    "ClaimItem",
+    "ClaimsPayload",
+    "ParsedClaims",
+    "parse_claims_json",
+    "render_claims_answer",
+]

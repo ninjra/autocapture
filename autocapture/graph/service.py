@@ -88,9 +88,7 @@ class GraphService:
         try:
             if self._thread_retrieval is None:
                 self._thread_retrieval = ThreadRetrievalService(self._config, self._db)
-            threads = self._thread_retrieval.retrieve(
-                request.query, time_range, limit=thread_limit
-            )
+            threads = self._thread_retrieval.retrieve(request.query, time_range, limit=thread_limit)
         except Exception as exc:
             self._log.warning("Thread retrieval failed: {}", exc)
             threads = []

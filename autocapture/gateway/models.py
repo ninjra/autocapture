@@ -42,4 +42,3 @@ class GatewayHealth(BaseModel):
     status: str = Field("ok")
     registry_enabled: bool
     providers: list[str] = Field(default_factory=list)
-
