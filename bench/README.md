@@ -13,7 +13,7 @@ poetry run python -m autocapture.bench.llm_bench \
 
 ## Harness scripts
 - Bash (Linux/WSL/macOS): `bench/run.sh`
-- PowerShell (Windows): `bench/run.ps1`
+- PowerShell (Windows): `bench/run.ps1` (invoke with `.\run.ps1`)
 
 Both scripts write:
 - `bench/results/timing.tsv`
@@ -25,6 +25,11 @@ Environment controls:
 - `BENCH_ITERATIONS` (default: `20`)
 - `BENCH_WARMUP` (default: `3`)
 - `BENCH_TRACE` (default: `0`)
+
+Before running on Windows, ensure the project is installed:
+```
+poetry install --with dev --no-interaction --no-ansi
+```
 
 ## Offline replay
 Offline mode uses fixture responses in `bench/fixtures/responses`. It never performs network I/O and
