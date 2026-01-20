@@ -7,6 +7,7 @@ from autocapture.agents.answer_graph import AnswerGraph
 from autocapture.config import AppConfig, DatabaseConfig, ProviderRoutingConfig
 from autocapture.memory.entities import EntityResolver, SecretStore
 from autocapture.memory.retrieval import RetrievalService
+from autocapture.memory.threads import ThreadRetrievalService
 from autocapture.storage.database import DatabaseManager
 from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 
@@ -106,7 +107,20 @@ def _setup_graph() -> tuple[AnswerGraph, RetrievalService, DatabaseManager]:
     retrieval._lexical.upsert_event(event)
     secret = SecretStore(config.capture.data_dir).get_or_create()
     entities = EntityResolver(db, secret)
-    graph = AnswerGraph(config, retrieval, prompt_registry=_StubPromptRegistry(), entities=entities)
+    thread_retrieval = ThreadRetrievalService(
+        config,
+        db,
+        embedder=retrieval.embedder,
+        vector_index=retrieval.vector_index,
+    )
+    graph = AnswerGraph(
+        config,
+        retrieval,
+        db=db,
+        thread_retrieval=thread_retrieval,
+        prompt_registry=_StubPromptRegistry(),
+        entities=entities,
+    )
     return graph, retrieval, db
 
 
@@ -154,7 +168,20 @@ def test_answer_graph_filters_non_citable_results() -> None:
     )
     secret = SecretStore(config.capture.data_dir).get_or_create()
     entities = EntityResolver(db, secret)
-    graph = AnswerGraph(config, retrieval, prompt_registry=_StubPromptRegistry(), entities=entities)
+    thread_retrieval = ThreadRetrievalService(
+        config,
+        db,
+        embedder=retrieval.embedder,
+        vector_index=retrieval.vector_index,
+    )
+    graph = AnswerGraph(
+        config,
+        retrieval,
+        db=db,
+        thread_retrieval=thread_retrieval,
+        prompt_registry=_StubPromptRegistry(),
+        entities=entities,
+    )
 
     evidence, _events, no_evidence = graph._build_evidence("hello", None, None, 2, sanitized=False)
     assert evidence
@@ -221,7 +248,20 @@ def test_answer_graph_no_evidence_returns_notice() -> None:
     )
     secret = SecretStore(config.capture.data_dir).get_or_create()
     entities = EntityResolver(db, secret)
-    graph = AnswerGraph(config, retrieval, prompt_registry=_StubPromptRegistry(), entities=entities)
+    thread_retrieval = ThreadRetrievalService(
+        config,
+        db,
+        embedder=retrieval.embedder,
+        vector_index=retrieval.vector_index,
+    )
+    graph = AnswerGraph(
+        config,
+        retrieval,
+        db=db,
+        thread_retrieval=thread_retrieval,
+        prompt_registry=_StubPromptRegistry(),
+        entities=entities,
+    )
     result = asyncio.run(
         graph.run(
             "nothing",

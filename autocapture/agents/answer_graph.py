@@ -46,6 +46,7 @@ from ..memory.retrieval import (
 from ..memory.tier_stats import update_tier_stats
 from ..model_ops import StageRouter
 from ..policy import PolicyEnvelope
+from ..storage.database import DatabaseManager
 from ..storage.models import (
     AnswerCitationRecord,
     AnswerRecord,
@@ -107,6 +108,8 @@ class AnswerGraph:
         config: AppConfig,
         retrieval: RetrievalService,
         *,
+        db: DatabaseManager,
+        thread_retrieval: ThreadRetrievalService,
         prompt_registry,
         entities,
         plugin_manager: PluginManager | None = None,
@@ -114,20 +117,16 @@ class AnswerGraph:
     ) -> None:
         self._config = config
         self._retrieval = retrieval
+        self._db = db
         self._prompt_registry = prompt_registry
         self._entities = entities
         self._log = get_logger("answer_graph")
-        self._ledger = LedgerWriter(retrieval._db)  # type: ignore[attr-defined]
+        self._ledger = LedgerWriter(db)
         self._plugins = plugin_manager or PluginManager(config)
         self._memory_client = memory_client
         self._stage_router = StageRouter(config, plugin_manager=self._plugins)
         self._policy = PolicyEnvelope(config)
-        self._thread_retrieval = ThreadRetrievalService(
-            config,
-            retrieval._db,  # type: ignore[attr-defined]
-            embedder=getattr(retrieval, "_embedder", None),
-            vector_index=getattr(retrieval, "_vector", None),
-        )
+        self._thread_retrieval = thread_retrieval
         self._compressor = None
         self._verifier = None
         self._claim_validator = ClaimValidator(config.verification.citation_validator)
@@ -153,8 +152,8 @@ class AnswerGraph:
             {"query": query, "ts": dt.datetime.now(dt.timezone.utc).isoformat()},
         )
         request_started_at = dt.datetime.now(dt.timezone.utc)
-        if hasattr(self._retrieval, "_db"):
-            self._retrieval._db.transaction(  # type: ignore[attr-defined]
+        if self._db:
+            self._db.transaction(
                 lambda session: session.add(
                     RequestRunRecord(
                         request_id=request_id,
@@ -758,7 +757,7 @@ class AnswerGraph:
     ) -> AnswerGraphResult:
         query_class = _classify_query(query, retrieve_filters)
         query_id = _ensure_query_record(
-            self._retrieval._db,  # type: ignore[attr-defined]
+            self._db,
             query,
             retrieve_filters,
             query_class,
@@ -771,10 +770,10 @@ class AnswerGraph:
                 if span.span_id:
                     span_ids.append(str(span.span_id))
         has_citable_spans = False
-        if hasattr(self._retrieval, "_db"):
+        if self._db:
             event_ids = [item.event_id for item in evidence_by_id.values()]
             if event_ids:
-                with self._retrieval._db.session() as session:  # type: ignore[attr-defined]
+                with self._db.session() as session:
                     has_citable_spans = (
                         session.execute(
                             select(CitableSpanRecord.span_id).where(
@@ -786,11 +785,11 @@ class AnswerGraph:
                         is not None
                     )
         if has_citable_spans:
-            integrity = check_citations(self._retrieval._db, span_ids)  # type: ignore[attr-defined]
+            integrity = check_citations(self._db, span_ids)
             valid_span_ids = integrity.valid_span_ids
             if self._config.next10.enabled:
                 provenance = verify_provenance(
-                    self._retrieval._db,  # type: ignore[attr-defined]
+                    self._db,
                     query_id=query_id,
                     span_ids=list(valid_span_ids),
                 )
@@ -806,7 +805,7 @@ class AnswerGraph:
             if set(filtered_citations) != set(citations):
                 warnings.append("citation_integrity_failed")
         else:
-            integrity = check_citations(self._retrieval._db, [])  # type: ignore[attr-defined]
+            integrity = check_citations(self._db, [])
             valid_span_ids = set()
             valid_evidence_ids = set(evidence_by_id)
             filtered_citations = list(citations)
@@ -1159,9 +1158,9 @@ class AnswerGraph:
                                 health.last_error = call.get("error_text")
                             health.updated_at = now
 
-        self._retrieval._db.transaction(_persist_answer)  # type: ignore[attr-defined]
+        self._db.transaction(_persist_answer)
         update_tier_stats(
-            self._retrieval._db,  # type: ignore[attr-defined]
+            self._db,
             query_id=query_id,
             query_class=query_class,
             cited_span_ids=valid_span_ids,
@@ -1173,7 +1172,7 @@ class AnswerGraph:
         if self._config.next10.enabled:
             chain_appended = append_provenance_chain(
                 self._config,
-                self._retrieval._db,  # type: ignore[attr-defined]
+                self._db,
                 self._ledger,
                 answer_id=answer_id,
                 query_id=query_id,
@@ -1267,10 +1266,10 @@ class AnswerGraph:
             return [], [], True
         span_lookup: dict[tuple[str, str], CitableSpanRecord] = {}
         fallback_spans: dict[str, CitableSpanRecord] = {}
-        if hasattr(self._retrieval, "_db"):
+        if self._db:
             event_ids = [item.event.event_id for item in results]
             if event_ids:
-                with self._retrieval._db.session() as session:  # type: ignore[attr-defined]
+                with self._db.session() as session:
                     rows = (
                         session.execute(
                             select(CitableSpanRecord).where(
