@@ -695,7 +695,8 @@ class EmbeddingWorker:
         cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=config.late_max_days)
         per_event: dict[str, list[OCRSpanRecord]] = {}
         for _embedding, span, event in span_rows:
-            if event.ts_start < cutoff:
+            event_ts = _ensure_aware(event.ts_start)
+            if event_ts and event_ts < cutoff:
                 continue
             if len(span.text or "") > config.late_text_max_chars:
                 continue

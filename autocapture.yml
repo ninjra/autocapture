@@ -82,6 +82,8 @@ overlay_tracker:
     allow_domains: []
     token_rules: []
 offline: true
+features:
+  enable_otel: true
 privacy:
   cloud_enabled: false
   sanitize_default: true
@@ -113,18 +115,18 @@ output:
 retrieval:
   graph_adapters:
     graphrag:
-      enabled: false
-      base_url: null
+      enabled: true
+      base_url: "http://127.0.0.1:8020"
       timeout_s: 10.0
       max_results: 20
     hypergraphrag:
-      enabled: false
-      base_url: null
+      enabled: true
+      base_url: "http://127.0.0.1:8020"
       timeout_s: 10.0
       max_results: 20
     hyperrag:
-      enabled: false
-      base_url: null
+      enabled: true
+      base_url: "http://127.0.0.1:8020"
       timeout_s: 10.0
       max_results: 20
 memory:
@@ -135,7 +137,7 @@ memory:
     db_filename: "memory.sqlite3"
     artifacts_dir: "artifacts"
     snapshots_dir: "snapshots"
-    require_fts: false
+    require_fts: true
     snapshot_retention_days: 90
   policy:
     blocked_labels: []
@@ -165,9 +167,9 @@ routing:
   reranker: "enabled"
   compressor: "extractive"
   verifier: "rules"
-  llm: "ollama"
+  llm: "gateway"
 llm:
-  provider: "ollama"
+  provider: "gateway"
   ollama_url: "http://127.0.0.1:11434"
   ollama_model: "llama3"
   openai_api_key: null
@@ -184,32 +186,125 @@ llm_governor:
   high_pressure_threshold: 0.85
   adjust_interval_s: 5.0
 gateway:
-  enabled: false
+  enabled: true
   bind_host: "127.0.0.1"
   port: 8010
   require_api_key: false
   api_key: null
+  internal_token: null
+  gpu_max_concurrency: 2
   max_body_bytes: 2000000
   request_timeout_s: 60.0
   upstream_probe_timeout_s: 5.0
   startup_probe: true
 graph_service:
-  enabled: false
+  enabled: true
   bind_host: "127.0.0.1"
   port: 8020
   max_events: 50000
   max_results: 200
+  require_workers: true
+  graphrag_cli: "scripts/graphrag_worker.sh"
+  hypergraphrag_cli: "scripts/hypergraphrag_worker.sh"
+  hyperrag_cli: "scripts/hyperrag_worker.sh"
+  worker_timeout_s: 60.0
 model_registry:
-  enabled: false
-  providers: []
-  models: []
-  stages: []
+  enabled: true
+  providers:
+    - id: "vllm_gpu_a"
+      type: "openai_compatible"
+      base_url: "http://127.0.0.1:8001"
+      timeout_s: 60.0
+      retries: 2
+      allow_cloud: false
+      max_concurrency: 2
+    - id: "vllm_gpu_b"
+      type: "openai_compatible"
+      base_url: "http://127.0.0.1:8002"
+      timeout_s: 60.0
+      retries: 2
+      allow_cloud: false
+      max_concurrency: 1
+    - id: "vllm_cpu"
+      type: "openai_compatible"
+      base_url: "http://127.0.0.1:8003"
+      timeout_s: 60.0
+      retries: 2
+      allow_cloud: false
+      max_concurrency: 2
+  models:
+    - id: "base_fast"
+      provider_id: "vllm_gpu_a"
+      upstream_model_name: "MODEL_FAST"
+      context_tokens: 8192
+      runtime:
+        device: "cuda"
+    - id: "base_long"
+      provider_id: "vllm_gpu_b"
+      upstream_model_name: "MODEL_LONG"
+      context_tokens: 16384
+      runtime:
+        device: "cuda"
+      lmcache_enabled: true
+    - id: "base_cpu"
+      provider_id: "vllm_cpu"
+      upstream_model_name: "MODEL_CPU"
+      context_tokens: 8192
+      runtime:
+        device: "cpu"
+    - id: "verifier_small"
+      provider_id: "vllm_gpu_a"
+      upstream_model_name: "MODEL_VERIFIER"
+      context_tokens: 4096
+      runtime:
+        device: "cuda"
+  stages:
+    - id: "draft_generate"
+      primary_model_id: "base_fast"
+      fallback_model_ids: ["base_cpu"]
+      sampling:
+        temperature: 0.2
+      requirements:
+        require_json: false
+        require_citations: true
+      decode:
+        strategy: "standard"
+      max_attempts: 2
+      allow_cloud: false
+      repair_on_failure: true
+    - id: "final_answer"
+      primary_model_id: "base_long"
+      fallback_model_ids: ["base_fast", "base_cpu"]
+      sampling:
+        temperature: 0.2
+      requirements:
+        require_json: true
+        claims_schema: "claims_json_v1"
+      decode:
+        strategy: "standard"
+      max_attempts: 2
+      allow_cloud: false
+      repair_on_failure: true
+    - id: "entailment_judge"
+      primary_model_id: "verifier_small"
+      fallback_model_ids: ["base_cpu"]
+      sampling:
+        temperature: 0.0
+      requirements:
+        require_json: true
+      decode:
+        strategy: "standard"
+      max_attempts: 2
+      allow_cloud: false
+      repair_on_failure: true
 verification:
   claims_enabled: true
   citation_validator:
     max_claims: 20
     max_citations_per_claim: 8
     allow_empty: false
+    allow_legacy_evidence_ids: false
+    max_line_span: 8
   entailment:
     enabled: true
     judge_stage: "entailment_judge"

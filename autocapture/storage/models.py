@@ -839,6 +839,128 @@ class AnswerClaimCitationRecord(Base):
         ForeignKey("citable_spans.span_id", ondelete="SET NULL"), nullable=True
     )
     evidence_id: Mapped[str] = mapped_column(String(32))
+    line_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    line_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class RequestRunRecord(Base):
+    __tablename__ = "request_run"
+
+    request_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    query_id: Mapped[str | None] = mapped_column(
+        ForeignKey("query_records.query_id", ondelete="SET NULL"), nullable=True
+    )
+    query_text: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="started")
+    warnings_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    started_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+    completed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class StageRunRecord(Base):
+    __tablename__ = "stage_run"
+
+    run_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_id: Mapped[str] = mapped_column(
+        ForeignKey("request_run.request_id", ondelete="CASCADE")
+    )
+    stage: Mapped[str] = mapped_column(String(64))
+    provider_id: Mapped[str] = mapped_column(String(128))
+    model_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    attempt_index: Mapped[int] = mapped_column(Integer, default=0)
+    success: Mapped[bool] = mapped_column(Boolean, default=False)
+    status_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latency_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class RetrievalRunRecord(Base):
+    __tablename__ = "retrieval_run"
+
+    run_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_id: Mapped[str | None] = mapped_column(
+        ForeignKey("request_run.request_id", ondelete="SET NULL"), nullable=True
+    )
+    query_id: Mapped[str | None] = mapped_column(
+        ForeignKey("query_records.query_id", ondelete="SET NULL"), nullable=True
+    )
+    mode: Mapped[str] = mapped_column(String(32))
+    k: Mapped[int] = mapped_column(Integer, default=0)
+    result_count: Mapped[int] = mapped_column(Integer, default=0)
+    engine_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class ProviderHealthRecord(Base):
+    __tablename__ = "provider_health"
+
+    provider_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
+    circuit_open_until: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class EvidenceItemRecord(Base):
+    __tablename__ = "evidence_items"
+
+    item_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_id: Mapped[str | None] = mapped_column(
+        ForeignKey("request_run.request_id", ondelete="SET NULL"), nullable=True
+    )
+    query_id: Mapped[str | None] = mapped_column(
+        ForeignKey("query_records.query_id", ondelete="SET NULL"), nullable=True
+    )
+    evidence_id: Mapped[str] = mapped_column(String(32))
+    event_id: Mapped[str] = mapped_column(String(36))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    line_count: Mapped[int] = mapped_column(Integer, default=0)
+    injection_risk: Mapped[float] = mapped_column(Float, default=0.0)
+    citable: Mapped[bool] = mapped_column(Boolean, default=True)
+    kind: Mapped[str] = mapped_column(String(32), default="source")
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class ClaimRecord(Base):
+    __tablename__ = "claims"
+
+    claim_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    request_id: Mapped[str | None] = mapped_column(
+        ForeignKey("request_run.request_id", ondelete="SET NULL"), nullable=True
+    )
+    claim_text: Mapped[str] = mapped_column(Text)
+    entailment_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
+    )
+
+
+class ClaimCitationRecord(Base):
+    __tablename__ = "claim_citations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    claim_id: Mapped[str] = mapped_column(ForeignKey("claims.claim_id", ondelete="CASCADE"))
+    evidence_id: Mapped[str] = mapped_column(String(32))
+    line_start: Mapped[int] = mapped_column(Integer)
+    line_end: Mapped[int] = mapped_column(Integer)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[dt.datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: dt.datetime.now(dt.timezone.utc)
     )

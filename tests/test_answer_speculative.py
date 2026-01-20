@@ -18,12 +18,19 @@ from autocapture.memory.retrieval import RetrievalService
 class FakeLLM:
     def __init__(self) -> None:
         self.calls = 0
+        self.stage: str | None = None
 
     async def generate_answer(
         self, system_prompt: str, query: str, context_pack_text: str, *, temperature=None
     ):
         _ = system_prompt, query, context_pack_text, temperature
         self.calls += 1
+        if self.stage == "final_answer":
+            return (
+                "```json\n"
+                '{"schema_version":2,"claims":[{"text":"Final answer","citations":[{"evidence_id":"E1","line_start":1,"line_end":1}]}]}'
+                "\n```"
+            )
         return "Draft answer [E1]"
 
 
@@ -76,7 +83,7 @@ async def test_speculative_early_exit(monkeypatch, tmp_path) -> None:
 
     def fake_build_evidence(*args, **kwargs):
         calls.append(kwargs.get("retrieval_mode"))
-        return evidence, [event]
+        return evidence, [event], False
 
     graph._build_evidence = fake_build_evidence  # type: ignore[method-assign]
 
@@ -84,6 +91,7 @@ async def test_speculative_early_exit(monkeypatch, tmp_path) -> None:
 
     def _mock_select(self, stage: str, *, routing_override=None):
         _ = routing_override
+        fake_llm.stage = stage
         return fake_llm, type("Decision", (), {"temperature": 0.2, "stage": stage})()
 
     monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _mock_select)
@@ -97,6 +105,6 @@ async def test_speculative_early_exit(monkeypatch, tmp_path) -> None:
         extractive_only=False,
         routing={"llm": "ollama"},
     )
-    assert result.answer.startswith("Draft answer")
-    assert calls == ["baseline"]
-    assert fake_llm.calls == 1
+    assert result.answer.startswith("Final answer")
+    assert calls == ["baseline", "deep"]
+    assert fake_llm.calls == 3

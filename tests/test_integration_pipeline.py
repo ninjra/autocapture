@@ -10,6 +10,9 @@ from autocapture.storage.models import CaptureRecord, EventRecord, OCRSpanRecord
 
 
 class MockLLM:
+    def __init__(self, stage: str) -> None:
+        self._stage = stage
+
     async def generate_answer(
         self,
         system_prompt: str,
@@ -18,7 +21,13 @@ class MockLLM:
         *,
         temperature: float | None = None,
     ) -> str:
-        return "Answer based on evidence [E1]"
+        if self._stage == "final_answer":
+            return (
+                "```json\n"
+                '{"schema_version":2,"claims":[{"text":"Answer based on evidence","citations":[{"evidence_id":"E1","line_start":1,"line_end":1}]}]}'
+                "\n```"
+            )
+        return "Draft answer [E1]"
 
 
 @pytest.mark.anyio
@@ -75,7 +84,7 @@ async def test_retrieve_context_pack_answer(
         )
 
     def _mock_select(self, stage: str, *, routing_override=None):
-        return MockLLM(), type("Decision", (), {"temperature": 0.2, "stage": stage})()
+        return MockLLM(stage), type("Decision", (), {"temperature": 0.2, "stage": stage})()
 
     monkeypatch.setattr("autocapture.model_ops.router.StageRouter.select_llm", _mock_select)
 

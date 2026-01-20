@@ -53,6 +53,7 @@ encryption:
   enabled: false
 database:
   url: "sqlite:///./data/autocapture.db"
+  allow_insecure_dev: true
 """
     if windows:
         content = """offline: true
@@ -74,6 +75,7 @@ encryption:
   enabled: false
 database:
   url: "sqlite:///./data/autocapture.db"
+  allow_insecure_dev: true
 """
     tmp = tempfile.NamedTemporaryFile("w", delete=False, suffix="-doctor.yml")
     tmp.write(content)

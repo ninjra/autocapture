@@ -25,6 +25,7 @@ from .models import (
     GraphQueryResponse,
     GraphTimeRange,
 )
+from .workers import GraphWorkerGroup, GraphWorkerSpec
 
 _CORPUS_SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -53,8 +54,31 @@ class GraphService:
         self._thread_store = thread_store or ThreadStore(self._db)
         self._workspace_root = Path(config.graph_service.workspace_root)
         self._workspace_root.mkdir(parents=True, exist_ok=True)
+        specs = [
+            GraphWorkerSpec(
+                name="graphrag",
+                cli_path=config.graph_service.graphrag_cli,
+                timeout_s=config.graph_service.worker_timeout_s,
+            ),
+            GraphWorkerSpec(
+                name="hypergraphrag",
+                cli_path=config.graph_service.hypergraphrag_cli,
+                timeout_s=config.graph_service.worker_timeout_s,
+            ),
+            GraphWorkerSpec(
+                name="hyperrag",
+                cli_path=config.graph_service.hyperrag_cli,
+                timeout_s=config.graph_service.worker_timeout_s,
+            ),
+        ]
+        self._workers = GraphWorkerGroup(specs, workspace_root=self._workspace_root)
 
-    def index(self, request: GraphIndexRequest) -> GraphIndexResponse:
+    def index(
+        self, request: GraphIndexRequest, *, adapter: str | None = None, use_workers: bool = True
+    ) -> GraphIndexResponse:
+        adapter = (adapter or "graphrag").strip().lower()
+        if use_workers and self._config.graph_service.require_workers:
+            return self._workers.index(adapter, request)
         corpus_id = _safe_corpus_id(request.corpus_id)
         time_range = _parse_time_range(request.time_range)
         if time_range is None:
@@ -79,7 +103,12 @@ class GraphService:
             segments=len(segments),
         )
 
-    def query(self, request: GraphQueryRequest) -> GraphQueryResponse:
+    def query(
+        self, request: GraphQueryRequest, *, adapter: str | None = None, use_workers: bool = True
+    ) -> GraphQueryResponse:
+        adapter = (adapter or "graphrag").strip().lower()
+        if use_workers and self._config.graph_service.require_workers:
+            return self._workers.query(adapter, request)
         corpus_id = _safe_corpus_id(request.corpus_id)
         _ = corpus_id
         time_range = _parse_time_range(request.time_range)

@@ -619,7 +619,7 @@ class FeatureFlagsConfig(BaseModel):
     enable_retention_prune: bool = Field(
         False, description="Enable retention-aware index pruning and scans."
     )
-    enable_otel: bool = Field(False, description="Enable OpenTelemetry tracing/metrics.")
+    enable_otel: bool = Field(True, description="Enable OpenTelemetry tracing/metrics.")
 
 
 class Next10Config(BaseModel):
@@ -698,7 +698,7 @@ class ProviderRoutingConfig(BaseModel):
     reranker: str = Field("disabled")
     compressor: str = Field("extractive")
     verifier: str = Field("rules")
-    llm: str = Field("ollama")
+    llm: str = Field("gateway")
 
 
 class PrivacyConfig(BaseModel):
@@ -767,11 +767,11 @@ class SecurityConfig(BaseModel):
 
 
 class RetrievalConfig(BaseModel):
-    v2_enabled: bool = Field(False, description="Enable RetrievalService v2 enhancements.")
-    use_spans_v2: bool = Field(False, description="Use spans_v2 Qdrant collection.")
-    sparse_enabled: bool = Field(False, description="Enable learned sparse retrieval.")
-    late_enabled: bool = Field(False, description="Enable late-interaction reranking.")
-    fusion_enabled: bool = Field(False, description="Enable multi-query fusion (RRF).")
+    v2_enabled: bool = Field(True, description="Enable RetrievalService v2 enhancements.")
+    use_spans_v2: bool = Field(True, description="Use spans_v2 Qdrant collection.")
+    sparse_enabled: bool = Field(True, description="Enable learned sparse retrieval.")
+    late_enabled: bool = Field(True, description="Enable late-interaction reranking.")
+    fusion_enabled: bool = Field(True, description="Enable multi-query fusion (RRF).")
     multi_query_enabled: bool = Field(True, description="Enable multi-query query rewrites.")
     rrf_enabled: bool = Field(True, description="Enable RRF fusion for multi-query retrieval.")
     lexical_min_score: float = Field(0.15, ge=0.0, le=1.0)
@@ -790,17 +790,17 @@ class RetrievalConfig(BaseModel):
     late_candidate_k: int = Field(100, ge=1)
     late_rerank_k: int = Field(50, ge=1)
     late_stage1_enabled: bool = Field(
-        False, description="Enable late-interaction stage-1 retrieval for narrow windows."
+        True, description="Enable late-interaction stage-1 retrieval for narrow windows."
     )
     late_stage1_max_days: int = Field(
         7, ge=1, description="Max time window (days) for late stage-1 retrieval."
     )
     late_stage1_k: int = Field(50, ge=1, description="Top-K for late stage-1 retrieval.")
     rewrite_max_chars: int = Field(200, ge=10)
-    speculative_enabled: bool = Field(False, description="Enable speculative draft/verify.")
+    speculative_enabled: bool = Field(True, description="Enable speculative draft/verify.")
     speculative_draft_k: int = Field(6, ge=1)
     speculative_final_k: int = Field(12, ge=1)
-    traces_enabled: bool = Field(False, description="Persist retrieval traces.")
+    traces_enabled: bool = Field(True, description="Persist retrieval traces.")
     graph_adapters: "GraphAdaptersConfig" = Field(
         default_factory=lambda: GraphAdaptersConfig(),
         description="Optional graph retrieval adapters.",
@@ -808,8 +808,8 @@ class RetrievalConfig(BaseModel):
 
 
 class GraphAdapterConfig(BaseModel):
-    enabled: bool = Field(False)
-    base_url: Optional[str] = None
+    enabled: bool = Field(True)
+    base_url: Optional[str] = Field("http://127.0.0.1:8020")
     timeout_s: float = Field(10.0, gt=0.0)
     max_results: int = Field(20, ge=1)
 
@@ -829,7 +829,7 @@ class MemoryStorageConfig(BaseModel):
     artifacts_dir: str = Field("artifacts")
     snapshots_dir: str = Field("snapshots")
     require_fts: bool = Field(
-        False, description="Fail memory retrieval if SQLite FTS5 is unavailable."
+        True, description="Fail memory retrieval if SQLite FTS5 is unavailable."
     )
     snapshot_retention_days: int = Field(90, ge=1)
 
@@ -1198,6 +1198,7 @@ class ProviderSpec(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict)
     allow_cloud: bool = Field(False, description="Allow cloud usage for this provider.")
     circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig()
+    max_concurrency: int = Field(4, ge=1, description="Per-provider concurrency cap.")
 
 
 class QuantizationConfig(BaseModel):
@@ -1275,7 +1276,7 @@ class StagePolicy(BaseModel):
 
 
 class ModelRegistryConfig(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     providers: list[ProviderSpec] = Field(default_factory=list)
     models: list[ModelSpec] = Field(default_factory=list)
     stages: list[StagePolicy] = Field(default_factory=list)
@@ -1327,11 +1328,15 @@ class ModelRegistryConfig(BaseModel):
 
 
 class GatewayConfig(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     bind_host: str = Field("127.0.0.1")
     port: int = Field(8010, ge=1024, le=65535)
     require_api_key: bool = False
     api_key: Optional[str] = None
+    internal_token: Optional[str] = Field(
+        None, description="Token for internal stage calls (X-Internal-Token)."
+    )
+    gpu_max_concurrency: int = Field(2, ge=1, description="Global GPU concurrency cap.")
     max_body_bytes: int = Field(2_000_000, ge=1024)
     request_timeout_s: float = Field(60.0, gt=0.0)
     upstream_probe_timeout_s: float = Field(5.0, gt=0.0)
@@ -1339,18 +1344,29 @@ class GatewayConfig(BaseModel):
 
 
 class GraphServiceConfig(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     bind_host: str = Field("127.0.0.1")
     port: int = Field(8020, ge=1024, le=65535)
     workspace_root: Path = Field(default_factory=lambda: default_data_dir() / "graphs")
     max_events: int = Field(50_000, ge=100)
     max_results: int = Field(200, ge=1)
+    require_workers: bool = Field(
+        True, description="Require external graph worker CLIs for all adapters."
+    )
+    graphrag_cli: str = Field("scripts/graphrag_worker.sh")
+    hypergraphrag_cli: str = Field("scripts/hypergraphrag_worker.sh")
+    hyperrag_cli: str = Field("scripts/hyperrag_worker.sh")
+    worker_timeout_s: float = Field(60.0, gt=0.0)
 
 
 class CitationValidatorConfig(BaseModel):
     max_claims: int = Field(20, ge=1)
     max_citations_per_claim: int = Field(8, ge=1)
     allow_empty: bool = False
+    allow_legacy_evidence_ids: bool = Field(
+        False, description="Allow legacy evidence_ids-only claims without line ranges."
+    )
+    max_line_span: int = Field(8, ge=1, description="Max lines allowed per citation span.")
 
 
 class EntailmentConfig(BaseModel):
@@ -1381,16 +1397,12 @@ class ModelStageConfig(BaseModel):
 
 class ModelStagesConfig(BaseModel):
     query_refine: ModelStageConfig = ModelStageConfig()
-    draft_generate: ModelStageConfig = Field(
-        default_factory=lambda: ModelStageConfig(enabled=False)
-    )
+    draft_generate: ModelStageConfig = ModelStageConfig()
     final_answer: ModelStageConfig = ModelStageConfig()
     tool_transform: ModelStageConfig = Field(
         default_factory=lambda: ModelStageConfig(enabled=False)
     )
-    entailment_judge: ModelStageConfig = Field(
-        default_factory=lambda: ModelStageConfig(enabled=False)
-    )
+    entailment_judge: ModelStageConfig = ModelStageConfig()
 
 
 class AgentAnswerConfig(BaseModel):
@@ -1532,6 +1544,13 @@ class AppConfig(BaseModel):
                 raise ValueError(
                     "mode.https_enabled must be true when binding to non-loopback host"
                 )
+        if self.gateway.enabled and not is_loopback_host(self.gateway.bind_host):
+            if not self.gateway.require_api_key:
+                raise ValueError(
+                    "gateway.require_api_key must be true when binding to non-loopback host"
+                )
+            if not self.gateway.api_key:
+                raise ValueError("gateway.api_key is required when binding to non-loopback host")
         _validate_database_tls(self.database)
         _validate_qdrant_tls(self.qdrant)
         return self

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from autocapture.answer.claim_validation import ClaimValidator
+from autocapture.answer.claim_validation import ClaimValidator, EvidenceLineInfo
 from autocapture.answer.claims import ClaimsPayload, parse_claims_json
 from autocapture.config import CitationValidatorConfig
 
@@ -8,7 +8,7 @@ from autocapture.config import CitationValidatorConfig
 def test_parse_claims_assigns_ids() -> None:
     text = (
         "```json\n"
-        '{"schema_version":1,"claims":[{"text":"Claim A","evidence_ids":["E1"],"entity_tokens":[]}]}'
+        '{"schema_version":2,"claims":[{"text":"Claim A","citations":[{"evidence_id":"E1","line_start":1,"line_end":1}],"entity_tokens":[]}]}'
         "\n```"
     )
     parsed = parse_claims_json(text)
@@ -18,12 +18,12 @@ def test_parse_claims_assigns_ids() -> None:
 
 def test_claim_validator_rejects_unknown_citations() -> None:
     payload = ClaimsPayload(
-        schema_version=1,
+        schema_version=2,
         claims=[
             {
                 "claim_id": "c1",
                 "text": "Claim",
-                "evidence_ids": ["E9"],
+                "citations": [{"evidence_id": "E9", "line_start": 1, "line_end": 1}],
                 "entity_tokens": [],
             }
         ],
@@ -31,5 +31,6 @@ def test_claim_validator_rejects_unknown_citations() -> None:
     validator = ClaimValidator(
         CitationValidatorConfig(max_claims=10, max_citations_per_claim=3, allow_empty=False)
     )
-    result = validator.validate(payload, valid_evidence_ids={"E1"})
+    evidence_map = {"E1": EvidenceLineInfo(evidence_id="E1", lines=["Evidence"], citable=True)}
+    result = validator.validate(payload, evidence_map=evidence_map)
     assert not result.valid

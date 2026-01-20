@@ -34,15 +34,15 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Name: "startup"; Description: "Run Autocapture at startup"; Flags: unchecked
 
 [Files]
-Source: "dist\autocapture\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+Source: "..\dist\autocapture\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Autocapture"; Filename: "{app}\{#MyAppExeName}"
 Name: "{group}\Uninstall Autocapture"; Filename: "{uninstallexe}"
 
 [Run]
-Filename: "schtasks"; Parameters: "/Create /SC ONLOGON /TN \"Autocapture\" /TR \"\"\"{app}\\{#MyAppExeName}\"\"\" /RL LIMITED /F"; Tasks: startup; Flags: runhidden
+Filename: "schtasks"; Parameters: "/Create /SC ONLOGON /TN ""Autocapture"" /TR ""{app}\{#MyAppExeName}"" /RL LIMITED /F"; Tasks: startup; Flags: runhidden
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Autocapture"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-Filename: "schtasks"; Parameters: "/Delete /TN \"Autocapture\" /F"; Flags: runhidden
+Filename: "schtasks"; Parameters: "/Delete /TN ""Autocapture"" /F"; Flags: runhidden

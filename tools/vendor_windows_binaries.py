@@ -17,6 +17,9 @@ DEFAULT_QDRANT_VERSION = "1.16.3"
 QDRANT_ZIP_NAME = "qdrant-x86_64-pc-windows-msvc.zip"
 QDRANT_SHA_NAME = "qdrant-x86_64-pc-windows-msvc.zip.sha256"
 FFMPEG_ZIP_NAME = "ffmpeg-release-essentials.zip"
+QDRANT_SHA256_BY_VERSION = {
+    "1.16.3": "a1159282922776a05bdeaad9e90c85d8d1ca0bc90d9e5e4add56133e15748753",
+}
 
 
 def _log(message: str) -> None:
@@ -83,6 +86,24 @@ def _verify_sha256(archive: Path, sha_file: Path) -> None:
     if actual.lower() != expected.lower():
         raise RuntimeError(f"SHA256 mismatch for {archive.name}: expected {expected}, got {actual}")
     _log(f"SHA256 OK for {archive.name}")
+
+
+def _ensure_pinned_sha(downloads_dir: Path, qdrant_version: str) -> Path | None:
+    expected = QDRANT_SHA256_BY_VERSION.get(qdrant_version)
+    if not expected:
+        return None
+    downloads_dir.mkdir(parents=True, exist_ok=True)
+    sha_path = downloads_dir / QDRANT_SHA_NAME
+    if sha_path.exists():
+        existing = sha_path.read_text(encoding="utf-8").strip()
+        if existing and not existing.startswith(expected):
+            raise RuntimeError(
+                f"Pinned SHA256 mismatch for Qdrant {qdrant_version}: "
+                f"expected {expected}, found {existing}"
+            )
+        return sha_path
+    sha_path.write_text(f"{expected}  {QDRANT_ZIP_NAME}\n", encoding="utf-8")
+    return sha_path
 
 
 def _extract_qdrant(zip_path: Path, dest_dir: Path) -> None:
@@ -163,12 +184,15 @@ def main() -> int:
     urls = _build_urls(args.qdrant_version)
 
     qdrant_zip = downloads_dir / QDRANT_ZIP_NAME
-    qdrant_sha = downloads_dir / QDRANT_SHA_NAME
+    qdrant_sha = _ensure_pinned_sha(downloads_dir, args.qdrant_version)
+    if qdrant_sha is None:
+        qdrant_sha = downloads_dir / QDRANT_SHA_NAME
     ffmpeg_zip = downloads_dir / FFMPEG_ZIP_NAME
     ffmpeg_sha = downloads_dir / f"{FFMPEG_ZIP_NAME}.sha256"
 
     _download(urls["qdrant"], qdrant_zip)
-    _download(urls["qdrant_sha"], qdrant_sha)
+    if qdrant_sha.name == QDRANT_SHA_NAME and qdrant_sha.exists() is False:
+        _download(urls["qdrant_sha"], qdrant_sha)
     _download(urls["ffmpeg"], ffmpeg_zip)
     _download(urls["ffmpeg_sha"], ffmpeg_sha)
     _verify_sha256(qdrant_zip, qdrant_sha)

@@ -35,6 +35,7 @@ from ..agents.answer_graph import AnswerGraph
 from ..agents import AGENT_JOB_DAILY_HIGHLIGHTS
 from ..agents.jobs import AgentJobQueue
 from ..answer.integrity import check_citations
+from ..contracts_utils import sha256_text
 from ..config import AppConfig, ProviderRoutingConfig, apply_settings_overrides, is_loopback_host
 from ..encryption import EncryptionManager
 from ..logging_utils import get_logger
@@ -53,6 +54,7 @@ from ..memory.context_pack import (
     build_context_pack,
     build_evidence_payload,
 )
+from ..memory.prompt_injection import scan_prompt_injection
 from ..memory.compiler import ContextCompiler
 from ..memory.store import MemoryStore
 from ..vision.citation_overlay import render_citation_overlay
@@ -1761,6 +1763,12 @@ def create_app(
             )
         elif graph_attempted and graph_used_llm:
             pass
+        elif graph_attempted and getattr(graph_result, "mode", None) in {
+            "BLOCKED",
+            "NO_EVIDENCE",
+            "CONFLICT",
+        }:
+            pass
         else:
             stage_router = StageRouter(config, plugin_manager=plugins)
             provider, decision = stage_router.select_llm(
@@ -2286,14 +2294,13 @@ def _build_evidence(
         results = list(batch.results)
         no_evidence = bool(batch.no_evidence)
         reason = batch.reason
-    results = [result for result in results if not getattr(result, "non_citable", False)]
     if not results:
         return [], [], True, _no_evidence_message(query, bool(time_range), reason)
-    evidence: list[EvidenceItem] = []
+    raw_items: list[dict[str, Any]] = []
     events: list[EventRecord] = []
-    for idx, result in enumerate(results, start=1):
+    seen_keys: set[tuple[str, str]] = set()
+    for result in results:
         event = result.event
-        events.append(event)
         snippet = result.snippet or ""
         snippet_offset = result.snippet_offset or 0
         if not snippet:
@@ -2318,23 +2325,32 @@ def _build_evidence(
             title = entities.pseudonymize_text(title)
             if domain:
                 domain = entities.pseudonymize_text(domain)
-        evidence.append(
-            EvidenceItem(
-                evidence_id=f"E{idx}",
-                event_id=event.event_id,
-                timestamp=event.ts_start.isoformat(),
-                ts_end=event.ts_end.isoformat() if event.ts_end else None,
-                app=app_name,
-                title=title,
-                domain=domain,
-                score=result.score,
-                spans=spans,
-                text=snippet,
-                screenshot_path=event.screenshot_path,
-                screenshot_hash=event.screenshot_hash,
-                retrieval={
+        scan = scan_prompt_injection(snippet)
+        redacted_text = scan.redacted_text
+        content_hash = sha256_text(redacted_text)
+        key = (event.event_id, content_hash)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        events.append(event)
+        raw_items.append(
+            {
+                "key": key,
+                "event": event,
+                "app_name": app_name,
+                "title": title,
+                "domain": domain,
+                "score": result.score,
+                "spans": spans,
+                "text": redacted_text,
+                "raw_text": snippet,
+                "redacted_text": redacted_text if scan.match_count else None,
+                "injection_risk": scan.risk_score,
+                "content_hash": content_hash,
+                "non_citable": getattr(result, "non_citable", False),
+                "retrieval": {
                     "engine": getattr(result, "engine", "hybrid"),
-                    "rank": getattr(result, "rank", idx),
+                    "rank": getattr(result, "rank", 0),
                     "rank_gap": getattr(result, "rank_gap", 0.0),
                     "lexical_score": getattr(result, "lexical_score", 0.0),
                     "vector_score": getattr(result, "vector_score", 0.0),
@@ -2347,6 +2363,36 @@ def _build_evidence(
                     "non_citable": getattr(result, "non_citable", False),
                     "ts_start": event.ts_start.isoformat(),
                 },
+            }
+        )
+    if not raw_items:
+        return [], [], True, _no_evidence_message(query, bool(time_range), reason)
+    sorted_keys = sorted({item["key"] for item in raw_items})
+    key_to_id = {key: f"E{idx}" for idx, key in enumerate(sorted_keys, start=1)}
+    evidence: list[EvidenceItem] = []
+    for item in raw_items:
+        non_citable = bool(item["non_citable"])
+        evidence.append(
+            EvidenceItem(
+                evidence_id=key_to_id[item["key"]],
+                event_id=item["event"].event_id,
+                timestamp=item["event"].ts_start.isoformat(),
+                ts_end=item["event"].ts_end.isoformat() if item["event"].ts_end else None,
+                app=item["app_name"],
+                title=item["title"],
+                domain=item["domain"],
+                score=item["score"],
+                spans=item["spans"],
+                text=item["text"],
+                raw_text=item["raw_text"],
+                redacted_text=item["redacted_text"],
+                kind="derived_summary" if non_citable else "source",
+                citable=not non_citable,
+                injection_risk=item["injection_risk"],
+                content_hash=item["content_hash"],
+                screenshot_path=item["event"].screenshot_path,
+                screenshot_hash=item["event"].screenshot_hash,
+                retrieval=item["retrieval"],
             )
         )
     if not evidence and no_evidence:
@@ -2714,7 +2760,7 @@ def _remap_spans(
 def _extract_citations(answer_text: str) -> list[str]:
     import re
 
-    citations = re.findall(r"E\d+", answer_text or "")
+    citations = re.findall(r"(?:\\[|【)(E\\d+)(?::L\\d+-L\\d+)?(?:\\]|】)", answer_text or "")
     seen = []
     for cite in citations:
         if cite not in seen:

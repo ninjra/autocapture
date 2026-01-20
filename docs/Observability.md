@@ -1,9 +1,9 @@
 # Observability
 
-Phase 0 adds optional OpenTelemetry instrumentation with a strict attribute allowlist. Instrumentation is disabled by default.
+Phase 0 includes OpenTelemetry instrumentation with a strict attribute allowlist. Instrumentation is enabled by default.
 
-## Enable OpenTelemetry
-- Set `features.enable_otel` to `true` in your configuration.
+## Enable/disable OpenTelemetry
+- `features.enable_otel` defaults to `true`. Set it to `false` to disable tracing/metrics.
 - If OpenTelemetry libraries are not installed, instrumentation remains a no-op.
 
 ## Spans
@@ -11,13 +11,15 @@ Emitted spans include:
 - capture_frame
 - store_media
 - extract_ocr
-- index_lexical
-- vector_search
+- retrieval.lexical
+- retrieval.vector
+- retrieval.graph
 - vector_upsert
-- answer_generate
+- answergraph.stage
+- llm.call
 - gateway.upstream
-- verify_citations
-- verify_entailment
+- verification.citations
+- verification.entailment
 
 ## Metrics
 When enabled, the following metrics are emitted:
@@ -40,9 +42,16 @@ Only these attribute keys are permitted:
 - stage_name
 - success
 - provider_id
+- model_id
 - error_type
 - count
 - mode
+- retrieval_mode
+- adapter
+- verdict
+- attempt
+- citation_count
+- claim_count
 - queue_depth
 
 ## Forbidden Attributes

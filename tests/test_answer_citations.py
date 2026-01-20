@@ -20,7 +20,11 @@ class BadCitationLLM:
         *,
         temperature: float | None = None,
     ) -> str:
-        return "Answer with invalid citation [E999]"
+        return (
+            "```json\n"
+            '{"schema_version":2,"claims":[{"text":"Answer","citations":[{"evidence_id":"E999","line_start":1,"line_end":1}]}]}'
+            "\n```"
+        )
 
 
 @pytest.mark.anyio
@@ -85,8 +89,8 @@ async def test_answer_citations_subset(tmp_path: Path, monkeypatch, async_client
         )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["citations"]
-    assert all(cite.startswith("E") for cite in payload["citations"])
+    assert payload["citations"] == []
+    assert payload["mode"] == "BLOCKED"
 
 
 @pytest.mark.anyio

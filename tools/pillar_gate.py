@@ -33,7 +33,10 @@ def _changed_files() -> list[str]:
     base = _resolve_base_ref()
     result = _run(["git", "diff", "--name-only", f"{base}...HEAD"])
     if result.returncode != 0:
-        raise RuntimeError(f"git diff failed: {result.stderr.strip()}")
+        fallback = _run(["git", "ls-tree", "-r", "--name-only", "HEAD"])
+        if fallback.returncode != 0:
+            raise RuntimeError(f"git diff failed: {result.stderr.strip()}")
+        return [line.strip() for line in fallback.stdout.splitlines() if line.strip()]
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 

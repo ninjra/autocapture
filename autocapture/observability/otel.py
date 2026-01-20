@@ -13,9 +13,16 @@ _ALLOWED_ATTRS = {
     "stage_name",
     "success",
     "provider_id",
+    "model_id",
     "error_type",
     "count",
     "mode",
+    "retrieval_mode",
+    "adapter",
+    "verdict",
+    "attempt",
+    "citation_count",
+    "claim_count",
     "queue_depth",
 }
 
@@ -77,6 +84,18 @@ def init_otel(enabled: bool, *, test_mode: bool = False) -> None:
         from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
         resource = Resource.create({"service.name": "autocapture"})
+        if test_mode:
+            try:
+                if hasattr(trace, "_TRACER_PROVIDER"):
+                    trace._TRACER_PROVIDER = None  # type: ignore[attr-defined]
+                if hasattr(trace, "_TRACER_PROVIDER_SET_ONCE"):
+                    trace._TRACER_PROVIDER_SET_ONCE._done = False  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            _STATE.histograms = {}
+            _STATE.counters = {}
+            _STATE.gauge_values = {}
+            _STATE.gauge_attrs = {}
         provider = TracerProvider(resource=resource)
         if test_mode:
             try:

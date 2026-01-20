@@ -61,7 +61,7 @@ def sentence_id(text: str, index: int) -> str:
 def extract_sentence_citations(text: str, evidence_ids: set[str]) -> list[SentenceCoverage]:
     sentences = split_sentences(text)
     coverage: list[SentenceCoverage] = []
-    citation_pattern = re.compile(r"\[(E\d+)\]")
+    citation_pattern = re.compile(r"(?:\[|【)(E\d+)(?::L\d+-L\d+)?(?:\]|】)")
     for idx, sentence in enumerate(sentences, start=1):
         found = [c for c in citation_pattern.findall(sentence) if c in evidence_ids]
         coverage.append(
@@ -81,7 +81,7 @@ def extract_sentence_citations(text: str, evidence_ids: set[str]) -> list[Senten
         return cleaned == ""
 
     def _leading_citations(sentence: str) -> list[str]:
-        match = re.match(r"^\s*(\[(E\d+)\]\s*)+", sentence)
+        match = re.match(r"^\s*((?:\[|【)(?:E\d+)(?::L\d+-L\d+)?(?:\]|】)\s*)+", sentence)
         if not match:
             return []
         return [c for c in citation_pattern.findall(match.group(0)) if c in evidence_ids]

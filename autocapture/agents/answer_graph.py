@@ -8,13 +8,14 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 
 from sqlalchemy import select
 from ..config import AppConfig
 from ..logging_utils import get_logger
 from ..answer.coverage import coverage_metrics, extract_sentence_citations
 from ..answer.claims import parse_claims_json, render_claims_answer
-from ..answer.claim_validation import ClaimValidator
+from ..answer.claim_validation import ClaimValidator, EvidenceLineInfo
 from ..answer.entailment import heuristic_entailment, judge_entailment
 from ..answer.conflict import detect_conflicts
 from ..answer.integrity import check_citations
@@ -27,6 +28,7 @@ from ..memory.context_pack import (
     build_context_pack,
     build_evidence_payload,
 )
+from ..memory.prompt_injection import scan_prompt_injection
 from ..memory.time_intent import (
     is_time_only_expression,
     resolve_time_intent,
@@ -49,6 +51,12 @@ from ..storage.models import (
     AnswerClaimCitationRecord,
     EvidenceLineMapRecord,
     ProviderCallRecord,
+    RequestRunRecord,
+    StageRunRecord,
+    ProviderHealthRecord,
+    EvidenceItemRecord,
+    ClaimRecord,
+    ClaimCitationRecord,
     CitableSpanRecord,
     EventRecord,
 )
@@ -135,6 +143,25 @@ class AnswerGraph:
         context_pack_format: str = "json",
     ) -> AnswerGraphResult:
         warnings: list[str] = []
+        request_id = stable_id(
+            "request_run",
+            {"query": query, "ts": dt.datetime.now(dt.timezone.utc).isoformat()},
+        )
+        request_started_at = dt.datetime.now(dt.timezone.utc)
+        if hasattr(self._retrieval, "_db"):
+            self._retrieval._db.transaction(  # type: ignore[attr-defined]
+                lambda session: session.add(
+                    RequestRunRecord(
+                        request_id=request_id,
+                        query_id=None,
+                        query_text=query,
+                        status="started",
+                        warnings_json={},
+                        started_at=request_started_at,
+                        completed_at=None,
+                    )
+                )
+            )
         budget_manager = BudgetManager(self._config)
         budget_state = budget_manager.start()
         normalized_query = self._normalize_query(query)
@@ -167,6 +194,7 @@ class AnswerGraph:
             draft_k,
             sanitized,
             retrieval_mode=retrieval_mode,
+            request_id=request_id,
         )
         evidence, events, no_evidence = _unpack_evidence_result(evidence_result)
         thread_aggregates = _build_thread_aggregates(
@@ -240,6 +268,7 @@ class AnswerGraph:
                     draft_k,
                     sanitized,
                     retrieval_mode=retrieval_mode,
+                    request_id=request_id,
                 )
                 evidence, events, no_evidence = _unpack_evidence_result(refined_result)
                 if no_evidence or not evidence:
@@ -333,13 +362,21 @@ class AnswerGraph:
                     stage="draft_generate",
                 )
                 draft_start = time.monotonic()
-                with otel_span("answer_generate", {"stage_name": "answer_generate"}):
-                    draft_text = await draft_provider.generate_answer(
-                        system_prompt,
-                        draft_query,
-                        draft_pack,
-                        temperature=draft_decision.temperature,
-                    )
+                with otel_span("answergraph.stage", {"stage_name": "draft_generate"}):
+                    with otel_span(
+                        "llm.call",
+                        {
+                            "stage_name": "draft_generate",
+                            "provider_id": getattr(draft_decision, "provider", "unknown"),
+                            "model_id": getattr(draft_decision, "model_id", None),
+                        },
+                    ):
+                        draft_text = await draft_provider.generate_answer(
+                            system_prompt,
+                            draft_query,
+                            draft_pack,
+                            temperature=draft_decision.temperature,
+                        )
                 record_histogram(
                     "answer_generate_ms",
                     (time.monotonic() - draft_start) * 1000,
@@ -392,22 +429,41 @@ class AnswerGraph:
                 self._log.warning("Draft generation failed; skipping: {}", exc)
 
         if speculative and draft_valid and draft_text is not None and speculative_confident:
-            return self._finalize_answer(
-                answer_text=draft_text,
-                citations=draft_citations,
-                context_pack_json=context_pack_json,
-                warnings=warnings,
-                used_llm=True,
-                output_format=output_format,
-                context_pack_tron=context_pack_tron,
-                prompt_strategy_payload=None,
-                query=query,
-                retrieve_filters=retrieve_filters,
-                resolved_time_range=resolved_time_range,
-                budget_manager=budget_manager,
-                budget_state=budget_state,
-                evidence=evidence,
-            )
+            if self._requires_claims(draft_decision) and draft_claims_payload:
+                return self._finalize_answer(
+                    answer_text=draft_text,
+                    citations=draft_citations,
+                    context_pack_json=context_pack_json,
+                    warnings=warnings,
+                    used_llm=True,
+                    output_format=output_format,
+                    context_pack_tron=context_pack_tron,
+                    prompt_strategy_payload=None,
+                    query=query,
+                    retrieve_filters=retrieve_filters,
+                    resolved_time_range=resolved_time_range,
+                    budget_manager=budget_manager,
+                    budget_state=budget_state,
+                    evidence=evidence,
+                    claims_payload=draft_claims_payload,
+                )
+            if not self._config.verification.claims_enabled:
+                return self._finalize_answer(
+                    answer_text=draft_text,
+                    citations=draft_citations,
+                    context_pack_json=context_pack_json,
+                    warnings=warnings,
+                    used_llm=True,
+                    output_format=output_format,
+                    context_pack_tron=context_pack_tron,
+                    prompt_strategy_payload=None,
+                    query=query,
+                    retrieve_filters=retrieve_filters,
+                    resolved_time_range=resolved_time_range,
+                    budget_manager=budget_manager,
+                    budget_state=budget_state,
+                    evidence=evidence,
+                )
 
         if speculative:
             deep_result = self._build_evidence(
@@ -417,6 +473,7 @@ class AnswerGraph:
                 final_k,
                 sanitized,
                 retrieval_mode="deep",
+                request_id=request_id,
             )
             evidence, events, no_evidence = _unpack_evidence_result(deep_result)
             if not evidence or no_evidence:
@@ -450,13 +507,11 @@ class AnswerGraph:
         prompt_strategy_payload: dict | None = None
         final_claims_payload = None
         final_decision = None
+        final_errors: list[str] = []
         try:
             final_provider, final_decision = self._stage_router.select_llm(
                 "final_answer", routing_override=routing_override
             )
-            final_query = _build_final_query(query, draft_text)
-            if self._requires_claims(final_decision):
-                final_query = self._append_claims_instructions(final_query)
             final_pack = _select_context_pack_text(
                 self._config,
                 final_decision,
@@ -466,50 +521,104 @@ class AnswerGraph:
                 warnings,
                 stage="final_answer",
             )
-            answer_start = time.monotonic()
-            with otel_span("answer_generate", {"stage_name": "answer_generate"}):
-                answer_text = await final_provider.generate_answer(
-                    system_prompt,
-                    final_query,
-                    final_pack,
-                    temperature=final_decision.temperature,
-                )
-            record_histogram(
-                "answer_generate_ms",
-                (time.monotonic() - answer_start) * 1000,
-                {"stage_name": "answer_generate"},
-            )
-            provider_calls.append(
-                {
-                    "stage": "final_answer",
-                    "provider_id": getattr(final_decision, "provider", "unknown"),
-                    "model_id": getattr(final_decision, "model_id", None),
-                    "attempt_index": 1,
-                    "success": True,
-                    "status_code": None,
-                    "error_text": None,
-                    "latency_ms": (time.monotonic() - answer_start) * 1000,
-                }
-            )
-            budget_manager.record_stage(
-                budget_state, "answer_final", (time.monotonic() - answer_start) * 1000
-            )
-            prompt_strategy_payload = _prompt_strategy_payload(final_provider)
+            base_final_query = _build_final_query(query, draft_text)
+            max_attempts = _stage_max_attempts(final_decision)
+            attempt = 0
             verifier = self._get_verifier()
-            if self._requires_claims(final_decision):
-                (
-                    answer_text,
-                    citations,
-                    final_valid,
-                    final_claims_payload,
-                    final_errors,
-                ) = self._process_claims_output(answer_text, evidence, verifier)
-                if final_errors:
-                    warnings.append("final_claims_invalid")
-                    verification_failures_total.labels("final", "claims_invalid").inc()
-            else:
-                citations = _extract_citations(answer_text)
-                final_valid = _verify_answer(answer_text, citations, evidence, verifier)
+            while attempt < max_attempts:
+                attempt += 1
+                final_query = base_final_query
+                if self._requires_claims(final_decision):
+                    final_query = self._append_claims_instructions(
+                        base_final_query, final_errors if attempt > 1 else None
+                    )
+                answer_start = time.monotonic()
+                with otel_span("answergraph.stage", {"stage_name": "final_answer"}):
+                    with otel_span(
+                        "llm.call",
+                        {
+                            "stage_name": "final_answer",
+                            "provider_id": getattr(final_decision, "provider", "unknown"),
+                            "model_id": getattr(final_decision, "model_id", None),
+                        },
+                    ):
+                        answer_text = await final_provider.generate_answer(
+                            system_prompt,
+                            final_query,
+                            final_pack,
+                            temperature=0.0 if attempt > 1 else final_decision.temperature,
+                        )
+                latency_ms = (time.monotonic() - answer_start) * 1000
+                record_histogram(
+                    "answer_generate_ms",
+                    latency_ms,
+                    {"stage_name": "answer_generate"},
+                )
+                provider_calls.append(
+                    {
+                        "stage": "final_answer",
+                        "provider_id": getattr(final_decision, "provider", "unknown"),
+                        "model_id": getattr(final_decision, "model_id", None),
+                        "attempt_index": attempt,
+                        "success": True,
+                        "status_code": None,
+                        "error_text": None,
+                        "latency_ms": latency_ms,
+                    }
+                )
+                budget_manager.record_stage(budget_state, "answer_final", latency_ms)
+                prompt_strategy_payload = _prompt_strategy_payload(final_provider)
+                if self._requires_claims(final_decision):
+                    (
+                        answer_text,
+                        citations,
+                        final_valid,
+                        final_claims_payload,
+                        final_errors,
+                    ) = self._process_claims_output(answer_text, evidence, verifier)
+                    if final_errors:
+                        warnings.append("final_claims_invalid")
+                        verification_failures_total.labels("final", "claims_invalid").inc()
+                    if final_valid:
+                        break
+                else:
+                    citations = _extract_citations(answer_text)
+                    final_valid = _verify_answer(answer_text, citations, evidence, verifier)
+                    if final_valid:
+                        break
+            if (
+                not final_valid
+                and self._requires_claims(final_decision)
+                and getattr(final_decision, "policy", None)
+                and final_decision.policy.repair_on_failure
+            ):
+                regen = await self._regenerate_with_deep_retrieval(
+                    query=query,
+                    draft_text=draft_text,
+                    retrieve_query=retrieve_query,
+                    resolved_time_range=resolved_time_range,
+                    filters=filters,
+                    sanitized=sanitized,
+                    aggregates=aggregates,
+                    final_k=final_k,
+                    routing=routing,
+                    routing_override=routing_override,
+                    context_pack_format=context_pack_format,
+                    system_prompt=system_prompt,
+                    budget_manager=budget_manager,
+                    budget_state=budget_state,
+                    request_id=request_id,
+                )
+                if regen is not None:
+                    (
+                        answer_text,
+                        citations,
+                        final_claims_payload,
+                        evidence,
+                        context_pack_json,
+                        context_pack_tron,
+                    ) = regen
+                    final_valid = True
         except Exception as exc:
             warnings.append("final_failed")
             provider_calls.append(
@@ -527,14 +636,22 @@ class AnswerGraph:
             self._log.warning("Final answer failed; falling back: {}", exc)
 
         selected_claims_payload = None
+        claims_required = bool(final_decision and self._requires_claims(final_decision))
         if final_valid and (not draft_valid or len(citations) >= len(draft_citations)):
             used_llm = True
             selected_claims_payload = final_claims_payload
-        elif draft_valid and draft_text is not None:
+        elif (
+            draft_valid and draft_text is not None and (not claims_required or draft_claims_payload)
+        ):
             answer_text = draft_text
             citations = draft_citations
             used_llm = True
             selected_claims_payload = draft_claims_payload
+        elif claims_required:
+            warnings.append("claims_validation_blocked")
+            answer_text = "Answer withheld: citation validation failed."
+            citations = []
+            used_llm = False
         else:
             compressed = extractive_answer(evidence)
             answer_text = compressed.answer
@@ -562,6 +679,7 @@ class AnswerGraph:
                 system_prompt=system_prompt,
                 budget_manager=budget_manager,
                 budget_state=budget_state,
+                request_id=request_id,
             )
             if entailment is not None:
                 (
@@ -589,6 +707,8 @@ class AnswerGraph:
             evidence=evidence,
             claims_payload=selected_claims_payload,
             provider_calls=provider_calls,
+            request_id=request_id,
+            request_started_at=request_started_at,
         )
 
     def _finalize_answer(
@@ -610,6 +730,8 @@ class AnswerGraph:
         evidence: list[EvidenceItem],
         claims_payload: object | None = None,
         provider_calls: list[dict] | None = None,
+        request_id: str | None = None,
+        request_started_at: dt.datetime | None = None,
     ) -> AnswerGraphResult:
         query_class = _classify_query(query, retrieve_filters)
         query_id = _ensure_query_record(
@@ -673,6 +795,13 @@ class AnswerGraph:
         )
         coverage["evidence_count"] = len(valid_span_ids)
         thresholds = _coverage_thresholds(self._config)
+        blocked = any(
+            flag in warnings
+            for flag in (
+                "claims_validation_blocked",
+                "entailment_contradicted",
+            )
+        )
         confidence = {
             "coverage": coverage.get("sentence_coverage", 0.0),
             "integrity_ok": not bool(integrity.invalid_span_ids),
@@ -686,7 +815,9 @@ class AnswerGraph:
         if conflict.conflict:
             mode = "CONFLICT"
             answer_text = _conflict_message(conflict.summary)
-        if mode != "CONFLICT":
+        if mode != "CONFLICT" and blocked:
+            mode = "BLOCKED"
+        if mode not in {"CONFLICT", "BLOCKED"}:
             if not valid_evidence_ids or coverage.get("sentence_coverage", 0.0) < thresholds[1]:
                 mode = "NO_EVIDENCE"
             elif coverage.get("sentence_coverage", 0.0) < thresholds[0]:
@@ -732,8 +863,8 @@ class AnswerGraph:
         }
         line_maps: list[dict] = []
         for evidence_id, item in evidence_by_id.items():
-            raw_text = item.raw_text or item.text or ""
-            offsets = _line_offsets(raw_text)
+            line_text = item.text or item.raw_text or ""
+            offsets = _line_offsets(line_text)
             line_maps.append(
                 {
                     "map_id": stable_id(
@@ -741,7 +872,7 @@ class AnswerGraph:
                         {
                             "query_id": query_id,
                             "evidence_id": evidence_id,
-                            "text_sha256": sha256_text(raw_text),
+                            "text_sha256": sha256_text(line_text),
                         },
                     ),
                     "query_id": query_id,
@@ -749,7 +880,7 @@ class AnswerGraph:
                     "span_id": evidence_to_span.get(evidence_id),
                     "line_count": len(offsets),
                     "line_offsets": offsets,
-                    "text_sha256": sha256_text(raw_text),
+                    "text_sha256": sha256_text(line_text),
                 }
             )
         budgets_json = {
@@ -758,6 +889,7 @@ class AnswerGraph:
         }
 
         def _persist_answer(session) -> None:
+            now = dt.datetime.now(dt.timezone.utc)
             existing = session.get(AnswerRecord, answer_id)
             if not existing:
                 session.add(
@@ -772,10 +904,17 @@ class AnswerGraph:
                         stale=bool(integrity.invalid_span_ids),
                         answer_format_version=1,
                         schema_version=1,
-                        created_at=dt.datetime.now(dt.timezone.utc),
+                        created_at=now,
                     )
                 )
                 session.flush()
+            if request_id:
+                run = session.get(RequestRunRecord, request_id)
+                if run:
+                    run.query_id = query_id
+                    run.status = "completed"
+                    run.warnings_json = {"warnings": warnings}
+                    run.completed_at = now
             existing_pairs: set[tuple[str, str | None]] = set()
             if existing:
                 rows = session.execute(
@@ -798,7 +937,7 @@ class AnswerGraph:
                             sentence_index=sentence.index,
                             span_id=span_id,
                             citable=True,
-                            created_at=dt.datetime.now(dt.timezone.utc),
+                            created_at=now,
                         )
                     )
             if claims_payload and getattr(claims_payload, "claims", None):
@@ -819,19 +958,60 @@ class AnswerGraph:
                             entailment_verdict=verdict,
                             entailment_rationale=None,
                             schema_version=1,
-                            created_at=dt.datetime.now(dt.timezone.utc),
+                            created_at=now,
                         )
                     )
-                    for cite in claim.evidence_ids:
-                        span_id = evidence_to_span.get(cite)
+                    with session.no_autoflush:
+                        existing_claim = session.get(ClaimRecord, claim_id)
+                    if not existing_claim:
+                        session.add(
+                            ClaimRecord(
+                                claim_id=claim_id,
+                                request_id=request_id,
+                                claim_text=claim.text,
+                                entailment_verdict=verdict,
+                                created_at=now,
+                            )
+                        )
+                    session.flush()
+                    citations = list(getattr(claim, "citations", []) or [])
+                    if not citations:
+                        citations = [
+                            SimpleNamespace(
+                                evidence_id=eid,
+                                line_start=1,
+                                line_end=1,
+                                confidence=None,
+                            )
+                            for eid in claim.evidence_ids
+                        ]
+                    for cite in citations:
+                        evidence_id = getattr(cite, "evidence_id", None) or ""
+                        span_id = evidence_to_span.get(evidence_id)
                         session.add(
                             AnswerClaimCitationRecord(
                                 claim_id=claim_id,
                                 span_id=span_id,
-                                evidence_id=cite,
-                                created_at=dt.datetime.now(dt.timezone.utc),
+                                evidence_id=evidence_id,
+                                line_start=getattr(cite, "line_start", None),
+                                line_end=getattr(cite, "line_end", None),
+                                confidence=getattr(cite, "confidence", None),
+                                created_at=now,
                             )
                         )
+                        if evidence_id:
+                            line_start = getattr(cite, "line_start", None) or 1
+                            line_end = getattr(cite, "line_end", None) or line_start
+                            session.add(
+                                ClaimCitationRecord(
+                                    claim_id=claim_id,
+                                    evidence_id=evidence_id,
+                                    line_start=int(line_start),
+                                    line_end=int(line_end),
+                                    confidence=getattr(cite, "confidence", None),
+                                    created_at=now,
+                                )
+                            )
             for line_map in line_maps:
                 existing = session.get(EvidenceLineMapRecord, line_map["map_id"])
                 if existing is None:
@@ -844,7 +1024,35 @@ class AnswerGraph:
                             line_count=line_map["line_count"],
                             line_offsets_json=line_map["line_offsets"],
                             text_sha256=line_map["text_sha256"],
-                            created_at=dt.datetime.now(dt.timezone.utc),
+                            created_at=now,
+                        )
+                    )
+            if request_id:
+                line_count_map = {item["evidence_id"]: item["line_count"] for item in line_maps}
+                for evidence_id, item in evidence_by_id.items():
+                    item_id = stable_id(
+                        "evidence_item",
+                        {
+                            "request_id": request_id,
+                            "evidence_id": evidence_id,
+                            "content_hash": item.content_hash,
+                        },
+                    )
+                    if session.get(EvidenceItemRecord, item_id):
+                        continue
+                    session.add(
+                        EvidenceItemRecord(
+                            item_id=item_id,
+                            request_id=request_id,
+                            query_id=query_id,
+                            evidence_id=evidence_id,
+                            event_id=item.event_id,
+                            content_hash=item.content_hash or sha256_text(item.text or ""),
+                            line_count=line_count_map.get(evidence_id, 0),
+                            injection_risk=item.injection_risk,
+                            citable=item.citable,
+                            kind=item.kind,
+                            created_at=now,
                         )
                     )
             if provider_calls:
@@ -875,9 +1083,58 @@ class AnswerGraph:
                             status_code=call.get("status_code"),
                             error_text=call.get("error_text"),
                             latency_ms=call.get("latency_ms"),
-                            created_at=dt.datetime.now(dt.timezone.utc),
+                            created_at=now,
                         )
                     )
+                    if request_id:
+                        stage_run_id = stable_id(
+                            "stage_run",
+                            {
+                                "request_id": request_id,
+                                "stage": call.get("stage"),
+                                "provider_id": call.get("provider_id"),
+                                "attempt_index": call.get("attempt_index", idx),
+                                "success": call.get("success"),
+                                "ts": now.isoformat(),
+                            },
+                        )
+                        if not session.get(StageRunRecord, stage_run_id):
+                            session.add(
+                                StageRunRecord(
+                                    run_id=stage_run_id,
+                                    request_id=request_id,
+                                    stage=str(call.get("stage") or ""),
+                                    provider_id=str(call.get("provider_id") or ""),
+                                    model_id=call.get("model_id"),
+                                    attempt_index=int(call.get("attempt_index") or idx),
+                                    success=bool(call.get("success")),
+                                    status_code=call.get("status_code"),
+                                    error_text=call.get("error_text"),
+                                    latency_ms=call.get("latency_ms"),
+                                    created_at=now,
+                                )
+                            )
+                        provider_id = str(call.get("provider_id") or "")
+                        if provider_id:
+                            health = session.get(ProviderHealthRecord, provider_id)
+                            if not health:
+                                health = ProviderHealthRecord(
+                                    provider_id=provider_id,
+                                    consecutive_failures=0,
+                                    circuit_open_until=None,
+                                    last_error=None,
+                                    updated_at=now,
+                                )
+                                session.add(health)
+                            if call.get("success"):
+                                health.consecutive_failures = 0
+                                health.last_error = None
+                            else:
+                                health.consecutive_failures = (
+                                    int(health.consecutive_failures or 0) + 1
+                                )
+                                health.last_error = call.get("error_text")
+                            health.updated_at = now
 
         self._retrieval._db.transaction(_persist_answer)  # type: ignore[attr-defined]
         update_tier_stats(
@@ -938,7 +1195,7 @@ class AnswerGraph:
             answer_id=answer_id,
             query_id=query_id,
             claims=(
-                claims_payload.model_dump(mode="json")
+                claims_payload.model_dump(mode="json", by_alias=True)
                 if hasattr(claims_payload, "model_dump")
                 else None
             ),
@@ -952,6 +1209,7 @@ class AnswerGraph:
         k: int,
         sanitized: bool,
         retrieval_mode: str | None = None,
+        request_id: str | None = None,
     ) -> tuple[list[EvidenceItem], list[EventRecord], bool]:
         retrieve_filters = None
         if filters:
@@ -960,11 +1218,21 @@ class AnswerGraph:
             )
         if self._config.next10.enabled and hasattr(self._retrieval, "retrieve_tiered"):
             batch = self._retrieval.retrieve_tiered(
-                query, time_range, retrieve_filters, limit=k, mode=retrieval_mode
+                query,
+                time_range,
+                retrieve_filters,
+                limit=k,
+                mode=retrieval_mode,
+                request_id=request_id,
             )
         else:
             batch = self._retrieval.retrieve(
-                query, time_range, retrieve_filters, limit=k, mode=retrieval_mode
+                query,
+                time_range,
+                retrieve_filters,
+                limit=k,
+                mode=retrieval_mode,
+                request_id=request_id,
             )
         results = list(batch.results)
         no_evidence = bool(batch.no_evidence)
@@ -972,7 +1240,6 @@ class AnswerGraph:
             batch = self._retrieval.retrieve("", time_range, retrieve_filters, limit=k)
             results = list(batch.results)
             no_evidence = bool(batch.no_evidence)
-        results = [item for item in results if not item.non_citable]
         if not results:
             return [], [], True
         span_lookup: dict[tuple[str, str], CitableSpanRecord] = {}
@@ -995,11 +1262,11 @@ class AnswerGraph:
                         fallback_spans[row.frame_id] = row
                     if row.legacy_span_key:
                         span_lookup[(row.frame_id, row.legacy_span_key)] = row
-        evidence: list[EvidenceItem] = []
+        raw_items: list[dict[str, Any]] = []
         events: list[EventRecord] = []
-        for idx, result in enumerate(results, start=1):
+        seen_keys: set[tuple[str, str]] = set()
+        for result in results:
             event = result.event
-            events.append(event)
             snippet = result.snippet or (event.ocr_text or "")[:500]
             raw_snippet = snippet
             frame_size = _frame_size_from_tags(event.tags)
@@ -1043,24 +1310,32 @@ class AnswerGraph:
                 title = self._entities.pseudonymize_text(title)
                 if domain:
                     domain = self._entities.pseudonymize_text(domain)
-            evidence.append(
-                EvidenceItem(
-                    evidence_id=f"E{idx}",
-                    event_id=event.event_id,
-                    timestamp=event.ts_start.isoformat(),
-                    ts_end=event.ts_end.isoformat() if event.ts_end else None,
-                    app=app_name,
-                    title=title,
-                    domain=domain,
-                    score=result.score,
-                    spans=spans,
-                    text=snippet,
-                    raw_text=raw_snippet,
-                    screenshot_path=event.screenshot_path,
-                    screenshot_hash=event.screenshot_hash,
-                    retrieval={
+            scan = scan_prompt_injection(snippet)
+            redacted_text = scan.redacted_text
+            content_hash = sha256_text(redacted_text)
+            key = (event.event_id, content_hash)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            events.append(event)
+            raw_items.append(
+                {
+                    "key": key,
+                    "event": event,
+                    "app_name": app_name,
+                    "title": title,
+                    "domain": domain,
+                    "score": result.score,
+                    "spans": spans,
+                    "text": redacted_text,
+                    "raw_text": raw_snippet,
+                    "redacted_text": redacted_text if scan.match_count else None,
+                    "injection_risk": scan.risk_score,
+                    "content_hash": content_hash,
+                    "non_citable": getattr(result, "non_citable", False),
+                    "retrieval": {
                         "engine": getattr(result, "engine", "hybrid"),
-                        "rank": getattr(result, "rank", idx),
+                        "rank": getattr(result, "rank", 0),
                         "rank_gap": getattr(result, "rank_gap", 0.0),
                         "lexical_score": getattr(result, "lexical_score", 0.0),
                         "vector_score": getattr(result, "vector_score", 0.0),
@@ -1073,6 +1348,37 @@ class AnswerGraph:
                         "query_id": getattr(batch, "query_id", None),
                         "tier_plan": getattr(batch, "tier_plan", None),
                     },
+                }
+            )
+        if not raw_items:
+            return [], [], True
+        sorted_keys = sorted({item["key"] for item in raw_items})
+        key_to_id = {key: f"E{idx}" for idx, key in enumerate(sorted_keys, start=1)}
+        evidence: list[EvidenceItem] = []
+        for item in raw_items:
+            evidence_id = key_to_id[item["key"]]
+            non_citable = bool(item["non_citable"])
+            evidence.append(
+                EvidenceItem(
+                    evidence_id=evidence_id,
+                    event_id=item["event"].event_id,
+                    timestamp=item["event"].ts_start.isoformat(),
+                    ts_end=item["event"].ts_end.isoformat() if item["event"].ts_end else None,
+                    app=item["app_name"],
+                    title=item["title"],
+                    domain=item["domain"],
+                    score=item["score"],
+                    spans=item["spans"],
+                    text=item["text"],
+                    raw_text=item["raw_text"],
+                    redacted_text=item["redacted_text"],
+                    kind="derived_summary" if non_citable else "source",
+                    citable=not non_citable,
+                    injection_risk=item["injection_risk"],
+                    content_hash=item["content_hash"],
+                    screenshot_path=item["event"].screenshot_path,
+                    screenshot_hash=item["event"].screenshot_hash,
+                    retrieval=item["retrieval"],
                 )
             )
         return evidence, events, no_evidence
@@ -1199,29 +1505,42 @@ class AnswerGraph:
     def _requires_claims(self, decision: object) -> bool:
         requirements = getattr(decision, "requirements", None)
         if not requirements:
-            return False
-        return bool(requirements.require_json and requirements.claims_schema == "claims_json_v1")
+            if not self._config.verification.claims_enabled:
+                return False
+            return getattr(decision, "stage", "") == "final_answer"
+        if bool(requirements.require_json and requirements.claims_schema == "claims_json_v1"):
+            return True
+        return bool(
+            self._config.verification.claims_enabled
+            and getattr(decision, "stage", "") == "final_answer"
+        )
 
-    def _append_claims_instructions(self, query: str) -> str:
+    def _append_claims_instructions(self, query: str, errors: list[str] | None = None) -> str:
         instructions = (
             "Return JSON only. Schema: {schema_version:int, claims:[{claim_id:string, text:string, "
-            "evidence_ids:[string], entity_tokens:[string]}], answer:string}. "
-            "Use evidence IDs exactly as provided (E1, E2...)."
+            "citations:[{evidence_id:string, line_start:int, line_end:int, confidence:number}]}], "
+            "abstentions:[{claim_id:string, reason:string}]}. "
+            "Use evidence IDs exactly as provided (E1, E2...). "
+            "Line numbers are 1-indexed and inclusive."
         )
+        if errors:
+            instructions = (
+                f"{instructions} Previous errors: {', '.join(errors)}. "
+                "Fix the JSON to satisfy all validation rules."
+            )
         return f"{query}\n\n{instructions}"
 
     def _process_claims_output(self, answer_text: str, evidence: list[EvidenceItem], verifier):
         errors: list[str] = []
-        evidence_ids = {item.evidence_id for item in evidence}
-        with otel_span("verify_citations", {"stage_name": "verify_citations"}):
+        evidence_map = _build_evidence_line_info(evidence)
+        evidence_ids = set(evidence_map)
+        with otel_span("verification.citations", {"stage_name": "verification.citations"}):
             try:
                 parsed = parse_claims_json(answer_text)
             except Exception:
                 errors.append("claims_parse_failed")
                 return answer_text, [], False, None, errors
-            validation = self._claim_validator.validate(
-                parsed.payload, valid_evidence_ids=evidence_ids
-            )
+            validation = self._claim_validator.validate(parsed.payload, evidence_map=evidence_map)
             if not validation.valid:
                 errors.extend(validation.errors)
                 return answer_text, [], False, parsed.payload, errors
@@ -1268,8 +1587,9 @@ class AnswerGraph:
         system_prompt: str,
         budget_manager: BudgetManager,
         budget_state,
+        request_id: str | None = None,
     ) -> tuple[str, list[str], object, list[EvidenceItem], dict, str | None] | None:
-        with otel_span("verify_entailment", {"stage_name": "verify_entailment"}):
+        with otel_span("verification.entailment", {"stage_name": "verification.entailment"}):
             evidence_by_id = {item.evidence_id: item for item in evidence}
             claims = list(claims_payload.claims)
             max_attempts = int(self._config.verification.entailment.max_attempts)
@@ -1292,7 +1612,7 @@ class AnswerGraph:
                 except Exception:
                     pass
                 has_contradiction = any(v == "contradicted" for v in verdicts.values())
-                has_nei = any(v == "nei" for v in verdicts.values())
+                has_nei = any(v in {"nei", "not_enough_information"} for v in verdicts.values())
                 if has_contradiction:
                     verification_failures_total.labels("entailment", "contradicted").inc()
                     warnings.append("entailment_contradicted")
@@ -1315,6 +1635,7 @@ class AnswerGraph:
                             system_prompt=system_prompt,
                             budget_manager=budget_manager,
                             budget_state=budget_state,
+                            request_id=request_id,
                         )
                         if regen is None:
                             return None
@@ -1360,6 +1681,7 @@ class AnswerGraph:
                             system_prompt=system_prompt,
                             budget_manager=budget_manager,
                             budget_state=budget_state,
+                            request_id=request_id,
                         )
                         if regen is None:
                             return None
@@ -1402,6 +1724,7 @@ class AnswerGraph:
         system_prompt: str,
         budget_manager: BudgetManager,
         budget_state,
+        request_id: str | None = None,
     ) -> tuple[str, list[str], object, list[EvidenceItem], dict, str | None] | None:
         deep_result = self._build_evidence(
             retrieve_query,
@@ -1410,6 +1733,7 @@ class AnswerGraph:
             max(final_k, self._config.retrieval.max_k),
             sanitized,
             retrieval_mode="deep",
+            request_id=request_id,
         )
         evidence, events, no_evidence = _unpack_evidence_result(deep_result)
         if not evidence or no_evidence:
@@ -1482,6 +1806,18 @@ class _ExtractiveWrapper:
         return extractive_answer(evidence)
 
 
+def _stage_max_attempts(decision: object | None) -> int:
+    if decision is None:
+        return 1
+    policy = getattr(decision, "policy", None)
+    if policy and getattr(policy, "max_attempts", None):
+        try:
+            return max(1, int(policy.max_attempts))
+        except Exception:
+            return 2
+    return 2
+
+
 def _line_offsets(text: str) -> list[int]:
     if text is None:
         return []
@@ -1495,10 +1831,25 @@ def _line_offsets(text: str) -> list[int]:
     return offsets
 
 
+def _build_evidence_line_info(evidence: list[EvidenceItem]) -> dict[str, EvidenceLineInfo]:
+    mapping: dict[str, EvidenceLineInfo] = {}
+    for item in evidence:
+        text = item.text or ""
+        lines = text.splitlines()
+        if not lines and text:
+            lines = [text]
+        mapping[item.evidence_id] = EvidenceLineInfo(
+            evidence_id=item.evidence_id,
+            lines=lines,
+            citable=item.citable,
+        )
+    return mapping
+
+
 def _extract_citations(answer_text: str) -> list[str]:
     import re
 
-    return re.findall(r"E\d+", answer_text or "")
+    return re.findall(r"(?:\\[|【)(E\\d+)(?::L\\d+-L\\d+)?(?:\\]|】)", answer_text or "")
 
 
 def _valid_citations(citations: list[str], evidence: list) -> bool:
@@ -1535,7 +1886,10 @@ def _is_confident(score: float, gap: float, config) -> bool:
 
 
 def _build_draft_query(query: str) -> str:
-    return f"{query}\n\n" "Draft a short answer using the evidence. Include citations like [E1]."
+    return (
+        f"{query}\n\n"
+        "Draft a short answer using the evidence. Include citations like 【E1:L1-L2】."
+    )
 
 
 def _build_final_query(query: str, draft_text: str | None, max_chars: int = 2000) -> str:
