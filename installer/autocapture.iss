@@ -34,7 +34,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Name: "startup"; Description: "Run Autocapture at startup"; Flags: unchecked
 
 [Files]
-Source: "dist\autocapture\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
+Source: "..\dist\autocapture\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\Autocapture"; Filename: "{app}\{#MyAppExeName}"
