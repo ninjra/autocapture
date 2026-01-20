@@ -55,6 +55,7 @@ class ContextPack:
     entity_tokens: list[EntityToken]
     aggregates: dict
     evidence: list[EvidenceItem]
+    memory_cards: list[dict]
     warnings: list[str]
 
     def _sanitize_evidence(self) -> tuple[list[EvidenceItem], list[str]]:
@@ -105,6 +106,7 @@ class ContextPack:
             "version": 1,
             "query": self.query,
             "generated_at": self.generated_at,
+            "memory_cards": list(self.memory_cards or []),
             "evidence": [
                 {
                     "id": item.evidence_id,
@@ -164,6 +166,7 @@ def build_context_pack(
     filters: dict,
     sanitized: bool,
     aggregates: dict | None = None,
+    memory_cards: Iterable[dict] | None = None,
 ) -> ContextPack:
     generated_at = dt.datetime.now(dt.timezone.utc).isoformat()
     return ContextPack(
@@ -179,6 +182,7 @@ def build_context_pack(
         entity_tokens=entity_tokens,
         aggregates=aggregates or {"time_spent_by_app": [], "notable_changes": []},
         evidence=list(evidence),
+        memory_cards=list(memory_cards or []),
         warnings=[],
     )
 

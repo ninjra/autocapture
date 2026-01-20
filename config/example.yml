@@ -118,6 +118,8 @@ features:
   enable_thresholding: true
   enable_retention_prune: false
   enable_otel: true
+  enable_memory_service_write_hook: false
+  enable_memory_service_read_hook: false
 next10:
   enabled: true
   policy_defaults_path: "config/defaults/policy.json"
@@ -191,6 +193,57 @@ memory:
       manual_touch: ["cli", "api"]
       pin_set: ["cli", "api"]
       pin_unset: ["cli", "api"]
+memory_service:
+  enabled: false
+  bind_host: "127.0.0.1"
+  port: 8030
+  require_api_key: false
+  api_key: null
+  base_url: null
+  database_url: null
+  default_namespace: "default"
+  max_body_bytes: 1000000
+  request_timeout_s: 10.0
+  enable_ingest: true
+  enable_query: true
+  enable_feedback: true
+  enable_rerank: false
+  enable_query_embedding: true
+  enable_rls: false
+  embedder:
+    provider: "stub"
+    dim: 256
+    model_id: "hash-v1"
+  reranker:
+    provider: "disabled"
+    max_window: 50
+  retrieval:
+    topk_vector: 40
+    topk_keyword: 40
+    topk_graph: 40
+    graph_depth: 2
+    graph_max_nodes: 200
+    rerank_window: 50
+    max_cards: 8
+    max_tokens: 1200
+    max_per_type: 2
+    type_priority: ["decision", "procedure", "fact", "episodic", "glossary"]
+  ranking:
+    weight_semantic: 0.45
+    weight_keyword: 0.25
+    weight_graph: 0.1
+    weight_recency: 0.1
+    weight_importance: 0.05
+    weight_trust: 0.05
+    weight_rerank: 0.2
+    recency_half_life_days: 90
+  policy:
+    allowed_audiences: ["internal"]
+    sensitivity_order: ["low", "medium", "high"]
+    reject_person_entities: true
+    reject_preferences: true
+    pii_patterns: []
+    secret_patterns: []
 time:
   timezone: null
 presets:
@@ -263,6 +316,34 @@ graph_service:
   hypergraphrag_cli: "scripts/hypergraphrag_worker.sh"
   hyperrag_cli: "scripts/hyperrag_worker.sh"
   worker_timeout_s: 60.0
+plugins:
+  directory: null
+  safe_mode: false
+  # Plugin configs (decode/training) live in settings.json, for example:
+  # {
+  #   "plugins": {
+  #     "configs": {
+  #       "autocapture.builtin.decode": {
+  #         "backends": {
+  #           "medusa": {
+  #             "base_url": "http://127.0.0.1:8012",
+  #             "allow_cloud": false,
+  #             "max_concurrency": 1
+  #           }
+  #         }
+  #       },
+  #       "autocapture.builtin.training": {
+  #         "pipelines": {
+  #           "lora": {
+  #             "command": ["python", "scripts/run_lora.py", "--dataset", "{dataset_path}"],
+  #             "args": ["--out", "{output_dir}"],
+  #             "timeout_s": 3600
+  #           }
+  #         }
+  #       }
+  #     }
+  #   }
+  # }
 model_registry:
   enabled: true
   providers:

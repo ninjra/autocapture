@@ -100,6 +100,7 @@ class RetrievalService:
         spans_index: SpansV2Index | None = None,
         runtime_governor: RuntimeGovernor | None = None,
         graph_adapters: GraphAdapterGroup | None = None,
+        plugin_manager: object | None = None,
     ) -> None:
         self._db = db
         self._config = config or AppConfig()
@@ -133,7 +134,8 @@ class RetrievalService:
         self._last_reranker_failure_log = 0.0
         self._runtime = runtime_governor
         self._graph_adapters = graph_adapters or GraphAdapterGroup(
-            self._config.retrieval.graph_adapters
+            self._config.retrieval.graph_adapters,
+            plugin_manager=plugin_manager,
         )
 
     def retrieve(

@@ -11,6 +11,9 @@ from ...embeddings.service import EmbeddingService
 from ...memory.reranker import CrossEncoderReranker
 from ...memory.compression import CompressedAnswer
 from ...memory.context_pack import EvidenceItem
+from ...config import CircuitBreakerConfig
+from ...memory.graph_adapters import GraphHit
+from ...training.models import TrainingRunRequest, TrainingRunResult
 from ...memory.verification import Claim
 
 
@@ -40,6 +43,38 @@ class ResearchSource(Protocol):
     def fetch(self, **kwargs): ...
 
 
+class GraphAdapter(Protocol):
+    @property
+    def enabled(self) -> bool: ...
+
+    def query(
+        self,
+        query: str,
+        *,
+        limit: int,
+        time_range: tuple[str, str] | None,
+        filters: dict | None,
+    ) -> list[GraphHit]: ...
+
+
+class DecodeBackend(Protocol):
+    id: str
+    type: str
+    base_url: str | None
+    api_key_env: str | None
+    api_key: str | None
+    timeout_s: float
+    retries: int
+    headers: dict[str, str]
+    allow_cloud: bool
+    circuit_breaker: CircuitBreakerConfig
+    max_concurrency: int
+
+
+class TrainingPipeline(Protocol):
+    def run(self, request: TrainingRunRequest) -> TrainingRunResult: ...
+
+
 __all__ = [
     "LLMProvider",
     "VisionExtractor",
@@ -51,4 +86,7 @@ __all__ = [
     "Compressor",
     "Verifier",
     "ResearchSource",
+    "GraphAdapter",
+    "DecodeBackend",
+    "TrainingPipeline",
 ]

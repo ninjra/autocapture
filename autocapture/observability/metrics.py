@@ -115,6 +115,30 @@ graph_failures_total = Counter(
     "Graph worker failures",
     ["adapter", "endpoint", "reason"],
 )
+memory_ingest_total = Counter(
+    "memory_service_ingest_total",
+    "Memory service ingest results",
+    ["status"],
+)
+memory_ingest_reject_total = Counter(
+    "memory_service_ingest_reject_total",
+    "Memory service ingest rejects",
+    ["reason"],
+)
+memory_query_total = Counter(
+    "memory_service_query_total",
+    "Memory service query results",
+    ["status"],
+)
+memory_query_latency_ms = Histogram(
+    "memory_service_query_latency_ms",
+    "Memory service query latency (ms)",
+)
+memory_feedback_total = Counter(
+    "memory_service_feedback_total",
+    "Memory service feedback results",
+    ["status"],
+)
 verification_failures_total = Counter(
     "verification_failures_total",
     "Verification failures",

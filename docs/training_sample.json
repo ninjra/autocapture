@@ -1,0 +1,10 @@
+{
+  "data": [
+    {
+      "text": "Summarize the screenshot: A terminal window shows pytest passing."
+    },
+    {
+      "text": "Extract the key task from notes: update plugin docs and config." 
+    }
+  ]
+}

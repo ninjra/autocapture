@@ -620,6 +620,12 @@ class FeatureFlagsConfig(BaseModel):
         False, description="Enable retention-aware index pruning and scans."
     )
     enable_otel: bool = Field(True, description="Enable OpenTelemetry tracing/metrics.")
+    enable_memory_service_write_hook: bool = Field(
+        False, description="Enable Memory Service write hook in capture pipeline."
+    )
+    enable_memory_service_read_hook: bool = Field(
+        False, description="Enable Memory Service read hook in context building."
+    )
 
 
 class Next10Config(BaseModel):
@@ -1444,6 +1450,80 @@ class GraphServiceConfig(BaseModel):
     worker_timeout_s: float = Field(60.0, gt=0.0)
 
 
+class MemoryServiceEmbedderConfig(BaseModel):
+    provider: str = Field("stub", description="stub|local")
+    dim: int = Field(256, ge=8, description="Embedding dimension for stub/local providers.")
+    model_id: str = Field("hash-v1")
+
+
+class MemoryServiceRerankerConfig(BaseModel):
+    provider: str = Field("disabled", description="disabled|stub")
+    max_window: int = Field(50, ge=1)
+
+
+class MemoryServiceRetrievalConfig(BaseModel):
+    topk_vector: int = Field(40, ge=1)
+    topk_keyword: int = Field(40, ge=1)
+    topk_graph: int = Field(40, ge=0)
+    graph_depth: int = Field(2, ge=0, le=3)
+    graph_max_nodes: int = Field(200, ge=1)
+    rerank_window: int = Field(50, ge=1)
+    max_cards: int = Field(8, ge=1)
+    max_tokens: int = Field(1200, ge=200)
+    max_per_type: int = Field(2, ge=1)
+    type_priority: list[str] = Field(
+        default_factory=lambda: ["decision", "procedure", "fact", "episodic", "glossary"]
+    )
+
+
+class MemoryServiceRankingConfig(BaseModel):
+    weight_semantic: float = Field(0.45, ge=0.0)
+    weight_keyword: float = Field(0.25, ge=0.0)
+    weight_graph: float = Field(0.1, ge=0.0)
+    weight_recency: float = Field(0.1, ge=0.0)
+    weight_importance: float = Field(0.05, ge=0.0)
+    weight_trust: float = Field(0.05, ge=0.0)
+    weight_rerank: float = Field(0.2, ge=0.0)
+    recency_half_life_days: int = Field(90, ge=1)
+
+
+class MemoryServicePolicyConfig(BaseModel):
+    allowed_audiences: list[str] = Field(default_factory=lambda: ["internal"])
+    sensitivity_order: list[str] = Field(default_factory=lambda: ["low", "medium", "high"])
+    reject_person_entities: bool = Field(True)
+    reject_preferences: bool = Field(True)
+    pii_patterns: list[str] = Field(default_factory=list)
+    secret_patterns: list[str] = Field(default_factory=list)
+
+
+class MemoryServiceConfig(BaseModel):
+    enabled: bool = Field(False)
+    bind_host: str = Field("127.0.0.1")
+    port: int = Field(8030, ge=1024, le=65535)
+    require_api_key: bool = Field(False)
+    api_key: Optional[str] = None
+    base_url: Optional[str] = Field(
+        None, description="Override base URL for Memory Service clients."
+    )
+    database_url: Optional[str] = Field(
+        None, description="Override database URL for Memory Service."
+    )
+    default_namespace: str = Field("default")
+    max_body_bytes: int = Field(1_000_000, ge=1024)
+    request_timeout_s: float = Field(10.0, gt=0.0)
+    enable_ingest: bool = Field(True)
+    enable_query: bool = Field(True)
+    enable_feedback: bool = Field(True)
+    enable_rerank: bool = Field(False)
+    enable_query_embedding: bool = Field(True)
+    enable_rls: bool = Field(False)
+    embedder: MemoryServiceEmbedderConfig = MemoryServiceEmbedderConfig()
+    reranker: MemoryServiceRerankerConfig = MemoryServiceRerankerConfig()
+    retrieval: MemoryServiceRetrievalConfig = MemoryServiceRetrievalConfig()
+    ranking: MemoryServiceRankingConfig = MemoryServiceRankingConfig()
+    policy: MemoryServicePolicyConfig = MemoryServicePolicyConfig()
+
+
 class CitationValidatorConfig(BaseModel):
     max_claims: int = Field(20, ge=1)
     max_citations_per_claim: int = Field(8, ge=1)
@@ -1560,6 +1640,7 @@ class AppConfig(BaseModel):
     model_registry: ModelRegistryConfig = ModelRegistryConfig()
     gateway: GatewayConfig = GatewayConfig()
     graph_service: GraphServiceConfig = GraphServiceConfig()
+    memory_service: MemoryServiceConfig = MemoryServiceConfig()
     model_stages: ModelStagesConfig = ModelStagesConfig()
     mode: ModeConfig = ModeConfig()
     plugins: PluginsConfig = PluginsConfig()

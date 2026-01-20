@@ -69,6 +69,8 @@ from ..memory.time_intent import (
     resolve_time_range_for_query,
     resolve_timezone,
 )
+from ..memory_service.client import MemoryServiceClient
+from ..memory_service.hooks import fetch_memory_cards
 from ..embeddings.service import EmbeddingService
 from ..indexing.vector_index import VectorIndex
 from ..indexing.pruner import IndexPruner
@@ -452,6 +454,7 @@ def create_app(
                 "embedder": embedder_obj,
                 "vector_index": vector_index,
                 "reranker": reranker,
+                "plugin_manager": plugins,
             },
         )
     except Exception as exc:
@@ -463,6 +466,7 @@ def create_app(
             embedder=embedder_obj,
             vector_index=vector_index,
             reranker=reranker,
+            plugin_manager=plugins,
         )
     thread_retrieval = ThreadRetrievalService(
         config,
@@ -483,12 +487,16 @@ def create_app(
         allow_external=True,
     )
     PromptLibraryService(db).sync_registry(prompt_registry)
+    memory_service_client: MemoryServiceClient | None = None
+    if config.features.enable_memory_service_read_hook:
+        memory_service_client = MemoryServiceClient(config.memory_service)
     answer_graph = AnswerGraph(
         config,
         retrieval,
         prompt_registry=prompt_registry,
         entities=entities,
         plugin_manager=plugins,
+        memory_client=memory_service_client,
     )
     retention = RetentionManager(
         config.storage, config.retention, db, Path(config.capture.data_dir)
@@ -540,6 +548,7 @@ def create_app(
     app.state.worker_supervisor = worker_supervisor
     app.state.memory_store = memory_store
     app.state.memory_compiler = memory_compiler
+    app.state.memory_service_client = memory_service_client
     app.state.plugins = plugins
 
     oidc_verifier: GoogleOIDCVerifier | None = None
@@ -1529,6 +1538,11 @@ def create_app(
             hotness_mode=request.memory_hotness_mode,
             hotness_as_of_utc=request.memory_hotness_as_of_utc,
         )
+        memory_cards, memory_service_warnings = fetch_memory_cards(
+            config,
+            query=request.query,
+            client=memory_service_client,
+        )
         routing_data = _merge_routing(config.routing, request.routing)
         aggregates = _build_aggregates(db, request.time_range)
         thread_aggregates = _build_thread_aggregates(
@@ -1548,6 +1562,7 @@ def create_app(
                 },
                 sanitized=sanitized,
                 aggregates=aggregates,
+                memory_cards=memory_cards,
             )
             payload = empty_pack.to_json()
             text_pack = None
@@ -1560,7 +1575,7 @@ def create_app(
                 pack=payload,
                 text=text_pack,
                 tron=tron_pack,
-                warnings=["no_evidence", *memory_warnings],
+                warnings=["no_evidence", *memory_warnings, *memory_service_warnings],
                 message=message
                 or _no_evidence_message(request.query, bool(request.time_range), None),
                 memory_snapshot=memory_snapshot,
@@ -1577,6 +1592,7 @@ def create_app(
             },
             sanitized=sanitized,
             aggregates=aggregates,
+            memory_cards=memory_cards,
         )
         text_pack = None
         tron_pack = None
@@ -1598,7 +1614,7 @@ def create_app(
             pack=pack.to_json(),
             text=text_pack,
             tron=tron_pack,
-            warnings=list(memory_warnings),
+            warnings=[*memory_warnings, *memory_service_warnings],
             memory_snapshot=memory_snapshot,
         )
 

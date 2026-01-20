@@ -28,6 +28,7 @@ from ..memory.context_pack import (
     build_context_pack,
     build_evidence_payload,
 )
+from ..memory_service.hooks import fetch_memory_cards
 from ..memory.prompt_injection import scan_prompt_injection
 from ..memory.time_intent import (
     is_time_only_expression,
@@ -108,6 +109,7 @@ class AnswerGraph:
         prompt_registry,
         entities,
         plugin_manager: PluginManager | None = None,
+        memory_client=None,
     ) -> None:
         self._config = config
         self._retrieval = retrieval
@@ -116,6 +118,7 @@ class AnswerGraph:
         self._log = get_logger("answer_graph")
         self._ledger = LedgerWriter(retrieval._db)  # type: ignore[attr-defined]
         self._plugins = plugin_manager or PluginManager(config)
+        self._memory_client = memory_client
         self._stage_router = StageRouter(config, plugin_manager=self._plugins)
         self._thread_retrieval = ThreadRetrievalService(
             config,
@@ -203,6 +206,12 @@ class AnswerGraph:
             resolved_time_range,
         )
         aggregates = _merge_aggregates(aggregates, thread_aggregates)
+        memory_cards, memory_warnings = fetch_memory_cards(
+            self._config,
+            query=query,
+            client=self._memory_client,
+        )
+        warnings.extend(memory_warnings)
         if not evidence or no_evidence:
             warnings.append("no_evidence")
             empty_pack = build_context_pack(
@@ -217,6 +226,7 @@ class AnswerGraph:
                 },
                 sanitized=sanitized,
                 aggregates=aggregates,
+                memory_cards=memory_cards,
             )
             payload = build_no_evidence_payload(
                 query, has_time_range=resolved_time_range is not None
@@ -288,6 +298,7 @@ class AnswerGraph:
             },
             sanitized=sanitized,
             aggregates=aggregates,
+            memory_cards=memory_cards,
         )
         context_pack_json = pack.to_json()
         pack_json_text = pack.to_text(extractive_only=False, format="json")

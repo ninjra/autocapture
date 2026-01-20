@@ -53,6 +53,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub.add_parser("api", help="Run the local API + UI server.")
     sub.add_parser("gateway", help="Run the LLM gateway service.")
     sub.add_parser("graph-worker", help="Run the graph retrieval worker service.")
+    sub.add_parser("memory-service", help="Run the organizational Memory Service.")
     sub.add_parser("worker", help="Run the OCR ingest worker loop only.")
     sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
     sub.add_parser("smoke", help="Run minimal smoke checks and exit.")
@@ -110,6 +111,23 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     plugins_lock.add_argument("plugin_id", help="Plugin identifier.")
     plugins_doctor = plugins_sub.add_parser("doctor", help="Run plugin health checks.")
     plugins_doctor.add_argument("--json", action="store_true", help="Output JSON.")
+
+    training = sub.add_parser("training", help="Training pipeline utilities.")
+    training_sub = training.add_subparsers(dest="training_cmd", required=True)
+    training_list = training_sub.add_parser("list", help="List training pipelines.")
+    training_list.add_argument("--json", action="store_true", help="Output JSON.")
+    training_run = training_sub.add_parser("run", help="Run a training pipeline.")
+    training_run.add_argument("pipeline_id", help="Pipeline identifier.")
+    training_run.add_argument(
+        "--config",
+        help="Path to JSON/YAML training request payload (optional).",
+    )
+    training_run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip execution and validate configuration only.",
+    )
+    training_run.add_argument("--json", action="store_true", help="Output JSON.")
 
     overlay = sub.add_parser("overlay-tracker", help="Overlay tracker utilities.")
     overlay_sub = overlay.add_subparsers(dest="overlay_cmd", required=True)
@@ -411,6 +429,44 @@ def main(argv: list[str] | None = None) -> None:
                     )
             raise SystemExit(0 if ok else 2)
 
+    if cmd == "training":
+        from .plugins import PluginManager
+        from .training import (
+            TrainingRunRequest,
+            list_training_pipelines,
+            load_training_request,
+            run_training_pipeline,
+        )
+
+        plugins = PluginManager(config)
+        if args.training_cmd == "list":
+            payload = list_training_pipelines(plugins)
+            if args.json:
+                print(json.dumps(payload, indent=2, sort_keys=True))
+                raise SystemExit(0)
+            if not payload:
+                logger.info("No training pipelines available.")
+                raise SystemExit(1)
+            for item in payload:
+                logger.info("{} ({}) {}", item["id"], item["plugin_id"], item["name"])
+            raise SystemExit(0)
+        if args.training_cmd == "run":
+            request = (
+                load_training_request(Path(args.config))
+                if args.config
+                else TrainingRunRequest()
+            )
+            if getattr(args, "dry_run", False):
+                request.dry_run = True
+            result = run_training_pipeline(plugins, args.pipeline_id, request)
+            if args.json:
+                print(json.dumps(result.model_dump(), indent=2, sort_keys=True))
+                raise SystemExit(0)
+            logger.info("Training pipeline {} status={}", args.pipeline_id, result.status)
+            if result.message:
+                logger.info("Message: {}", result.message)
+            raise SystemExit(0 if result.status == "ok" else 2)
+
     if cmd == "memory":
         from .memory.cli import run_memory_cli
 
@@ -569,8 +625,10 @@ def main(argv: list[str] | None = None) -> None:
     if cmd == "gateway":
         from .gateway.app import create_gateway_app
         import uvicorn
+        from .plugins import PluginManager
 
-        app = create_gateway_app(config)
+        plugins = PluginManager(config)
+        app = create_gateway_app(config, plugin_manager=plugins)
         server = uvicorn.Server(
             uvicorn.Config(
                 app,
@@ -594,6 +652,24 @@ def main(argv: list[str] | None = None) -> None:
                 app,
                 host=config.graph_service.bind_host,
                 port=config.graph_service.port,
+                log_level="info",
+            )
+        )
+        server.run()
+        return
+
+    if cmd == "memory-service":
+        from .memory_service.app import create_memory_service_app
+        import uvicorn
+
+        if not config.memory_service.enabled:
+            logger.warning("memory_service.enabled is false; starting anyway for explicit run.")
+        app = create_memory_service_app(config)
+        server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host=config.memory_service.bind_host,
+                port=config.memory_service.port,
                 log_level="info",
             )
         )

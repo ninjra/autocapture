@@ -1,0 +1,40 @@
+schema_version: 1
+plugin_id: autocapture.builtin.decode
+name: Autocapture Builtin Decode Backends
+version: 1.0.0
+description: Decode backend proxy adapters (swift/lookahead/medusa).
+enabled_by_default: true
+extensions:
+  - kind: decode.backend
+    id: swift
+    name: Swift Decode Backend
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_decode_backend_swift
+  - kind: decode.backend
+    id: lookahead
+    name: Lookahead Decode Backend
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_decode_backend_lookahead
+  - kind: decode.backend
+    id: medusa
+    name: Medusa Decode Backend
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_decode_backend_medusa

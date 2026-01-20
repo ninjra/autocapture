@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 import numpy as np
-from sqlalchemy import select, update
+from sqlalchemy import select, update, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 
@@ -36,7 +36,10 @@ from ..storage.models import (
     FrameRecord,
     OCRSpanRecord,
 )
-from ..contracts_utils import hash_canonical, stable_id
+from ..contracts_utils import hash_canonical, sha256_text, stable_id
+from ..memory_service.client import MemoryServiceClient
+from ..memory_service.extractor import extract_proposals
+from ..memory_service.schemas import MemoryIngestRequest, PolicyLabels, ProvenancePointer
 from ..vision.extractors import ScreenExtractorRouter
 from ..vision.layout import build_layout
 from ..vision.paddle_layout import PaddleLayoutExtractor
@@ -290,6 +293,7 @@ class EventIngestWorker:
                 normalized_text=normalized_text,
             )
             self._append_extract_ledger(capture.capture_id, artifact_result)
+            self._maybe_ingest_memory_proposals(existing_event.ocr_text or "", artifact_result)
             self._lexical.upsert_event(existing_event)
             self._enqueue_enrichment(existing_event.event_id)
             return True
@@ -389,6 +393,7 @@ class EventIngestWorker:
                 normalized_text=normalized_text,
             )
             self._append_extract_ledger(capture.capture_id, artifact_result)
+            self._maybe_ingest_memory_proposals(ocr_text, artifact_result)
             event = self._load_event(capture_id)
             if event:
                 with otel_span("index_lexical", {"stage_name": "index_lexical"}):
@@ -642,6 +647,12 @@ class EventIngestWorker:
                     frame_hash=effective_frame_hash,
                     monitor_bounds=capture.monitor_bounds,
                 )
+                self._upsert_memory_service_artifacts(
+                    session,
+                    ocr_text=ocr_text,
+                    normalized_text=normalized_text,
+                    artifact_result=artifact_result,
+                )
             record = session.get(CaptureRecord, capture_id)
             if record:
                 record.ocr_status = "done"
@@ -823,6 +834,8 @@ class EventIngestWorker:
                         "event_id": capture_id,
                         "frame_id": capture_id,
                         "text": text,
+                        "start_offset": start,
+                        "end_offset": end,
                     }
                 )
                 continue
@@ -852,6 +865,8 @@ class EventIngestWorker:
                     "event_id": capture_id,
                     "frame_id": capture_id,
                     "text": text,
+                    "start_offset": start,
+                    "end_offset": end,
                 }
             )
         return {
@@ -860,6 +875,177 @@ class EventIngestWorker:
             "engine": engine_name,
             "span_entries": span_entries,
         }
+
+    def _upsert_memory_service_artifacts(
+        self,
+        session,
+        *,
+        ocr_text: str,
+        normalized_text: str | None,
+        artifact_result: dict[str, object] | None,
+    ) -> None:
+        if not self._config.features.enable_memory_service_write_hook:
+            return
+        if not session.bind or session.bind.dialect.name != "postgresql":
+            return
+        if not artifact_result:
+            return
+        artifact_id = artifact_result.get("artifact_id")
+        span_entries = artifact_result.get("span_entries") or []
+        if not artifact_id or not span_entries:
+            return
+        namespace = self._config.memory_service.default_namespace or "default"
+        content_text = normalized_text or normalize_text(ocr_text)
+        if not content_text:
+            return
+        content_hash = sha256_text(content_text)
+        artifact_version_id = stable_id(
+            "artifact_version",
+            {"artifact_id": artifact_id, "content_hash": content_hash},
+        )
+        created_at = dt.datetime.now(dt.timezone.utc)
+        session.execute(
+            text(
+                """
+                INSERT INTO artifact_versions(
+                    artifact_version_id, namespace, artifact_id, content_hash, source_uri, title,
+                    labels_json, metadata_json, created_at
+                ) VALUES (
+                    :artifact_version_id, :namespace, :artifact_id, :content_hash, :source_uri, :title,
+                    :labels_json, :metadata_json, :created_at
+                ) ON CONFLICT (artifact_version_id) DO NOTHING
+                """
+            ),
+            {
+                "artifact_version_id": artifact_version_id,
+                "namespace": namespace,
+                "artifact_id": artifact_id,
+                "content_hash": content_hash,
+                "source_uri": None,
+                "title": None,
+                "labels_json": [],
+                "metadata_json": {},
+                "created_at": created_at,
+            },
+        )
+        for entry in span_entries:
+            chunk_id = entry.get("span_id")
+            if not chunk_id:
+                continue
+            text_value = str(entry.get("text") or "")
+            excerpt_hash = sha256_text(normalize_text(text_value))
+            session.execute(
+                text(
+                    """
+                    INSERT INTO artifact_chunks(
+                        chunk_id, artifact_version_id, namespace, start_offset, end_offset,
+                        excerpt_hash, created_at
+                    ) VALUES (
+                        :chunk_id, :artifact_version_id, :namespace, :start_offset, :end_offset,
+                        :excerpt_hash, :created_at
+                    ) ON CONFLICT (chunk_id) DO NOTHING
+                    """
+                ),
+                {
+                    "chunk_id": chunk_id,
+                    "artifact_version_id": artifact_version_id,
+                    "namespace": namespace,
+                    "start_offset": int(entry.get("start_offset", 0)),
+                    "end_offset": int(entry.get("end_offset", 0)),
+                    "excerpt_hash": excerpt_hash,
+                    "created_at": created_at,
+                },
+            )
+
+    def _maybe_ingest_memory_proposals(
+        self, ocr_text: str, artifact_result: dict[str, object] | None
+    ) -> None:
+        if not self._config.features.enable_memory_service_write_hook:
+            return
+        memory_cfg = self._config.memory_service
+        if not memory_cfg.enabled or not memory_cfg.enable_ingest:
+            return
+        if not artifact_result:
+            return
+        artifact_id = artifact_result.get("artifact_id")
+        span_entries = artifact_result.get("span_entries") or []
+        if not artifact_id or not span_entries:
+            return
+        content_text = normalize_text(ocr_text)
+        if not content_text:
+            return
+        namespace = memory_cfg.default_namespace or "default"
+        content_hash = sha256_text(content_text)
+        artifact_version_id = stable_id(
+            "artifact_version",
+            {"artifact_id": artifact_id, "content_hash": content_hash},
+        )
+        provenance = self._build_memory_provenance(artifact_version_id, span_entries)
+        if not provenance:
+            return
+        proposals = extract_proposals(
+            ocr_text,
+            artifact_version_id=artifact_version_id,
+            span_entries=span_entries,
+            namespace=namespace,
+        )
+        if not proposals:
+            return
+        default_policy = _default_policy_labels(memory_cfg.policy)
+        final_proposals = []
+        for proposal in proposals:
+            update: dict[str, object] = {}
+            if not proposal.provenance:
+                update["provenance"] = provenance
+            if (proposal.policy is None or not proposal.policy.audience or not proposal.policy.sensitivity) and (
+                default_policy is not None
+            ):
+                update["policy"] = default_policy
+            if update:
+                proposal = proposal.model_copy(update=update)
+            if proposal.provenance and proposal.policy:
+                final_proposals.append(proposal)
+        if not final_proposals:
+            return
+        request = MemoryIngestRequest(
+            namespace=namespace,
+            proposals=final_proposals,
+            request_id=artifact_version_id,
+        )
+        try:
+            response = MemoryServiceClient(memory_cfg).ingest(request)
+            if response.rejected:
+                self._log.debug(
+                    "Memory Service rejected {} proposals (accepted={}, deduped={})",
+                    response.rejected,
+                    response.accepted,
+                    response.deduped,
+                )
+        except Exception as exc:  # pragma: no cover - best effort
+            self._log.warning("Memory Service ingest failed: {}", exc)
+
+    @staticmethod
+    def _build_memory_provenance(
+        artifact_version_id: str, span_entries: Iterable[dict]
+    ) -> list[ProvenancePointer]:
+        provenance: list[ProvenancePointer] = []
+        for entry in span_entries:
+            chunk_id = entry.get("span_id")
+            if not chunk_id:
+                continue
+            text_value = str(entry.get("text") or "")
+            if not text_value:
+                continue
+            provenance.append(
+                ProvenancePointer(
+                    artifact_version_id=artifact_version_id,
+                    chunk_id=str(chunk_id),
+                    start_offset=int(entry.get("start_offset", 0)),
+                    end_offset=int(entry.get("end_offset", 0)),
+                    excerpt_hash=sha256_text(normalize_text(text_value)),
+                )
+            )
+        return provenance
 
     def _append_extract_ledger(
         self, frame_id: str, artifact_result: dict[str, object] | None
@@ -1066,6 +1252,14 @@ def _normalize_bbox(bbox: object, monitor_bounds: list[int] | None) -> list[floa
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _default_policy_labels(config) -> PolicyLabels | None:
+    allowed = [aud for aud in (config.allowed_audiences or []) if aud]
+    sensitivity_order = [level for level in (config.sensitivity_order or []) if level]
+    if not allowed or not sensitivity_order:
+        return None
+    return PolicyLabels(audience=allowed, sensitivity=sensitivity_order[0], labels=[])
 
 
 def _llm_model_id(config: AppConfig) -> str:
