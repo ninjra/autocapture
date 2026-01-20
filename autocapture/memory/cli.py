@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ..config import AppConfig
 from .compiler import ContextCompiler
+from .hotness import HotnessPlugin
 from .models import ArtifactMeta
 from .store import MemoryStore
 from .utils import format_utc, stable_json_dumps
@@ -78,9 +79,123 @@ def add_memory_subcommands(parser: argparse.ArgumentParser) -> None:
     gc.add_argument("--retention-days", type=int, default=None)
     gc.add_argument("--json", action="store_true", help="Emit JSON output.")
 
+    hotness = sub.add_parser("hotness", help="Memory hotness controls.")
+    hot_sub = hotness.add_subparsers(dest="hotness_cmd", required=True)
+
+    hot_top = hot_sub.add_parser("top", help="Rank memory items by hotness.")
+    hot_top.add_argument("--as-of", dest="as_of", help="UTC timestamp (YYYY-MM-DDTHH:MM:SSZ).")
+    hot_top.add_argument("--now", action="store_true", help="Use current UTC time.")
+    hot_top.add_argument("--limit", type=int, default=32)
+    hot_top.add_argument("--scope", default="default")
+    hot_top.add_argument("--json", action="store_true", help="Emit JSON output.")
+
+    hot_touch = hot_sub.add_parser("touch", help="Record a hotness event for an item.")
+    hot_touch.add_argument("--item-id", required=True)
+    hot_touch.add_argument("--timestamp", help="UTC timestamp (YYYY-MM-DDTHH:MM:SSZ).")
+    hot_touch.add_argument("--now", action="store_true", help="Use current UTC time.")
+    hot_touch.add_argument("--signal", default="manual_touch")
+    hot_touch.add_argument("--source", default="cli")
+    hot_touch.add_argument("--weight", type=float, default=1.0)
+    hot_touch.add_argument("--scope", default="default")
+    hot_touch.add_argument("--json", action="store_true", help="Emit JSON output.")
+
+    hot_pin = hot_sub.add_parser("pin", help="Pin a memory item.")
+    hot_pin.add_argument("--item-id", required=True)
+    hot_pin.add_argument("--level", required=True, choices=["hard", "soft"])
+    hot_pin.add_argument("--rank", type=int, default=0)
+    hot_pin.add_argument("--timestamp", help="UTC timestamp (YYYY-MM-DDTHH:MM:SSZ).")
+    hot_pin.add_argument("--now", action="store_true", help="Use current UTC time.")
+    hot_pin.add_argument("--source", default="cli")
+    hot_pin.add_argument("--scope", default="default")
+    hot_pin.add_argument("--json", action="store_true", help="Emit JSON output.")
+
+    hot_unpin = hot_sub.add_parser("unpin", help="Remove a hotness pin.")
+    hot_unpin.add_argument("--item-id", required=True)
+    hot_unpin.add_argument("--timestamp", help="UTC timestamp (YYYY-MM-DDTHH:MM:SSZ).")
+    hot_unpin.add_argument("--now", action="store_true", help="Use current UTC time.")
+    hot_unpin.add_argument("--source", default="cli")
+    hot_unpin.add_argument("--scope", default="default")
+    hot_unpin.add_argument("--json", action="store_true", help="Emit JSON output.")
+
+    hot_gc = hot_sub.add_parser("gc", help="Garbage-collect hotness events.")
+    hot_gc.add_argument("--event-days", type=int, default=None)
+    hot_gc.add_argument("--event-cap", type=int, default=None)
+    hot_gc.add_argument("--as-of", dest="as_of", help="UTC timestamp (YYYY-MM-DDTHH:MM:SSZ).")
+    hot_gc.add_argument("--now", action="store_true", help="Use current UTC time.")
+    hot_gc.add_argument("--scope", default="default")
+    hot_gc.add_argument("--json", action="store_true", help="Emit JSON output.")
+
+    hot_state = hot_sub.add_parser("state", help="Show hotness state for an item.")
+    hot_state.add_argument("--item-id", required=True)
+    hot_state.add_argument("--scope", default="default")
+    hot_state.add_argument("--json", action="store_true", help="Emit JSON output.")
+
 
 def run_memory_cli(args: argparse.Namespace, config: AppConfig) -> int:
     store = MemoryStore(config.memory)
+    hotness = HotnessPlugin(store, config.memory.hotness)
+
+    if args.memory_cmd == "hotness":
+        if not config.memory.hotness.enabled:
+            _stderr("Memory hotness is disabled in config.")
+            return _EXIT_USAGE
+        try:
+            if args.hotness_cmd == "top":
+                as_of = _resolve_timestamp(args.as_of, args.now)
+                result = hotness.rank(
+                    scope=args.scope,
+                    as_of_utc=as_of,
+                    limit=args.limit,
+                )
+                return _emit(result.model_dump(mode="json"), args.json)
+            if args.hotness_cmd == "touch":
+                ts = _resolve_timestamp(args.timestamp, args.now)
+                result = hotness.touch(
+                    scope=args.scope,
+                    item_id=args.item_id,
+                    ts_utc=ts,
+                    signal=args.signal,
+                    weight=args.weight,
+                    source=args.source,
+                )
+                return _emit(result.model_dump(mode="json"), args.json)
+            if args.hotness_cmd == "pin":
+                ts = _resolve_timestamp(args.timestamp, args.now)
+                result = hotness.pin(
+                    scope=args.scope,
+                    item_id=args.item_id,
+                    level=args.level,
+                    rank=args.rank,
+                    ts_utc=ts,
+                    source=args.source,
+                )
+                return _emit(result.model_dump(mode="json"), args.json)
+            if args.hotness_cmd == "unpin":
+                ts = _resolve_timestamp(args.timestamp, args.now)
+                result = hotness.unpin(
+                    scope=args.scope,
+                    item_id=args.item_id,
+                    ts_utc=ts,
+                    source=args.source,
+                )
+                return _emit(result.model_dump(mode="json"), args.json)
+            if args.hotness_cmd == "gc":
+                as_of = _resolve_timestamp(args.as_of, args.now)
+                result = hotness.gc(
+                    scope=args.scope,
+                    as_of_utc=as_of,
+                    max_age_days=args.event_days,
+                    max_events=args.event_cap,
+                )
+                return _emit(result.model_dump(mode="json"), args.json)
+            if args.hotness_cmd == "state":
+                result = hotness.state(scope=args.scope, item_id=args.item_id)
+                if result is None:
+                    return _emit({"item_id": args.item_id, "found": False}, args.json)
+                return _emit(result.model_dump(mode="json"), args.json)
+        except ValueError as exc:
+            _stderr(str(exc))
+            return _EXIT_USAGE
 
     if args.memory_cmd == "ingest":
         try:
@@ -200,3 +315,12 @@ def _load_text(path_value: str | None) -> tuple[str, str | None]:
 
 def _stderr(message: str) -> None:
     sys.stderr.write(message + "\n")
+
+
+def _resolve_timestamp(value: str | None, use_now: bool) -> str:
+    if value:
+        return value
+    if use_now:
+        ts = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        return format_utc(ts)
+    raise ValueError("timestamp required (use --timestamp/--as-of or --now)")

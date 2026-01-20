@@ -157,6 +157,40 @@ memory:
     max_chars_per_span: 1200
     max_spans: 12
     max_memory_items: 32
+  hotness:
+    enabled: false
+    mode_default: "off" # off|as_of|dynamic
+    scope_default: "default"
+    half_lives:
+      fast_seconds: 3600
+      mid_seconds: 21600
+      warm_seconds: 86400
+      cool_seconds: 604800
+    weights:
+      fast: 0.4
+      mid: 0.3
+      warm: 0.2
+      cool: 0.1
+    thresholds:
+      hot: 0.75
+      recent: 0.5
+      warm: 0.25
+      cool: 0.1
+    quotas:
+      hot: 0.4
+      recent: 0.3
+      warm: 0.2
+      cool: 0.1
+    rate_limit:
+      enabled: true
+      min_interval_ms: 60000
+    retention:
+      event_max_age_days: 30
+      event_max_count: 50000
+    allowed_signals:
+      manual_touch: ["cli", "api"]
+      pin_set: ["cli", "api"]
+      pin_unset: ["cli", "api"]
 presets:
   active_preset: "privacy_first"
 routing:

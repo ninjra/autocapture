@@ -405,6 +405,43 @@ class MemoryStore:
         ]
         return MemoryItemList(items=items)
 
+    def list_items_by_ids(self, item_ids: Iterable[str]) -> MemoryItemList:
+        ids = [item_id for item_id in item_ids if item_id]
+        if not ids:
+            return MemoryItemList(items=[])
+        placeholders = ",".join(["?"] * len(ids))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT item_id, key, value, item_type, status, tags_json,
+                       created_at, updated_at, value_sha256, user_asserted
+                FROM memory_items
+                WHERE item_id IN ({placeholders})
+                """,
+                ids,
+            ).fetchall()
+        by_id = {row["item_id"]: row for row in rows}
+        items: list[MemoryItemRecord] = []
+        for item_id in ids:
+            row = by_id.get(item_id)
+            if not row:
+                continue
+            items.append(
+                MemoryItemRecord(
+                    item_id=row["item_id"],
+                    key=row["key"],
+                    value=row["value"],
+                    item_type=row["item_type"],
+                    status=row["status"],
+                    tags=json.loads(row["tags_json"]) if row["tags_json"] else [],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                    value_sha256=row["value_sha256"],
+                    user_asserted=bool(row["user_asserted"]),
+                )
+            )
+        return MemoryItemList(items=items)
+
     def latest_span_timestamp(self, span_ids: Iterable[str]) -> str:
         ids = [sid for sid in span_ids if sid]
         if not ids:

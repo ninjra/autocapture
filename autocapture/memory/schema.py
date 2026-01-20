@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def ensure_schema(conn: sqlite3.Connection, *, require_fts: bool) -> bool:
@@ -14,7 +14,8 @@ def ensure_schema(conn: sqlite3.Connection, *, require_fts: bool) -> bool:
     if row is None:
         cur.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
     elif int(row[0]) < SCHEMA_VERSION:
-        # Future migrations go here.
+        if int(row[0]) < 2:
+            _ensure_hotness_tables(cur)
         cur.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
 
     cur.execute(
@@ -127,6 +128,7 @@ def ensure_schema(conn: sqlite3.Connection, *, require_fts: bool) -> bool:
     )
     cur.execute("CREATE INDEX IF NOT EXISTS idx_spans_doc_id ON spans(doc_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_memory_items_status ON memory_items(status)")
+    _ensure_hotness_tables(cur)
 
     fts_available = True
     try:
@@ -148,3 +150,72 @@ def ensure_schema(conn: sqlite3.Connection, *, require_fts: bool) -> bool:
             raise
     conn.commit()
     return fts_available
+
+
+def _ensure_hotness_tables(cur: sqlite3.Cursor) -> None:
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_hotness_events (
+            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            ts_utc TEXT NOT NULL,
+            signal TEXT NOT NULL,
+            weight REAL NOT NULL,
+            source TEXT NOT NULL,
+            FOREIGN KEY(item_id) REFERENCES memory_items(item_id) ON DELETE CASCADE
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_hotness_state (
+            scope TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            last_ts_utc TEXT NOT NULL,
+            h_fast REAL NOT NULL,
+            h_mid REAL NOT NULL,
+            h_warm REAL NOT NULL,
+            h_cool REAL NOT NULL,
+            PRIMARY KEY (scope, item_id),
+            FOREIGN KEY(item_id) REFERENCES memory_items(item_id) ON DELETE CASCADE
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS memory_hotness_pins (
+            scope TEXT NOT NULL,
+            item_id TEXT NOT NULL,
+            pin_level TEXT NOT NULL,
+            pin_rank INTEGER NOT NULL,
+            set_ts_utc TEXT NOT NULL,
+            PRIMARY KEY (scope, item_id),
+            FOREIGN KEY(item_id) REFERENCES memory_items(item_id) ON DELETE CASCADE
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_hotness_events_scope_item_source_ts
+        ON memory_hotness_events(scope, item_id, source, ts_utc, event_id)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_hotness_events_scope_ts
+        ON memory_hotness_events(scope, ts_utc, event_id)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_hotness_state_scope_last_ts
+        ON memory_hotness_state(scope, last_ts_utc)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_hotness_pins_scope_level_rank
+        ON memory_hotness_pins(scope, pin_level, pin_rank, item_id)
+        """
+    )

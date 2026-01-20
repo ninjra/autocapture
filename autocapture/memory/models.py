@@ -92,3 +92,65 @@ class MemoryVerifyResult(BaseModel):
 class MemoryGcResult(BaseModel):
     removed_snapshots: int
     removed_dirs: int
+
+
+class HotnessTouchResult(BaseModel):
+    item_id: str
+    scope: str
+    ts_utc: str
+    signal: str
+    weight: float
+    source: str
+    applied: bool
+    rate_limited: bool = False
+    reason: str | None = None
+
+
+class HotnessPinResult(BaseModel):
+    item_id: str
+    scope: str
+    ts_utc: str
+    pin_level: str
+    pin_rank: int
+    source: str
+    applied: bool
+
+
+class HotnessUnpinResult(BaseModel):
+    item_id: str
+    scope: str
+    ts_utc: str
+    source: str
+    removed: bool
+
+
+class HotnessRankEntry(BaseModel):
+    item_id: str
+    bin: str
+    score: float | None = None
+    pin_level: str | None = None
+
+
+class HotnessRankResult(BaseModel):
+    scope: str
+    as_of_utc: str
+    limit: int
+    selected: list[HotnessRankEntry] = Field(default_factory=list)
+    pinned_over_budget_hard: int = 0
+    pinned_over_budget_soft: int = 0
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class HotnessGcResult(BaseModel):
+    events_deleted: int
+    events_remaining: int
+
+
+class HotnessStateResult(BaseModel):
+    item_id: str
+    scope: str
+    last_ts_utc: str
+    h_fast: float
+    h_mid: float
+    h_warm: float
+    h_cool: float

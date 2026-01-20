@@ -57,6 +57,7 @@ from ..memory.context_pack import (
 from ..memory.prompt_injection import scan_prompt_injection
 from ..memory.compiler import ContextCompiler
 from ..memory.store import MemoryStore
+from ..memory.utils import format_utc
 from ..vision.citation_overlay import render_citation_overlay
 from ..memory.entities import EntityResolver, SecretStore
 from ..security.token_vault import TokenVaultStore
@@ -141,6 +142,8 @@ class ContextPackRequest(BaseModel):
     pack_format: str = Field("json", description="json|text|tron")
     routing: Optional[dict[str, str]] = None
     include_memory_snapshot: Optional[bool] = None
+    memory_hotness_mode: Optional[str] = None
+    memory_hotness_as_of_utc: Optional[str] = None
 
 
 class HighlightsSummary(BaseModel):
@@ -574,15 +577,36 @@ def create_app(
         *,
         k: int,
         include: Optional[bool],
+        hotness_mode: Optional[str] = None,
+        hotness_as_of_utc: Optional[str] = None,
     ) -> tuple[dict[str, Any] | None, list[str]]:
         include_flag = include if include is not None else config.memory.api_context_pack_enabled
         if not include_flag:
             return None, []
         if not config.memory.enabled or memory_compiler is None:
             return None, ["memory_disabled"]
+        mode = (hotness_mode or "off").strip().lower()
+        if mode not in {"off", "as_of", "dynamic"}:
+            raise HTTPException(
+                status_code=422,
+                detail="memory_hotness_mode must be off, as_of, or dynamic",
+            )
+        if mode != "off" and not config.memory.hotness.enabled:
+            raise HTTPException(status_code=400, detail="memory hotness is disabled")
+        as_of_utc = hotness_as_of_utc
+        if mode == "as_of" and not as_of_utc:
+            raise HTTPException(status_code=400, detail="memory_hotness_as_of_utc required")
+        if mode == "dynamic" and not as_of_utc:
+            now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+            as_of_utc = format_utc(now)
         memory_k = min(int(k), int(config.memory.retrieval.max_k))
         try:
-            result = memory_compiler.compile(query, k=memory_k)
+            result = memory_compiler.compile(
+                query,
+                k=memory_k,
+                memory_hotness_mode=mode,
+                memory_hotness_as_of_utc=as_of_utc,
+            )
             snapshot_dir = Path(result.output_dir)
             context_md = (snapshot_dir / "context.md").read_text(encoding="utf-8")
             citations = json.loads((snapshot_dir / "citations.json").read_text(encoding="utf-8"))
@@ -1502,6 +1526,8 @@ def create_app(
             request.query,
             k=k,
             include=request.include_memory_snapshot,
+            hotness_mode=request.memory_hotness_mode,
+            hotness_as_of_utc=request.memory_hotness_as_of_utc,
         )
         routing_data = _merge_routing(config.routing, request.routing)
         aggregates = _build_aggregates(db, request.time_range)
