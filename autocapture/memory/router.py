@@ -159,22 +159,6 @@ class ProviderRouter:
             selection,
         )
 
-
-def _cloud_allowed(privacy: PrivacyConfig, offline: bool) -> bool:
-    if offline:
-        return False
-    return bool(privacy.cloud_enabled)
-
-
-def _is_cloud_endpoint(base_url: str) -> bool:
-    from urllib.parse import urlparse
-
-    parsed = urlparse(base_url)
-    host = parsed.hostname or ""
-    if not host:
-        return False
-    return not is_loopback_host(host)
-
     def select_embedding(self) -> ProviderSelection:
         provider_id = (self._routing.embedding or "local").strip().lower()
         if self._plugins is not None:
@@ -213,3 +197,19 @@ def _is_cloud_endpoint(base_url: str) -> bool:
             selection.capabilities.cloud,
         )
         return selection
+
+
+def _cloud_allowed(privacy: PrivacyConfig, offline: bool) -> bool:
+    if offline:
+        return False
+    return bool(privacy.cloud_enabled)
+
+
+def _is_cloud_endpoint(base_url: str) -> bool:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    host = parsed.hostname or ""
+    if not host:
+        return False
+    return not is_loopback_host(host)

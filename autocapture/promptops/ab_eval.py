@@ -19,6 +19,7 @@ from ..llm.prompt_strategy import (
     apply_prompt_strategy,
     render_prompt_text,
 )
+from ..policy import PolicyEnvelope
 
 _LOG = get_logger("promptops.ab_eval")
 
@@ -112,6 +113,7 @@ def run_ab_eval(
     results: list[EvalCaseResult] = []
     cases = load_eval_cases(cases_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    policy = PolicyEnvelope(config)
     with output_path.open("w", encoding="utf-8") as handle:
         for strategy in strategies:
             provider = None
@@ -149,10 +151,14 @@ def run_ab_eval(
                     metadata = result.metadata
                 else:
                     prediction = asyncio.run(
-                        provider.generate_answer(
-                            "You are a helpful assistant.",
-                            case.prompt,
-                            "",
+                        policy.execute_stage(
+                            stage="final_answer",
+                            provider=provider,
+                            decision=None,
+                            system_prompt="You are a helpful assistant.",
+                            user_prompt=case.prompt,
+                            context_pack_text="",
+                            temperature=None,
                             priority="background",
                         )
                     )

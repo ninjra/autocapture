@@ -45,6 +45,8 @@ from ..memory.retrieval import (
 )
 from ..memory.tier_stats import update_tier_stats
 from ..model_ops import StageRouter
+from ..policy import PolicyEnvelope
+from ..storage.database import DatabaseManager
 from ..storage.models import (
     AnswerCitationRecord,
     AnswerRecord,
@@ -106,6 +108,8 @@ class AnswerGraph:
         config: AppConfig,
         retrieval: RetrievalService,
         *,
+        db: DatabaseManager,
+        thread_retrieval: ThreadRetrievalService,
         prompt_registry,
         entities,
         plugin_manager: PluginManager | None = None,
@@ -113,19 +117,16 @@ class AnswerGraph:
     ) -> None:
         self._config = config
         self._retrieval = retrieval
+        self._db = db
         self._prompt_registry = prompt_registry
         self._entities = entities
         self._log = get_logger("answer_graph")
-        self._ledger = LedgerWriter(retrieval._db)  # type: ignore[attr-defined]
+        self._ledger = LedgerWriter(db)
         self._plugins = plugin_manager or PluginManager(config)
         self._memory_client = memory_client
         self._stage_router = StageRouter(config, plugin_manager=self._plugins)
-        self._thread_retrieval = ThreadRetrievalService(
-            config,
-            retrieval._db,  # type: ignore[attr-defined]
-            embedder=getattr(retrieval, "_embedder", None),
-            vector_index=getattr(retrieval, "_vector", None),
-        )
+        self._policy = PolicyEnvelope(config)
+        self._thread_retrieval = thread_retrieval
         self._compressor = None
         self._verifier = None
         self._claim_validator = ClaimValidator(config.verification.citation_validator)
@@ -151,8 +152,8 @@ class AnswerGraph:
             {"query": query, "ts": dt.datetime.now(dt.timezone.utc).isoformat()},
         )
         request_started_at = dt.datetime.now(dt.timezone.utc)
-        if hasattr(self._retrieval, "_db"):
-            self._retrieval._db.transaction(  # type: ignore[attr-defined]
+        if self._db:
+            self._db.transaction(
                 lambda session: session.add(
                     RequestRunRecord(
                         request_id=request_id,
@@ -382,11 +383,16 @@ class AnswerGraph:
                             "model_id": getattr(draft_decision, "model_id", None),
                         },
                     ):
-                        draft_text = await draft_provider.generate_answer(
-                            system_prompt,
-                            draft_query,
-                            draft_pack,
+                        draft_text = await self._policy.execute_stage(
+                            stage="draft_generate",
+                            provider=draft_provider,
+                            decision=draft_decision,
+                            system_prompt=system_prompt,
+                            user_prompt=draft_query,
+                            context_pack_text=draft_pack,
                             temperature=draft_decision.temperature,
+                            warnings=warnings,
+                            evidence=evidence,
                         )
                 record_histogram(
                     "answer_generate_ms",
@@ -553,11 +559,16 @@ class AnswerGraph:
                             "model_id": getattr(final_decision, "model_id", None),
                         },
                     ):
-                        answer_text = await final_provider.generate_answer(
-                            system_prompt,
-                            final_query,
-                            final_pack,
+                        answer_text = await self._policy.execute_stage(
+                            stage="final_answer",
+                            provider=final_provider,
+                            decision=final_decision,
+                            system_prompt=system_prompt,
+                            user_prompt=final_query,
+                            context_pack_text=final_pack,
                             temperature=0.0 if attempt > 1 else final_decision.temperature,
+                            warnings=warnings,
+                            evidence=evidence,
                         )
                 latency_ms = (time.monotonic() - answer_start) * 1000
                 record_histogram(
@@ -746,7 +757,7 @@ class AnswerGraph:
     ) -> AnswerGraphResult:
         query_class = _classify_query(query, retrieve_filters)
         query_id = _ensure_query_record(
-            self._retrieval._db,  # type: ignore[attr-defined]
+            self._db,
             query,
             retrieve_filters,
             query_class,
@@ -759,10 +770,10 @@ class AnswerGraph:
                 if span.span_id:
                     span_ids.append(str(span.span_id))
         has_citable_spans = False
-        if hasattr(self._retrieval, "_db"):
+        if self._db:
             event_ids = [item.event_id for item in evidence_by_id.values()]
             if event_ids:
-                with self._retrieval._db.session() as session:  # type: ignore[attr-defined]
+                with self._db.session() as session:
                     has_citable_spans = (
                         session.execute(
                             select(CitableSpanRecord.span_id).where(
@@ -774,11 +785,11 @@ class AnswerGraph:
                         is not None
                     )
         if has_citable_spans:
-            integrity = check_citations(self._retrieval._db, span_ids)  # type: ignore[attr-defined]
+            integrity = check_citations(self._db, span_ids)
             valid_span_ids = integrity.valid_span_ids
             if self._config.next10.enabled:
                 provenance = verify_provenance(
-                    self._retrieval._db,  # type: ignore[attr-defined]
+                    self._db,
                     query_id=query_id,
                     span_ids=list(valid_span_ids),
                 )
@@ -794,7 +805,7 @@ class AnswerGraph:
             if set(filtered_citations) != set(citations):
                 warnings.append("citation_integrity_failed")
         else:
-            integrity = check_citations(self._retrieval._db, [])  # type: ignore[attr-defined]
+            integrity = check_citations(self._db, [])
             valid_span_ids = set()
             valid_evidence_ids = set(evidence_by_id)
             filtered_citations = list(citations)
@@ -1147,9 +1158,9 @@ class AnswerGraph:
                                 health.last_error = call.get("error_text")
                             health.updated_at = now
 
-        self._retrieval._db.transaction(_persist_answer)  # type: ignore[attr-defined]
+        self._db.transaction(_persist_answer)
         update_tier_stats(
-            self._retrieval._db,  # type: ignore[attr-defined]
+            self._db,
             query_id=query_id,
             query_class=query_class,
             cited_span_ids=valid_span_ids,
@@ -1161,7 +1172,7 @@ class AnswerGraph:
         if self._config.next10.enabled:
             chain_appended = append_provenance_chain(
                 self._config,
-                self._retrieval._db,  # type: ignore[attr-defined]
+                self._db,
                 self._ledger,
                 answer_id=answer_id,
                 query_id=query_id,
@@ -1255,10 +1266,10 @@ class AnswerGraph:
             return [], [], True
         span_lookup: dict[tuple[str, str], CitableSpanRecord] = {}
         fallback_spans: dict[str, CitableSpanRecord] = {}
-        if hasattr(self._retrieval, "_db"):
+        if self._db:
             event_ids = [item.event.event_id for item in results]
             if event_ids:
-                with self._retrieval._db.session() as session:  # type: ignore[attr-defined]
+                with self._db.session() as session:
                     rows = (
                         session.execute(
                             select(CitableSpanRecord).where(
@@ -1421,11 +1432,15 @@ class AnswerGraph:
             context = self._build_refinement_context(evidence)
             refine_start = time.monotonic()
             with otel_span("answer_generate", {"stage_name": "answer_generate"}):
-                response = await provider.generate_answer(
-                    prompt.system_prompt,
-                    query,
-                    context,
+                response = await self._policy.execute_stage(
+                    stage="query_refine",
+                    provider=provider,
+                    decision=decision,
+                    system_prompt=prompt.system_prompt,
+                    user_prompt=query,
+                    context_pack_text=context,
                     temperature=decision.temperature,
+                    evidence=evidence,
                 )
             record_histogram(
                 "answer_generate_ms",
@@ -1614,6 +1629,7 @@ class AnswerGraph:
                     stage=self._config.verification.entailment.judge_stage,
                     claims=claims,
                     evidence_by_id=evidence_by_id,
+                    policy=self._policy,
                 )
                 for claim_id, verdict in judge_result.verdicts.items():
                     if verdict:
@@ -1785,11 +1801,15 @@ class AnswerGraph:
             [],
             stage="final_answer",
         )
-        answer_text = await provider.generate_answer(
-            system_prompt,
-            final_query,
-            final_pack,
+        answer_text = await self._policy.execute_stage(
+            stage="final_answer",
+            provider=provider,
+            decision=decision,
+            system_prompt=system_prompt,
+            user_prompt=final_query,
+            context_pack_text=final_pack,
             temperature=decision.temperature,
+            evidence=evidence,
         )
         verifier = self._get_verifier()
         if self._requires_claims(decision):

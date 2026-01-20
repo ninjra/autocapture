@@ -10,6 +10,7 @@ from autocapture.memory.context_pack import EvidenceItem
 from autocapture.memory.entities import EntityResolver, SecretStore
 from autocapture.memory.prompts import PromptRegistry
 from autocapture.memory.retrieval import RetrievalService
+from autocapture.memory.threads import ThreadRetrievalService
 from autocapture.security.token_vault import TokenVaultStore
 from autocapture.storage.database import DatabaseManager
 from autocapture.storage.models import EventRecord
@@ -77,7 +78,20 @@ async def test_speculative_verifier_blocks_early_exit(monkeypatch, tmp_path) -> 
     prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
     secret = SecretStore(tmp_path).get_or_create()
     entities = EntityResolver(db, secret, token_vault=TokenVaultStore(config, db))
-    graph = AnswerGraph(config, retrieval, prompt_registry=prompt_registry, entities=entities)
+    thread_retrieval = ThreadRetrievalService(
+        config,
+        db,
+        embedder=retrieval.embedder,
+        vector_index=retrieval.vector_index,
+    )
+    graph = AnswerGraph(
+        config,
+        retrieval,
+        db=db,
+        thread_retrieval=thread_retrieval,
+        prompt_registry=prompt_registry,
+        entities=entities,
+    )
 
     event = _event("event-1")
     evidence = [_evidence(event, 0.9, "E1")]
@@ -131,7 +145,20 @@ async def test_speculative_low_confidence_forces_deep(monkeypatch, tmp_path) -> 
     prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
     secret = SecretStore(tmp_path).get_or_create()
     entities = EntityResolver(db, secret, token_vault=TokenVaultStore(config, db))
-    graph = AnswerGraph(config, retrieval, prompt_registry=prompt_registry, entities=entities)
+    thread_retrieval = ThreadRetrievalService(
+        config,
+        db,
+        embedder=retrieval.embedder,
+        vector_index=retrieval.vector_index,
+    )
+    graph = AnswerGraph(
+        config,
+        retrieval,
+        db=db,
+        thread_retrieval=thread_retrieval,
+        prompt_registry=prompt_registry,
+        entities=entities,
+    )
 
     event = _event("event-1")
     evidence = [_evidence(event, 0.4, "E1"), _evidence(event, 0.4, "E2")]
@@ -179,7 +206,20 @@ async def test_speculative_verified_early_exit(monkeypatch, tmp_path) -> None:
     prompt_registry = PromptRegistry.from_package("autocapture.prompts.derived")
     secret = SecretStore(tmp_path).get_or_create()
     entities = EntityResolver(db, secret, token_vault=TokenVaultStore(config, db))
-    graph = AnswerGraph(config, retrieval, prompt_registry=prompt_registry, entities=entities)
+    thread_retrieval = ThreadRetrievalService(
+        config,
+        db,
+        embedder=retrieval.embedder,
+        vector_index=retrieval.vector_index,
+    )
+    graph = AnswerGraph(
+        config,
+        retrieval,
+        db=db,
+        thread_retrieval=thread_retrieval,
+        prompt_registry=prompt_registry,
+        entities=entities,
+    )
 
     event = _event("event-1")
     evidence = [_evidence(event, 0.9, "E1")]

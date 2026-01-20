@@ -13,6 +13,7 @@ from pathlib import Path
 from ..llm.prompt_strategy import PromptStrategy, PromptStrategySettings
 from ..llm.providers import OpenAICompatibleProvider, OpenAIProvider
 from ..llm.transport import HttpxTransport, LLMTransport, RecordingTransport, ReplayTransport
+from ..policy import PolicyEnvelope
 from .timing import TimingTracer
 
 _DEFAULT_SYSTEM_PROMPT = "You are a concise assistant."
@@ -105,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         redact=args.trace_timing_redact,
         file_path=Path(args.trace_timing_file) if args.trace_timing_file else None,
     )
+    policy = PolicyEnvelope(None)
 
     with tracer:
         with tracer.span("total", case_id=case.case_id, mode="offline" if args.offline else "live"):
@@ -132,10 +134,13 @@ def main(argv: list[str] | None = None) -> int:
 
             with tracer.span("api_call", provider=case.provider, offline=args.offline):
                 answer = asyncio.run(
-                    provider.generate_answer(
-                        system_prompt,
-                        user_prompt,
-                        context,
+                    policy.execute_stage(
+                        stage=None,
+                        provider=provider,
+                        decision=None,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        context_pack_text=context,
                         temperature=case.temperature,
                     )
                 )

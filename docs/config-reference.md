@@ -50,3 +50,27 @@
 - `model_registry.stages.*.requirements.claims_schema`: set to `claims_json_v1` for claim-level outputs.
 - `model_registry.stages.*.requirements.require_json`: enforce JSON-only responses.
 - `model_registry.models.*.lmcache_enabled`: enable LMCache hints for that model.
+
+## Policy (PolicyEnvelope)
+- `policy.enforce_prompt_injection`: enable prompt-injection enforcement (default: false).
+- `policy.prompt_injection_warn_threshold`: risk score threshold for warnings.
+- `policy.prompt_injection_block_threshold`: risk score threshold for blocking LLM calls.
+- `policy.structured_output_mode`: structured output mode (default: `none`).
+- `policy.max_context_chars`: optional hard cap on context pack size.
+- `policy.max_evidence_items`: optional hard cap on evidence items.
+
+## Cache
+- `cache.enabled`: enable semantic cache (default: false).
+- `cache.path`: sqlite cache path override (default: null).
+- `cache.max_entries`: max cache entries (default: 10000).
+- `cache.ttl_s`: TTL in seconds (default: 86400).
+- `cache.prune_interval_s`: prune cadence in seconds (default: 3600).
+- `cache.redact_on_cloud`: redact payloads on cloud-enabled calls.
+
+## Observability Telemetry
+- `observability.telemetry.capture_payloads`: payload capture mode (none|redacted|full).
+- `observability.telemetry.exporter`: exporter type (none|otlp).
+- `observability.telemetry.otlp_endpoint`: OTLP endpoint for exporter.
+- `observability.telemetry.otlp_protocol`: protocol (http/protobuf).
+- `observability.telemetry.allow_cloud_export`: allow telemetry export to non-loopback endpoints.
+- `observability.telemetry.max_attr_len`: max attribute length for spans.

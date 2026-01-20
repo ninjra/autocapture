@@ -87,6 +87,14 @@ The local SQLite DB contains:
 - Local FastAPI server serves `/` from `autocapture/ui/web/`.
 - UI includes Chat, Search, Highlights, and Settings surfaces.
 
+## API Composition
+- `autocapture/api/server.py` is a shim that exposes `create_app` only; route/middleware definitions live elsewhere (enforced by `tests/test_architecture_boundaries.py`).
+- `autocapture/api/container.py` wires dependencies into an `AppContainer`.
+- `autocapture/api/app.py` assembles the FastAPI app, installs middleware, mounts static UI assets, and includes routers.
+- `autocapture/api/middleware/stack.py` defines middleware order: security headers → auth → rate limit → unlock gating.
+- `autocapture/api/routers/` holds endpoint implementations (current entry point: `routers/core.py`).
+- `RetrievalService` exposes public capability properties (`db`, `embedder`, `vector_index`, `spans_index`); `AnswerGraph` receives `db` and `ThreadRetrievalService` via injection.
+
 ## Configuration
 - `autocapture/config.py` defines configuration for mode, routing, privacy, retention, and PromptOps.
 - `config/example.yml` is the reference configuration.
