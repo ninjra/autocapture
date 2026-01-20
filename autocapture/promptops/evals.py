@@ -20,6 +20,7 @@ from ..memory.entities import EntityResolver, SecretStore
 from ..memory.retrieval import RetrievalService
 from ..memory.router import ProviderRouter
 from ..memory.verification import Claim, RulesVerifier
+from ..policy import PolicyEnvelope
 from ..storage.database import DatabaseManager
 from ..security.token_vault import TokenVaultStore
 
@@ -76,6 +77,7 @@ def run_eval_detailed(
                 config.llm, data_dir=config.capture.data_dir
             ),
         ).select_llm()[0]
+    policy = PolicyEnvelope(config)
 
     for item in items:
         query = item["query"]
@@ -94,11 +96,16 @@ def run_eval_detailed(
         try:
             system_prompt = prompts.get("ANSWER_WITH_CONTEXT_PACK").system_prompt
             answer_text = asyncio.run(
-                provider.generate_answer(
-                    system_prompt,
-                    query,
-                    pack.to_text(extractive_only=False),
+                policy.execute_stage(
+                    stage="final_answer",
+                    provider=provider,
+                    decision=None,
+                    system_prompt=system_prompt,
+                    user_prompt=query,
+                    context_pack_text=pack.to_text(extractive_only=False),
+                    temperature=None,
                     priority="background",
+                    evidence=evidence,
                 )
             )
         except Exception as exc:

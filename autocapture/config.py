@@ -594,6 +594,41 @@ class EncryptionConfig(BaseModel):
     )
 
 
+class TelemetryConfig(BaseModel):
+    capture_payloads: str = Field(
+        "none", description="Payload capture mode (none|redacted|full)."
+    )
+    exporter: str = Field("none", description="Exporter (none|otlp).")
+    otlp_endpoint: Optional[str] = None
+    otlp_protocol: str = Field("http/protobuf", description="OTLP protocol (http/protobuf).")
+    allow_cloud_export: bool = Field(False)
+    max_attr_len: int = Field(128, ge=32, le=1024)
+
+    @field_validator("capture_payloads")
+    @classmethod
+    def validate_capture_payloads(cls, value: str) -> str:
+        allowed = {"none", "redacted", "full"}
+        if value not in allowed:
+            raise ValueError(f"telemetry.capture_payloads must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("exporter")
+    @classmethod
+    def validate_exporter(cls, value: str) -> str:
+        allowed = {"none", "otlp"}
+        if value not in allowed:
+            raise ValueError(f"telemetry.exporter must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("otlp_protocol")
+    @classmethod
+    def validate_otlp_protocol(cls, value: str) -> str:
+        allowed = {"http/protobuf"}
+        if value not in allowed:
+            raise ValueError(f"telemetry.otlp_protocol must be one of {sorted(allowed)}")
+        return value
+
+
 class ObservabilityConfig(BaseModel):
     prometheus_bind_host: str = Field("127.0.0.1")
     prometheus_port: int = Field(9005, ge=1024, le=65535)
@@ -601,6 +636,7 @@ class ObservabilityConfig(BaseModel):
     prometheus_fail_fast: bool = Field(False)
     grafana_url: Optional[str] = None
     enable_gpu_stats: bool = Field(True)
+    telemetry: TelemetryConfig = TelemetryConfig()
 
 
 class FeatureFlagsConfig(BaseModel):
@@ -730,6 +766,31 @@ class PrivacyConfig(BaseModel):
     mask_regions: list[dict] = Field(default_factory=list)
 
 
+class PolicyConfig(BaseModel):
+    enforce_prompt_injection: bool = Field(
+        False, description="Enable prompt-injection enforcement in PolicyEnvelope."
+    )
+    prompt_injection_warn_threshold: float = Field(0.7, ge=0.0, le=1.0)
+    prompt_injection_block_threshold: float = Field(0.9, ge=0.0, le=1.0)
+    structured_output_mode: str = Field(
+        "none", description="Structured output mode (none|json_schema|regex|choice|grammar)."
+    )
+    max_context_chars: Optional[int] = Field(
+        None, description="Hard cap on context pack chars (None disables)."
+    )
+    max_evidence_items: Optional[int] = Field(
+        None, description="Hard cap on evidence items (None disables)."
+    )
+
+    @field_validator("structured_output_mode")
+    @classmethod
+    def validate_structured_output_mode(cls, value: str) -> str:
+        allowed = {"none", "json_schema", "regex", "choice", "grammar"}
+        if value not in allowed:
+            raise ValueError(f"policy.structured_output_mode must be one of {sorted(allowed)}")
+        return value
+
+
 class OutputConfig(BaseModel):
     format: str = Field("text", description="text|json|tron")
     context_pack_format: str = Field("json", description="json|tron")
@@ -753,6 +814,15 @@ class OutputConfig(BaseModel):
         if value not in allowed:
             raise ValueError(f"output.context_pack_format must be one of {sorted(allowed)}")
         return value
+
+
+class CacheConfig(BaseModel):
+    enabled: bool = Field(False)
+    path: Optional[Path] = Field(None, description="Cache file path (sqlite).")
+    max_entries: int = Field(10_000, ge=0)
+    ttl_s: int = Field(86_400, ge=0)
+    prune_interval_s: int = Field(3_600, ge=0)
+    redact_on_cloud: bool = Field(True)
 
 
 class TimeConfig(BaseModel):
@@ -1646,7 +1716,9 @@ class AppConfig(BaseModel):
     plugins: PluginsConfig = PluginsConfig()
     routing: ProviderRoutingConfig = ProviderRoutingConfig()
     privacy: PrivacyConfig = PrivacyConfig()
+    policy: PolicyConfig = PolicyConfig()
     output: OutputConfig = OutputConfig()
+    cache: CacheConfig = CacheConfig()
     verification: VerificationConfig = VerificationConfig()
     time: TimeConfig = TimeConfig()
     security: SecurityConfig = SecurityConfig()

@@ -110,10 +110,24 @@ privacy:
     - "(?i)user account control"
     - "(?i)credential(s)?"
   exclude_regions: []
+policy:
+  enforce_prompt_injection: false
+  prompt_injection_warn_threshold: 0.7
+  prompt_injection_block_threshold: 0.9
+  structured_output_mode: "none"
+  max_context_chars: null
+  max_evidence_items: null
 output:
   format: "text"
   context_pack_format: "json"
   allow_tron_compression: false
+cache:
+  enabled: false
+  path: null
+  max_entries: 10000
+  ttl_s: 86400
+  prune_interval_s: 3600
+  redact_on_cloud: true
 retrieval:
   graph_adapters:
     graphrag:
@@ -573,3 +587,10 @@ observability:
   prometheus_fail_fast: false
   grafana_url: "http://localhost:3000"
   enable_gpu_stats: true
+  telemetry:
+    capture_payloads: "none"
+    exporter: "none"
+    otlp_endpoint: null
+    otlp_protocol: "http/protobuf"
+    allow_cloud_export: false
+    max_attr_len: 128

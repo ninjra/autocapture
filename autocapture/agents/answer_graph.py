@@ -45,6 +45,7 @@ from ..memory.retrieval import (
 )
 from ..memory.tier_stats import update_tier_stats
 from ..model_ops import StageRouter
+from ..policy import PolicyEnvelope
 from ..storage.models import (
     AnswerCitationRecord,
     AnswerRecord,
@@ -120,6 +121,7 @@ class AnswerGraph:
         self._plugins = plugin_manager or PluginManager(config)
         self._memory_client = memory_client
         self._stage_router = StageRouter(config, plugin_manager=self._plugins)
+        self._policy = PolicyEnvelope(config)
         self._thread_retrieval = ThreadRetrievalService(
             config,
             retrieval._db,  # type: ignore[attr-defined]
@@ -382,11 +384,16 @@ class AnswerGraph:
                             "model_id": getattr(draft_decision, "model_id", None),
                         },
                     ):
-                        draft_text = await draft_provider.generate_answer(
-                            system_prompt,
-                            draft_query,
-                            draft_pack,
+                        draft_text = await self._policy.execute_stage(
+                            stage="draft_generate",
+                            provider=draft_provider,
+                            decision=draft_decision,
+                            system_prompt=system_prompt,
+                            user_prompt=draft_query,
+                            context_pack_text=draft_pack,
                             temperature=draft_decision.temperature,
+                            warnings=warnings,
+                            evidence=evidence,
                         )
                 record_histogram(
                     "answer_generate_ms",
@@ -553,11 +560,16 @@ class AnswerGraph:
                             "model_id": getattr(final_decision, "model_id", None),
                         },
                     ):
-                        answer_text = await final_provider.generate_answer(
-                            system_prompt,
-                            final_query,
-                            final_pack,
+                        answer_text = await self._policy.execute_stage(
+                            stage="final_answer",
+                            provider=final_provider,
+                            decision=final_decision,
+                            system_prompt=system_prompt,
+                            user_prompt=final_query,
+                            context_pack_text=final_pack,
                             temperature=0.0 if attempt > 1 else final_decision.temperature,
+                            warnings=warnings,
+                            evidence=evidence,
                         )
                 latency_ms = (time.monotonic() - answer_start) * 1000
                 record_histogram(
@@ -1421,11 +1433,15 @@ class AnswerGraph:
             context = self._build_refinement_context(evidence)
             refine_start = time.monotonic()
             with otel_span("answer_generate", {"stage_name": "answer_generate"}):
-                response = await provider.generate_answer(
-                    prompt.system_prompt,
-                    query,
-                    context,
+                response = await self._policy.execute_stage(
+                    stage="query_refine",
+                    provider=provider,
+                    decision=decision,
+                    system_prompt=prompt.system_prompt,
+                    user_prompt=query,
+                    context_pack_text=context,
                     temperature=decision.temperature,
+                    evidence=evidence,
                 )
             record_histogram(
                 "answer_generate_ms",
@@ -1614,6 +1630,7 @@ class AnswerGraph:
                     stage=self._config.verification.entailment.judge_stage,
                     claims=claims,
                     evidence_by_id=evidence_by_id,
+                    policy=self._policy,
                 )
                 for claim_id, verdict in judge_result.verdicts.items():
                     if verdict:
@@ -1785,11 +1802,15 @@ class AnswerGraph:
             [],
             stage="final_answer",
         )
-        answer_text = await provider.generate_answer(
-            system_prompt,
-            final_query,
-            final_pack,
+        answer_text = await self._policy.execute_stage(
+            stage="final_answer",
+            provider=provider,
+            decision=decision,
+            system_prompt=system_prompt,
+            user_prompt=final_query,
+            context_pack_text=final_pack,
             temperature=decision.temperature,
+            evidence=evidence,
         )
         verifier = self._get_verifier()
         if self._requires_claims(decision):

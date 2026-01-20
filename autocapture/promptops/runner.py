@@ -27,6 +27,7 @@ from ..memory.router import ProviderRouter
 from ..llm.prompt_strategy import PromptStrategySettings
 from ..promptops.evals import EvalRunResult, run_eval_detailed
 from ..promptops.gates import aggregate_metrics, evaluate_candidate, is_candidate_better
+from ..policy import PolicyEnvelope
 from ..resilience import (
     CircuitBreaker,
     RetryPolicy,
@@ -92,6 +93,7 @@ class PromptOpsRunner:
         self._breaker = CircuitBreaker()
         self._llm_provider = llm_provider
         self._http = http_client
+        self._policy = PolicyEnvelope(config)
 
     def run_once(self, sources: Iterable[str] | None = None) -> PromptOpsRunRecord | None:
         promptops = self._config.promptops
@@ -443,7 +445,16 @@ class PromptOpsRunner:
                 gate_context=_gate_context(self._config.promptops),
             )
             response = asyncio.run(
-                llm.generate_answer(system_prompt, query, context, priority="background")
+                self._policy.execute_stage(
+                    stage="final_answer",
+                    provider=llm,
+                    decision=None,
+                    system_prompt=system_prompt,
+                    user_prompt=query,
+                    context_pack_text=context,
+                    temperature=None,
+                    priority="background",
+                )
             )
             try:
                 spec = _parse_promptops_response(response, prompt)

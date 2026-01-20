@@ -41,6 +41,7 @@ from ..encryption import EncryptionManager
 from ..logging_utils import get_logger
 from ..observability.metrics import get_gpu_snapshot, get_metrics_port
 from ..observability.otel import init_otel
+from ..policy import PolicyEnvelope
 from ..paths import resource_root
 from ..settings_store import read_settings, update_settings
 from ..media.store import MediaStore
@@ -490,6 +491,7 @@ def create_app(
     memory_service_client: MemoryServiceClient | None = None
     if config.features.enable_memory_service_read_hook:
         memory_service_client = MemoryServiceClient(config.memory_service)
+    policy_envelope = PolicyEnvelope(config)
     answer_graph = AnswerGraph(
         config,
         retrieval,
@@ -1825,11 +1827,15 @@ def create_app(
                     pack_json_text,
                     pack_tron_text,
                 )
-                answer_text = await provider.generate_answer(
-                    system_prompt,
-                    query_text,
-                    pack_text,
+                answer_text = await policy_envelope.execute_stage(
+                    stage="final_answer",
+                    provider=provider,
+                    decision=decision,
+                    system_prompt=system_prompt,
+                    user_prompt=query_text,
+                    context_pack_text=pack_text,
                     temperature=decision.temperature,
+                    evidence=evidence,
                 )
                 prompt_strategy_info = _prompt_strategy_info(
                     getattr(provider, "last_prompt_metadata", None)
@@ -1841,11 +1847,15 @@ def create_app(
                         + "\n\nYou must cite evidence IDs in the form [E1], [E2], etc. "
                         "Only cite IDs that appear in the provided context pack."
                     )
-                    answer_text = await provider.generate_answer(
-                        retry_prompt,
-                        query_text,
-                        pack_text,
+                    answer_text = await policy_envelope.execute_stage(
+                        stage="final_answer",
+                        provider=provider,
+                        decision=decision,
+                        system_prompt=retry_prompt,
+                        user_prompt=query_text,
+                        context_pack_text=pack_text,
                         temperature=decision.temperature,
+                        evidence=evidence,
                     )
                     citations = _extract_citations(answer_text)
                 if not _valid_citations(citations, evidence):

@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ..logging_utils import get_logger
 from ..model_ops import StageRouter
+from ..policy import PolicyEnvelope
 from ..memory.context_pack import EvidenceItem
 from .claims import ClaimItem
 
@@ -134,6 +135,7 @@ async def judge_entailment(
     stage: str,
     claims: list[ClaimItem],
     evidence_by_id: dict[str, EvidenceItem],
+    policy: PolicyEnvelope | None = None,
 ) -> EntailmentResult:
     system_prompt = (
         "You are a strict entailment judge. "
@@ -143,13 +145,25 @@ async def judge_entailment(
     )
     user_prompt = _build_prompt(claims, evidence_by_id)
     try:
-        provider, _decision = stage_router.select_llm(stage)
-        response = await provider.generate_answer(
-            system_prompt,
-            user_prompt,
-            "",
-            temperature=0.0,
-        )
+        provider, decision = stage_router.select_llm(stage)
+        if policy is None:
+            response = await provider.generate_answer(
+                system_prompt,
+                user_prompt,
+                "",
+                temperature=0.0,
+            )
+        else:
+            response = await policy.execute_stage(
+                stage=stage,
+                provider=provider,
+                decision=decision,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                context_pack_text="",
+                temperature=0.0,
+                evidence=list(evidence_by_id.values()),
+            )
         parsed = _parse_response(response)
     except Exception as exc:
         _LOG.warning("Entailment judge failed: {}", exc)

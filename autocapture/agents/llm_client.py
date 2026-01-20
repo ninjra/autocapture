@@ -15,6 +15,7 @@ from ..llm.prompt_strategy import PromptStrategySettings, apply_prompt_strategy
 from ..llm.governor import LLMGovernor, get_global_governor
 from ..logging_utils import get_logger
 from ..resilience import RetryPolicy, is_retryable_exception, retry_sync
+from ..policy import PolicyEnvelope
 
 
 @dataclass(frozen=True)
@@ -40,14 +41,33 @@ class AgentLLMClient:
         )
         self._log = get_logger("agent.llm_client")
         self._governor = governor or get_global_governor(config)
+        self._policy = PolicyEnvelope(config)
 
     def generate_text(self, system_prompt: str, user_prompt: str, context: str) -> LLMResponse:
         provider = self._config.llm.provider
-        if provider == "openai":
-            return self._generate_openai(system_prompt, user_prompt, context)
+        base_url = None
         if provider == "openai_compatible":
-            return self._generate_openai_compatible(system_prompt, user_prompt, context)
-        return self._generate_ollama(system_prompt, user_prompt, context)
+            base_url = self._config.llm.openai_compatible_base_url
+        elif provider == "ollama":
+            base_url = self._config.llm.ollama_url
+        cloud = self._policy.infer_cloud_from_endpoint(base_url, provider)
+        if provider == "openai":
+            return self._policy.execute_call_sync(
+                stage=None,
+                call=lambda: self._generate_openai(system_prompt, user_prompt, context),
+                cloud=cloud,
+            )
+        if provider == "openai_compatible":
+            return self._policy.execute_call_sync(
+                stage=None,
+                call=lambda: self._generate_openai_compatible(system_prompt, user_prompt, context),
+                cloud=cloud,
+            )
+        return self._policy.execute_call_sync(
+            stage=None,
+            call=lambda: self._generate_ollama(system_prompt, user_prompt, context),
+            cloud=cloud,
+        )
 
     def generate_vision(
         self,
@@ -56,23 +76,35 @@ class AgentLLMClient:
         image_bytes: bytes,
     ) -> LLMResponse:
         provider = self._config.agents.vision.provider
+        base_url = self._config.agents.vision.base_url
+        if provider != "openai_compatible":
+            base_url = base_url or self._config.llm.ollama_url
+        cloud = self._policy.infer_cloud_from_endpoint(base_url, provider)
         if provider == "openai_compatible":
-            return self._generate_openai_compatible(
+            return self._policy.execute_vision_sync(
+                stage=None,
+                call=lambda: self._generate_openai_compatible(
+                    system_prompt,
+                    user_prompt,
+                    "",
+                    image_bytes=image_bytes,
+                    model=self._config.agents.vision.model,
+                    base_url=self._config.agents.vision.base_url,
+                    api_key=self._config.agents.vision.api_key,
+                ),
+                cloud=cloud,
+            )
+        return self._policy.execute_vision_sync(
+            stage=None,
+            call=lambda: self._generate_ollama(
                 system_prompt,
                 user_prompt,
                 "",
                 image_bytes=image_bytes,
                 model=self._config.agents.vision.model,
-                base_url=self._config.agents.vision.base_url,
-                api_key=self._config.agents.vision.api_key,
-            )
-        return self._generate_ollama(
-            system_prompt,
-            user_prompt,
-            "",
-            image_bytes=image_bytes,
-            model=self._config.agents.vision.model,
-            base_url=self._config.agents.vision.base_url or self._config.llm.ollama_url,
+                base_url=base_url,
+            ),
+            cloud=cloud,
         )
 
     def _generate_ollama(
