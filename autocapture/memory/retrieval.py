@@ -138,6 +138,22 @@ class RetrievalService:
             plugin_manager=plugin_manager,
         )
 
+    @property
+    def db(self) -> DatabaseManager:
+        return self._db
+
+    @property
+    def embedder(self) -> EmbeddingService:
+        return self._embedder
+
+    @property
+    def vector_index(self) -> VectorIndex:
+        return self._vector
+
+    @property
+    def spans_index(self) -> SpansV2Index | None:
+        return self._spans_v2
+
     def retrieve(
         self,
         query: str,
