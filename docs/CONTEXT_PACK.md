@@ -33,3 +33,13 @@
 ## TRON Payload (Optional)
 
 Context packs can be serialized as TRON via `output.context_pack_format=tron`.
+
+## Memory snapshot (optional)
+
+When enabled, `/api/context-pack` includes a `memory_snapshot` payload containing the
+deterministic memory snapshot plus its manifest. If memory hotness is enabled and
+requested, the manifest includes a `memory_hotness` block with ranking metadata.
+
+Request fields:
+- `memory_hotness_mode`: `off` | `as_of` | `dynamic`
+- `memory_hotness_as_of_utc`: required when `mode=as_of`; optional when `mode=dynamic`
