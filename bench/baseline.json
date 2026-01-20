@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "thresholds": {
+    "median_pct": 0.1,
+    "median_abs_ms": 100.0,
+    "p95_pct": 0.15,
+    "p95_abs_ms": 150.0
+  },
+  "cases": [
+    {
+      "case_id": "case1",
+      "mode": "offline",
+      "unit": "ms",
+      "stats": {
+        "median_ms": 4921.5,
+        "p95_ms": 5224.8
+      }
+    }
+  ]
+}

@@ -55,6 +55,37 @@ jobs:
           STRICT_FROZEN_SURFACES: "1"
         run: poetry run python tools/release_gate.py
 
+  spec1-bench:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: poetry.lock
+      - name: Install Poetry
+        run: pip install poetry==1.8.3
+      - name: Install dependencies
+        timeout-minutes: 15
+        run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
+      - name: Run offline bench
+        env:
+          BENCH_ITERATIONS: "10"
+          BENCH_WARMUP: "2"
+        run: |
+          chmod +x bench/run.sh
+          bench/run.sh
+      - name: Bench regression gate
+        run: poetry run python bench/ci_gate.py --baseline bench/baseline.json --current bench/results/summary.json --case-id case1 --mode offline
+      - name: Upload bench artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec1-bench-results
+          path: bench/results/**
+
   windows-build:
     runs-on: windows-latest
     steps:

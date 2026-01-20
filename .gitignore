@@ -39,6 +39,8 @@ src/**/bin/
 .runtime/
 artifacts/bench/
 artifacts/logs/
+bench/results/*
+!bench/results/.gitkeep
 
 # OS files
 .DS_Store

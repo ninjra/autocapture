@@ -1,0 +1,9 @@
+{
+  "case_id": "case1",
+  "system_prompt": "You are a concise assistant.",
+  "user_prompt": "List three benefits of deterministic benchmarks.",
+  "context": "Deterministic benchmarks improve comparability, detect regressions, and reduce noise.",
+  "provider": "openai",
+  "model": "gpt-4.1-mini",
+  "temperature": 0.2
+}

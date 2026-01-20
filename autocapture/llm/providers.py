@@ -19,6 +19,7 @@ from .prompt_strategy import (
     PromptStrategySettings,
     apply_prompt_strategy,
 )
+from .transport import HttpxTransport, LLMTransport
 from .governor import LLMGovernor
 from ..resilience import (
     CircuitBreaker,
@@ -306,6 +307,7 @@ class OpenAIProvider(LLMProvider):
         retries: int,
         prompt_strategy: PromptStrategySettings,
         governor: LLMGovernor | None = None,
+        transport: LLMTransport | None = None,
     ) -> None:
         self._api_key = api_key
         self._model = model
@@ -315,6 +317,7 @@ class OpenAIProvider(LLMProvider):
         self._breaker = CircuitBreaker()
         self._prompt_strategy = prompt_strategy
         self._governor = governor
+        self._transport = transport or HttpxTransport()
         self.last_prompt_metadata: PromptStrategyMetadata | None = None
         self.last_prompt_metadata_stage1: PromptStrategyMetadata | None = None
 
@@ -368,14 +371,12 @@ class OpenAIProvider(LLMProvider):
         }
 
         async def _request() -> dict:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/responses",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                return response.json()
+            return await self._transport.post_json(
+                "https://api.openai.com/v1/responses",
+                payload,
+                headers,
+                timeout_s=self._timeout,
+            )
 
         start = time.monotonic()
         try:
@@ -420,14 +421,12 @@ class OpenAIProvider(LLMProvider):
         }
 
         async def _request(payload: dict) -> dict:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/responses",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                return response.json()
+            return await self._transport.post_json(
+                "https://api.openai.com/v1/responses",
+                payload,
+                headers,
+                timeout_s=self._timeout,
+            )
 
         start = time.monotonic()
         try:
@@ -504,6 +503,7 @@ class OpenAICompatibleProvider(LLMProvider):
         retries: int,
         prompt_strategy: PromptStrategySettings,
         governor: LLMGovernor | None = None,
+        transport: LLMTransport | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model = model
@@ -514,6 +514,7 @@ class OpenAICompatibleProvider(LLMProvider):
         self._breaker = CircuitBreaker()
         self._prompt_strategy = prompt_strategy
         self._governor = governor
+        self._transport = transport or HttpxTransport()
         self.last_prompt_metadata: PromptStrategyMetadata | None = None
         self.last_prompt_metadata_stage1: PromptStrategyMetadata | None = None
 
@@ -564,14 +565,12 @@ class OpenAICompatibleProvider(LLMProvider):
             headers["Authorization"] = f"Bearer {self._api_key}"
 
         async def _request(payload: dict) -> dict:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    f"{self._base_url}/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                return response.json()
+            return await self._transport.post_json(
+                f"{self._base_url}/v1/chat/completions",
+                payload,
+                headers,
+                timeout_s=self._timeout,
+            )
 
         start = time.monotonic()
         try:
@@ -610,14 +609,12 @@ class OpenAICompatibleProvider(LLMProvider):
             headers["Authorization"] = f"Bearer {self._api_key}"
 
         async def _request(payload: dict) -> dict:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
-                response = await client.post(
-                    f"{self._base_url}/v1/chat/completions",
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                return response.json()
+            return await self._transport.post_json(
+                f"{self._base_url}/v1/chat/completions",
+                payload,
+                headers,
+                timeout_s=self._timeout,
+            )
 
         stage1_payload = {
             "model": self._model,
