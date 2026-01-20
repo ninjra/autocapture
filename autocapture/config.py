@@ -860,6 +860,90 @@ class MemoryCompilerConfig(BaseModel):
     max_memory_items: int = Field(32, ge=1)
 
 
+class MemoryHotnessHalfLivesConfig(BaseModel):
+    fast_seconds: int = Field(3600, ge=1)
+    mid_seconds: int = Field(6 * 3600, ge=1)
+    warm_seconds: int = Field(24 * 3600, ge=1)
+    cool_seconds: int = Field(7 * 24 * 3600, ge=1)
+
+
+class MemoryHotnessWeightsConfig(BaseModel):
+    fast: float = Field(0.4, ge=0.0)
+    mid: float = Field(0.3, ge=0.0)
+    warm: float = Field(0.2, ge=0.0)
+    cool: float = Field(0.1, ge=0.0)
+
+
+class MemoryHotnessThresholdsConfig(BaseModel):
+    hot: float = Field(0.75, ge=0.0)
+    recent: float = Field(0.5, ge=0.0)
+    warm: float = Field(0.25, ge=0.0)
+    cool: float = Field(0.1, ge=0.0)
+
+
+class MemoryHotnessQuotasConfig(BaseModel):
+    hot: float = Field(0.4, ge=0.0)
+    recent: float = Field(0.3, ge=0.0)
+    warm: float = Field(0.2, ge=0.0)
+    cool: float = Field(0.1, ge=0.0)
+
+
+class MemoryHotnessRateLimitConfig(BaseModel):
+    enabled: bool = Field(True)
+    min_interval_ms: int = Field(60_000, ge=0)
+
+
+class MemoryHotnessRetentionConfig(BaseModel):
+    event_max_age_days: int = Field(30, ge=1)
+    event_max_count: int = Field(50_000, ge=0)
+
+
+class MemoryHotnessConfig(BaseModel):
+    enabled: bool = Field(False)
+    mode_default: str = Field("off", description="off|as_of|dynamic")
+    scope_default: str = Field("default")
+    half_lives: MemoryHotnessHalfLivesConfig = MemoryHotnessHalfLivesConfig()
+    weights: MemoryHotnessWeightsConfig = MemoryHotnessWeightsConfig()
+    thresholds: MemoryHotnessThresholdsConfig = MemoryHotnessThresholdsConfig()
+    quotas: MemoryHotnessQuotasConfig = MemoryHotnessQuotasConfig()
+    rate_limit: MemoryHotnessRateLimitConfig = MemoryHotnessRateLimitConfig()
+    retention: MemoryHotnessRetentionConfig = MemoryHotnessRetentionConfig()
+    allowed_signals: dict[str, list[str]] = Field(
+        default_factory=lambda: {
+            "manual_touch": ["cli", "api"],
+            "pin_set": ["cli", "api"],
+            "pin_unset": ["cli", "api"],
+        }
+    )
+
+    @field_validator("mode_default")
+    @classmethod
+    def validate_mode_default(cls, value: str) -> str:
+        allowed = {"off", "as_of", "dynamic"}
+        if value not in allowed:
+            raise ValueError(f"memory.hotness.mode_default must be one of {sorted(allowed)}")
+        return value
+
+    @field_validator("allowed_signals")
+    @classmethod
+    def validate_allowed_signals(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        if not value:
+            raise ValueError("memory.hotness.allowed_signals must not be empty")
+        for signal, sources in value.items():
+            if not signal.strip():
+                raise ValueError("memory.hotness.allowed_signals keys must be non-empty")
+            if not sources:
+                raise ValueError(f"memory.hotness.allowed_signals[{signal!r}] must list sources")
+        return value
+
+    @model_validator(mode="after")
+    def validate_thresholds(self) -> "MemoryHotnessConfig":
+        thresholds = self.thresholds
+        if not (thresholds.hot >= thresholds.recent >= thresholds.warm >= thresholds.cool):
+            raise ValueError("memory.hotness.thresholds must be descending hot>=recent>=warm>=cool")
+        return self
+
+
 class MemoryConfig(BaseModel):
     enabled: bool = Field(True)
     api_context_pack_enabled: bool = Field(
@@ -870,6 +954,7 @@ class MemoryConfig(BaseModel):
     spans: MemorySpanConfig = MemorySpanConfig()
     retrieval: MemoryRetrievalConfig = MemoryRetrievalConfig()
     compiler: MemoryCompilerConfig = MemoryCompilerConfig()
+    hotness: MemoryHotnessConfig = MemoryHotnessConfig()
 
 
 class PresetConfig(BaseModel):

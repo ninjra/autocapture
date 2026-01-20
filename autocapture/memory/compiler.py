@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..config import MemoryConfig
 from ..logging_utils import get_logger
+from .hotness import HotnessPlugin
 from .models import MemorySnapshotResult
 from .store import MemoryStore
 from .utils import hash_config, sha256_text, stable_json_dumps
@@ -23,12 +24,45 @@ class ContextCompiler:
         *,
         k: int | None = None,
         output_dir: Path | None = None,
+        memory_hotness_mode: str | None = None,
+        memory_hotness_as_of_utc: str | None = None,
+        memory_hotness_scope: str | None = None,
     ) -> MemorySnapshotResult:
         query = (query or "").strip()
         retrieval = self._store.query_spans(query, k=k)
-        items = self._store.list_items(
-            status="active", limit=self._config.compiler.max_memory_items
-        )
+        mode = (memory_hotness_mode or self._config.hotness.mode_default or "off").strip().lower()
+        if not self._config.hotness.enabled:
+            mode = "off"
+        if mode not in {"off", "as_of", "dynamic"}:
+            raise ValueError("memory_hotness_mode must be off, as_of, or dynamic")
+
+        hotness_meta = None
+        if mode == "off":
+            items = self._store.list_items(
+                status="active", limit=self._config.compiler.max_memory_items
+            )
+            item_ids = [item.item_id for item in items.items]
+        else:
+            if not memory_hotness_as_of_utc:
+                raise ValueError("memory_hotness_as_of_utc required when hotness mode is enabled")
+            scope = memory_hotness_scope or self._config.hotness.scope_default
+            plugin = HotnessPlugin(self._store, self._config.hotness)
+            rank_result = plugin.rank(
+                scope=scope,
+                as_of_utc=memory_hotness_as_of_utc,
+                limit=self._config.compiler.max_memory_items,
+            )
+            item_ids = [entry.item_id for entry in rank_result.selected]
+            items = self._store.list_items_by_ids(item_ids)
+            hotness_meta = {
+                "mode": mode,
+                "as_of_utc": memory_hotness_as_of_utc,
+                "scope": scope,
+                "pinned_over_budget_hard": rank_result.pinned_over_budget_hard,
+                "pinned_over_budget_soft": rank_result.pinned_over_budget_soft,
+                "counts": rank_result.counts,
+                "selected": [entry.model_dump(mode="json") for entry in rank_result.selected],
+            }
         span_hits = list(retrieval.spans)
 
         span_hits, truncations = _apply_span_budgets(
@@ -38,10 +72,18 @@ class ContextCompiler:
             max_total_chars=self._config.compiler.max_total_chars,
         )
 
-        item_ids = [item.item_id for item in items.items]
         span_ids = [span.span_id for span in span_hits]
 
         config_payload = self._config.model_dump(mode="json")
+        if mode != "off":
+            config_payload = {
+                **config_payload,
+                "hotness_request": {
+                    "mode": mode,
+                    "as_of_utc": memory_hotness_as_of_utc,
+                    "scope": memory_hotness_scope or self._config.hotness.scope_default,
+                },
+            }
         config_sha256 = hash_config(config_payload)
         snapshot_id = sha256_text(
             stable_json_dumps(
@@ -82,6 +124,8 @@ class ContextCompiler:
             "included_memory_item_ids": item_ids,
             "truncations": truncations,
         }
+        if hotness_meta:
+            context_json["memory_hotness"] = hotness_meta
         output_sha256 = sha256_text(context_md + "\n" + citations_json)
         context_json["output_sha256"] = output_sha256
 
