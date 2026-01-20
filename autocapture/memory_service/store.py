@@ -72,6 +72,7 @@ class MemoryServiceStore:
         self._embedder = embedder
         self._reranker = reranker
         self._policy = MemoryPolicyValidator(config.policy)
+        self._ensure_rls()
 
     def ingest(self, request: MemoryIngestRequest) -> MemoryIngestResponse:
         self._require_postgres()
@@ -82,6 +83,7 @@ class MemoryServiceStore:
         deduped = 0
         rejects: list[MemoryRejectDetail] = []
         with self._db.session() as session:
+            self._set_rls_namespace(session, namespace)
             for idx, proposal in enumerate(request.proposals):
                 reasons = self._policy.validate_proposal(proposal)
                 if not proposal.provenance:
@@ -127,16 +129,11 @@ class MemoryServiceStore:
         namespace = (request.namespace or self._config.default_namespace or "default").strip()
         policy_reasons = self._policy.validate_query_policy(request.policy)
         if policy_reasons:
-            return MemoryQueryResponse(
-                request_id=request.request_id,
-                cards=[],
-                warnings=policy_reasons,
-                truncated=False,
-            )
+            raise ValueError(f"policy_rejected: {', '.join(sorted(policy_reasons))}")
         now = _ensure_aware(request.now_override) if request.now_override else utc_now()
         candidates = self._gather_candidates(request, namespace, now)
-        ranked = self._rank_candidates(candidates, now, request.query)
-        cards, truncated = self._pack_cards(ranked, request)
+        ranked = self._rank_candidates(candidates, now, request.query, namespace=namespace)
+        cards, truncated = self._pack_cards(ranked, request, namespace=namespace)
         return MemoryQueryResponse(
             request_id=request.request_id,
             cards=cards,
@@ -150,6 +147,7 @@ class MemoryServiceStore:
         created_at = utc_now()
         feedback_id = stable_memory_id(namespace, "feedback", f"{request.memory_id}:{created_at}")
         with self._db.session() as session:
+            self._set_rls_namespace(session, namespace)
             session.execute(
                 sa.text(
                     "INSERT INTO memory_feedback("
@@ -201,6 +199,55 @@ class MemoryServiceStore:
         if dialect != "postgresql":
             raise RuntimeError("Memory Service requires PostgreSQL")
 
+    def _ensure_rls(self) -> None:
+        if not self._config.enable_rls:
+            return
+        try:
+            with self._db.engine.begin() as conn:
+                if conn.dialect.name != "postgresql":
+                    return
+                tables = [
+                    "artifact_versions",
+                    "artifact_chunks",
+                    "memory_items",
+                    "entities",
+                    "edges",
+                    "memory_feedback",
+                ]
+                for table in tables:
+                    conn.execute(sa.text(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"))
+                    exists = conn.execute(
+                        sa.text(
+                            "SELECT 1 FROM pg_policies "
+                            "WHERE schemaname = 'public' "
+                            "AND tablename = :table "
+                            "AND policyname = :policy"
+                        ),
+                        {"table": table, "policy": "memory_namespace_isolation"},
+                    ).first()
+                    if exists is None:
+                        policy_sql = (
+                            "CREATE POLICY memory_namespace_isolation ON "
+                            f"{table} USING (namespace = "
+                            "current_setting('autocapture.namespace', true))"
+                        )
+                        conn.execute(
+                            sa.text(policy_sql)
+                        )
+        except Exception as exc:  # pragma: no cover - best effort setup
+            _LOG.warning("Failed to enable memory service RLS: {}", exc)
+
+    def _set_rls_namespace(self, session, namespace: str) -> None:
+        if not self._config.enable_rls:
+            return
+        try:
+            session.execute(
+                sa.text("SELECT set_config('autocapture.namespace', :namespace, true)"),
+                {"namespace": namespace},
+            )
+        except Exception as exc:  # pragma: no cover - best effort
+            _LOG.warning("Failed to set memory service namespace: {}", exc)
+
     def _validate_provenance(
         self, session, proposal: MemoryProposal, namespace: str
     ) -> str | None:
@@ -236,6 +283,7 @@ class MemoryServiceStore:
         sensitivity_rank = self._config.policy.sensitivity_order.index(
             proposal.policy.sensitivity
         )
+        audiences = sorted({aud for aud in proposal.policy.audience if aud})
         session.execute(
             sa.text(
                 "INSERT INTO memory_items("
@@ -258,13 +306,13 @@ class MemoryServiceStore:
                 "status": "validated",
                 "importance": float(proposal.importance),
                 "trust_tier": float(proposal.trust),
-                "audiences": list({aud for aud in proposal.policy.audience if aud}),
+                "audiences": audiences,
                 "sensitivity": proposal.policy.sensitivity,
                 "sensitivity_rank": sensitivity_rank,
                 "valid_from": proposal.valid_from,
                 "valid_to": proposal.valid_to,
                 "policy_labels": {
-                    "audience": proposal.policy.audience,
+                    "audience": audiences,
                     "sensitivity": proposal.policy.sensitivity,
                     "labels": proposal.policy.labels,
                 },
@@ -374,6 +422,7 @@ class MemoryServiceStore:
             entry.reasons.add(reason)
 
         with self._db.session() as session:
+            self._set_rls_namespace(session, namespace)
             if self._config.enable_query_embedding and request.query_embedding:
                 embedding_literal = vector_literal(request.query_embedding)
             elif self._config.enable_query_embedding:
@@ -514,43 +563,38 @@ class MemoryServiceStore:
         return list(visited)
 
     def _rank_candidates(
-        self, candidates: dict[str, CandidateScores], now: dt.datetime, query: str
+        self,
+        candidates: dict[str, CandidateScores],
+        now: dt.datetime,
+        query: str,
+        *,
+        namespace: str | None = None,
     ) -> list[CandidateItem]:
         if not candidates:
             return []
         with self._db.session() as session:
+            if namespace:
+                self._set_rls_namespace(session, namespace)
             memory_ids = list(candidates.keys())
             items = self._load_memory_items(session, memory_ids)
         if not items:
             return []
 
-        if self._config.enable_rerank and self._reranker:
-            rerank_scores = self._reranker.score(query, [item.content_text for item in items])
-            for item, score in zip(items, rerank_scores):
-                entry = candidates.get(item.memory_id)
-                if entry is None:
-                    continue
-                entry.rerank = float(score)
-                entry.reasons.add("rerank")
-
         max_sem = max((candidates[item.memory_id].semantic for item in items), default=1.0)
         max_kw = max((candidates[item.memory_id].keyword for item in items), default=1.0)
         max_graph = max((candidates[item.memory_id].graph for item in items), default=1.0)
-        max_rerank = max((candidates[item.memory_id].rerank for item in items), default=1.0)
 
-        ranked: list[CandidateItem] = []
+        weight = self._config.ranking
+        base_scores: dict[str, float] = {}
         for item in items:
             scores = candidates[item.memory_id]
-            item.scores = scores
             sem = _norm(scores.semantic, max_sem)
             kw = _norm(scores.keyword, max_kw)
             graph = _norm(scores.graph, max_graph)
-            rerank = _norm(scores.rerank, max_rerank)
             recency = _recency_score(
                 item.created_at, now, self._config.ranking.recency_half_life_days
             )
-            weight = self._config.ranking
-            score = (
+            base_scores[item.memory_id] = (
                 weight.weight_semantic * sem
                 + weight.weight_keyword * kw
                 + weight.weight_graph * graph
@@ -558,6 +602,31 @@ class MemoryServiceStore:
                 + weight.weight_importance * float(item.importance)
                 + weight.weight_trust * float(item.trust_tier)
             )
+
+        max_rerank = 1.0
+        if self._config.enable_rerank and self._reranker:
+            rerank_window = max(1, int(self._config.retrieval.rerank_window))
+            window = sorted(
+                items,
+                key=lambda item: (-base_scores[item.memory_id], item.memory_id),
+            )[:rerank_window]
+            rerank_scores = self._reranker.score(query, [item.content_text for item in window])
+            for item, score in zip(window, rerank_scores):
+                entry = candidates.get(item.memory_id)
+                if entry is None:
+                    continue
+                entry.rerank = float(score)
+                entry.reasons.add("rerank")
+            max_rerank = max(
+                (candidates[item.memory_id].rerank for item in window), default=1.0
+            )
+
+        ranked: list[CandidateItem] = []
+        for item in items:
+            scores = candidates[item.memory_id]
+            item.scores = scores
+            rerank = _norm(scores.rerank, max_rerank)
+            score = base_scores[item.memory_id]
             if self._config.enable_rerank and self._reranker:
                 score += weight.weight_rerank * rerank
             item.score = score
@@ -596,7 +665,11 @@ class MemoryServiceStore:
         return items
 
     def _pack_cards(
-        self, ranked: list[CandidateItem], request: MemoryQueryRequest
+        self,
+        ranked: list[CandidateItem],
+        request: MemoryQueryRequest,
+        *,
+        namespace: str | None = None,
     ) -> tuple[list[MemoryCard], bool]:
         if not ranked:
             return [], False
@@ -613,7 +686,7 @@ class MemoryServiceStore:
             )
         )
         memory_ids = [item.memory_id for item in ranked]
-        citations = self._load_citations(memory_ids)
+        citations = self._load_citations(memory_ids, namespace=namespace)
 
         cards: list[MemoryCard] = []
         tokens = 0
@@ -646,10 +719,14 @@ class MemoryServiceStore:
             )
         return cards, truncated
 
-    def _load_citations(self, memory_ids: list[str]) -> dict[str, list[ProvenancePointer]]:
+    def _load_citations(
+        self, memory_ids: list[str], *, namespace: str | None = None
+    ) -> dict[str, list[ProvenancePointer]]:
         if not memory_ids:
             return {}
         with self._db.session() as session:
+            if namespace:
+                self._set_rls_namespace(session, namespace)
             sql, params = _build_in_clause("memory_id", memory_ids)
             rows = session.execute(
                 sa.text(

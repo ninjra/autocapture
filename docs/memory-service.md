@@ -49,6 +49,7 @@ memory_service:
   policy:
     allowed_audiences: ["internal"]
     sensitivity_order: ["low", "medium", "high"]
+    reject_person_text: false
 
 features:
   enable_memory_service_write_hook: false
@@ -81,6 +82,7 @@ Common reject reasons include:
 - `policy_pii_detected`
 - `policy_secret_detected`
 - `policy_person_entity_detected`
+- `policy_person_text_detected` (when enabled)
 - `policy_preference_detected`
 - `policy_audience_missing` / `policy_sensitivity_invalid`
 - `missing_provenance`

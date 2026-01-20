@@ -53,8 +53,22 @@ def test_policy_rejects_pii_secret_person_preference() -> None:
     pref_reasons = validator.validate_proposal(pref)
     assert "policy_preference_detected" in pref_reasons
 
+    pref_text = _base_proposal(content_text="User preferences include dark mode.")
+    pref_text_reasons = validator.validate_proposal(pref_text)
+    assert "policy_preference_detected" in pref_text_reasons
+
 
 def test_policy_allows_safe_proposal() -> None:
     validator = MemoryPolicyValidator(MemoryServicePolicyConfig())
     proposal = _base_proposal(content_text="Deploys run nightly at 02:00 UTC.")
     assert validator.validate_proposal(proposal) == []
+
+
+def test_policy_person_text_detection_toggle() -> None:
+    proposal = _base_proposal(content_text="Employee: Ada Lovelace updated the runbook.")
+
+    relaxed = MemoryPolicyValidator(MemoryServicePolicyConfig())
+    assert "policy_person_text_detected" not in relaxed.validate_proposal(proposal)
+
+    strict = MemoryPolicyValidator(MemoryServicePolicyConfig(reject_person_text=True))
+    assert "policy_person_text_detected" in strict.validate_proposal(proposal)
