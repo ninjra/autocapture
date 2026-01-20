@@ -23,8 +23,9 @@ function Invoke-Poetry([string[]]$PoetryArgs) {
 }
 
 function Ensure-ProjectInstalled() {
+  $probe = "from autocapture.logging_utils import get_logger"
   try {
-    Invoke-Poetry @("run", "python", "-c", "import autocapture")
+    Invoke-Poetry @("run", "python", "-c", $probe)
     return
   } catch {
     Invoke-Poetry @(
@@ -32,7 +33,7 @@ function Ensure-ProjectInstalled() {
     )
   }
 
-  Invoke-Poetry @("run", "python", "-c", "import autocapture")
+  Invoke-Poetry @("run", "python", "-c", $probe)
 }
 
 function Run-Once([string]$TraceFile) {

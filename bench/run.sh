@@ -17,7 +17,7 @@ mkdir -p "$RESULTS_DIR" "$TRACE_DIR"
 
 printf "iteration\tms\n" > "$TIMING_FILE"
 
-if ! poetry run python -c "import autocapture" >/dev/null 2>&1; then
+if ! poetry run python -c "from autocapture.logging_utils import get_logger" >/dev/null 2>&1; then
   echo "Autocapture is not installed in this environment."
   echo "Run: poetry install --with dev --no-interaction --no-ansi"
   exit 1
