@@ -15,6 +15,19 @@
   CLI wrappers invoked by the graph service.
 - `graph_service.worker_timeout_s`: CLI timeout for index/query jobs.
 
+## Memory Service
+- `memory_service.enabled`: enable the Memory Service (default: false).
+- `memory_service.bind_host` / `memory_service.port`: bind address and port.
+- `memory_service.database_url`: optional DB URL override for the Memory Service.
+- `memory_service.default_namespace`: namespace used when none supplied by clients.
+- `memory_service.enable_ingest` / `enable_query` / `enable_feedback`: endpoint toggles.
+- `memory_service.embedder.provider`: `stub` or `local` (default: stub).
+- `memory_service.reranker.provider`: `disabled` or `stub`.
+- `memory_service.retrieval.*`: `topk_*`, budgets, type priority, and per-type caps.
+- `memory_service.ranking.*`: stable ranking weights and recency half-life.
+- `memory_service.policy.allowed_audiences`: allowlist for query and ingest.
+- `memory_service.policy.sensitivity_order`: ordered list for sensitivity checks.
+
 ## Retrieval
 - `retrieval.v2_enabled`, `retrieval.use_spans_v2`: enable v2 retrieval paths.
 - `retrieval.sparse_enabled`, `retrieval.late_enabled`: enable sparse + late-interaction stages.
@@ -28,6 +41,8 @@
 
 ## Features
 - `features.enable_otel`: enable OpenTelemetry spans/metrics (default: true).
+- `features.enable_memory_service_write_hook`: enable Memory Service ingest hook.
+- `features.enable_memory_service_read_hook`: enable Memory Service read hook.
 
 ## Model Registry
 - `model_registry.enabled`: enable stage-based routing registry.

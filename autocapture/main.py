@@ -53,6 +53,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub.add_parser("api", help="Run the local API + UI server.")
     sub.add_parser("gateway", help="Run the LLM gateway service.")
     sub.add_parser("graph-worker", help="Run the graph retrieval worker service.")
+    sub.add_parser("memory-service", help="Run the organizational Memory Service.")
     sub.add_parser("worker", help="Run the OCR ingest worker loop only.")
     sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
     sub.add_parser("smoke", help="Run minimal smoke checks and exit.")
@@ -651,6 +652,24 @@ def main(argv: list[str] | None = None) -> None:
                 app,
                 host=config.graph_service.bind_host,
                 port=config.graph_service.port,
+                log_level="info",
+            )
+        )
+        server.run()
+        return
+
+    if cmd == "memory-service":
+        from .memory_service.app import create_memory_service_app
+        import uvicorn
+
+        if not config.memory_service.enabled:
+            logger.warning("memory_service.enabled is false; starting anyway for explicit run.")
+        app = create_memory_service_app(config)
+        server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host=config.memory_service.bind_host,
+                port=config.memory_service.port,
                 log_level="info",
             )
         )
