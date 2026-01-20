@@ -15,10 +15,10 @@ $OutputFile = Join-Path $ResultsDir "output_$CaseId.txt"
 New-Item -ItemType Directory -Force -Path $ResultsDir, $TraceDir | Out-Null
 "iteration`tms" | Set-Content -Encoding utf8 $TimingFile
 
-function Invoke-Poetry([string[]]$Args) {
-  & poetry @Args
+function Invoke-Poetry([string[]]$PoetryArgs) {
+  & poetry @PoetryArgs
   if ($LASTEXITCODE -ne 0) {
-    throw "poetry command failed: $($Args -join ' ')"
+    throw "poetry command failed: $($PoetryArgs -join ' ')"
   }
 }
 
