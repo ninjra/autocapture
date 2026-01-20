@@ -22,6 +22,19 @@ function Invoke-Poetry([string[]]$PoetryArgs) {
   }
 }
 
+function Ensure-ProjectInstalled() {
+  try {
+    Invoke-Poetry @("run", "python", "-c", "import autocapture")
+    return
+  } catch {
+    Invoke-Poetry @(
+      "install", "--with", "dev", "--no-interaction", "--no-ansi"
+    )
+  }
+
+  Invoke-Poetry @("run", "python", "-c", "import autocapture")
+}
+
 function Run-Once([string]$TraceFile) {
   if ($TraceFile) {
     Invoke-Poetry @(
@@ -49,14 +62,7 @@ try {
   if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
     throw "poetry not found in PATH. Install Poetry and retry."
   }
-  try {
-    Invoke-Poetry @("run", "python", "-c", "import autocapture")
-  } catch {
-    throw (
-      "Autocapture is not installed in this environment. " +
-      "Run: poetry install --with dev --no-interaction --no-ansi"
-    )
-  }
+  Ensure-ProjectInstalled
 
   for ($i = 1; $i -le $Warmup; $i++) {
     Run-Once ""
