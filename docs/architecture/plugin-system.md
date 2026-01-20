@@ -16,6 +16,9 @@ Each plugin ships a `plugin.yaml`:
 - `plugin_id`, `name`, `version`, `enabled_by_default`
 - `extensions[]` with `kind`, `id`, `name`, `aliases`, `pillars`, `factory`
 - `factory.type` supports `python`, `bundle`, and `file`
+  - Extension kinds include providers, retrieval strategies, graph adapters,
+    decode backends, and training pipelines (see `autocapture/plugins/constants.py`
+    for the canonical list).
 
 Factories are resolved only when the extension is used. Disabled plugins are not imported.
 

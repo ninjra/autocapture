@@ -22,11 +22,14 @@ from ...embeddings.service import EmbeddingService
 from ...memory.reranker import CrossEncoderReranker
 from ...memory.compression import CompressedAnswer, extractive_answer
 from ...memory.verification import RulesVerifier
+from ...gateway.decode import decode_backend_from_settings, extract_backend_settings
+from ...memory.graph_adapters import GraphAdapterClient
 from ...memory.retrieval import RetrievalService
 from ...indexing.vector_index import QdrantBackend, VectorBackend
 from ...paths import resource_root
 from ..policy import PolicyGate
 from ..sdk.context import PluginContext, LLMProviderInfo
+from ...training.pipelines import pipeline_from_settings
 
 
 class DisabledExtractor:
@@ -328,6 +331,7 @@ def create_retrieval_local(context: PluginContext, **kwargs) -> RetrievalService
     reranker = kwargs.get("reranker")
     spans_index = kwargs.get("spans_index")
     runtime_governor = kwargs.get("runtime_governor")
+    plugin_manager = kwargs.get("plugin_manager")
     return RetrievalService(
         db,
         config,
@@ -336,7 +340,23 @@ def create_retrieval_local(context: PluginContext, **kwargs) -> RetrievalService
         reranker=reranker,
         spans_index=spans_index,
         runtime_governor=runtime_governor,
+        plugin_manager=plugin_manager,
     )
+
+
+def create_graph_adapter_graphrag(context: PluginContext, **kwargs) -> GraphAdapterClient:
+    config: AppConfig = context.config
+    return GraphAdapterClient("graphrag", config.retrieval.graph_adapters.graphrag)
+
+
+def create_graph_adapter_hypergraphrag(context: PluginContext, **kwargs) -> GraphAdapterClient:
+    config: AppConfig = context.config
+    return GraphAdapterClient("hypergraphrag", config.retrieval.graph_adapters.hypergraphrag)
+
+
+def create_graph_adapter_hyperrag(context: PluginContext, **kwargs) -> GraphAdapterClient:
+    config: AppConfig = context.config
+    return GraphAdapterClient("hyperrag", config.retrieval.graph_adapters.hyperrag)
 
 
 def create_vector_backend_qdrant(context: PluginContext, **kwargs) -> VectorBackend | None:
@@ -352,6 +372,54 @@ def create_vector_backend_qdrant(context: PluginContext, **kwargs) -> VectorBack
 def create_prompt_bundle_builtin(context: PluginContext, **kwargs) -> Path:
     _ = context
     return resource_root() / "autocapture" / "prompts" / "derived"
+
+
+def _decode_backend_from_context(context: PluginContext, backend_id: str):
+    settings = extract_backend_settings(context.plugin_settings, backend_id)
+    try:
+        return decode_backend_from_settings(backend_id, settings)
+    except Exception:
+        for provider in context.config.model_registry.providers:
+            if provider.id == backend_id:
+                return provider
+        raise RuntimeError(f"Decode backend '{backend_id}' missing configuration")
+
+
+def create_decode_backend_swift(context: PluginContext, **kwargs):
+    return _decode_backend_from_context(context, "swift")
+
+
+def create_decode_backend_lookahead(context: PluginContext, **kwargs):
+    return _decode_backend_from_context(context, "lookahead")
+
+
+def create_decode_backend_medusa(context: PluginContext, **kwargs):
+    return _decode_backend_from_context(context, "medusa")
+
+
+def _training_settings(context: PluginContext, pipeline_id: str) -> dict:
+    settings = context.plugin_settings if isinstance(context.plugin_settings, dict) else {}
+    pipelines = settings.get("pipelines") if isinstance(settings, dict) else None
+    if isinstance(pipelines, dict):
+        scoped = pipelines.get(pipeline_id)
+        if isinstance(scoped, dict):
+            return scoped
+    return settings if isinstance(settings, dict) else {}
+
+
+def create_training_pipeline_lora(context: PluginContext, **kwargs):
+    settings = _training_settings(context, "lora")
+    return pipeline_from_settings("lora", settings)
+
+
+def create_training_pipeline_qlora(context: PluginContext, **kwargs):
+    settings = _training_settings(context, "qlora")
+    return pipeline_from_settings("qlora", settings)
+
+
+def create_training_pipeline_dpo(context: PluginContext, **kwargs):
+    settings = _training_settings(context, "dpo")
+    return pipeline_from_settings("dpo", settings)
 
 
 def _is_cloud_endpoint(base_url: str) -> bool:

@@ -76,5 +76,93 @@ Plugins cannot bypass these rules.
 If two enabled plugins provide the same extension ID, resolution fails unless
 `plugins.extension_overrides` specifies the winning plugin ID.
 
+## Graph adapters
+Graph retrieval adapters are exposed via `graph.adapter` extensions. Built-in adapters
+wrap the configured HTTP clients for `graphrag`, `hypergraphrag`, and `hyperrag`.
+These adapters still use `retrieval.graph_adapters.*` config for endpoints and timeouts.
+
+## Decode backends
+Decode backends are exposed via `decode.backend` extensions (swift/lookahead/medusa).
+They are proxy adapters that forward requests to OpenAI-compatible servers. Configure
+per-backend endpoints in `settings.json` under `plugins.configs`:
+```json
+{
+  "plugins": {
+    "configs": {
+      "autocapture.builtin.decode": {
+        "backends": {
+          "medusa": {
+            "base_url": "http://127.0.0.1:8012",
+            "allow_cloud": false,
+            "max_concurrency": 1
+          }
+        }
+      }
+    }
+  }
+}
+```
+Use the backend id in `model_registry.stages[*].decode.backend_provider_id`.
+Example (vLLM, local):
+```bash
+scripts/run_vllm_gpu_a.sh <model-name>
+scripts/run_vllm_gpu_b.sh <model-name>
+scripts/run_vllm_cpu.sh <model-name>
+```
+
+## Training pipelines
+Training pipelines are exposed via `training.pipeline` extensions (lora/qlora/dpo).
+By default they return a structured "unavailable" response. You can opt in to
+command-based execution via `settings.json`:
+```json
+{
+  "plugins": {
+    "configs": {
+      "autocapture.builtin.training": {
+        "pipelines": {
+          "lora": {
+            "command": ["python", "scripts/run_lora.py", "--dataset", "{dataset_path}"],
+            "args": ["--out", "{output_dir}", "--params", "{params_json}"],
+            "working_dir": ".",
+            "timeout_s": 3600
+          }
+        }
+      }
+    }
+  }
+}
+```
+Placeholders: `{dataset_path}`, `{output_dir}`, `{run_id}`, `{params_json}`.
+CLI:
+```bash
+poetry run autocapture training list
+poetry run autocapture training run lora --config path/to/run.yml
+```
+To execute a training step, pass `--train` and provide a local model path plus optional
+dependencies (`transformers`, `peft`, `torch`, `trl` for DPO, `bitsandbytes` for QLoRA).
+Example configs (settings.json):
+```json
+{
+  "plugins": {
+    "configs": {
+      "autocapture.builtin.training": {
+        "pipelines": {
+          "qlora": {
+            "command": ["python", "scripts/run_qlora.py", "--dataset", "{dataset_path}"],
+            "args": ["--out", "{output_dir}", "--params", "{params_json}"],
+            "timeout_s": 3600
+          },
+          "dpo": {
+            "command": ["python", "scripts/run_dpo.py", "--dataset", "{dataset_path}"],
+            "args": ["--out", "{output_dir}", "--params", "{params_json}"],
+            "timeout_s": 3600
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ## Safe Mode
 Set `AUTOCAPTURE_SAFE_MODE=1` or `plugins.safe_mode=true` to load built-ins only.

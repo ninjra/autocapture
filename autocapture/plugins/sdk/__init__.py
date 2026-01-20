@@ -18,6 +18,9 @@ from .protocols import (
     Compressor,
     Verifier,
     ResearchSource,
+    GraphAdapter,
+    DecodeBackend,
+    TrainingPipeline,
 )
 
 __all__ = [
@@ -36,4 +39,7 @@ __all__ = [
     "Compressor",
     "Verifier",
     "ResearchSource",
+    "GraphAdapter",
+    "DecodeBackend",
+    "TrainingPipeline",
 ]

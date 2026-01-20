@@ -19,6 +19,7 @@ from ..resilience import RetryPolicy, retry_async, is_retryable_exception, is_re
 from ..answer.claims import parse_claims_json
 from ..answer.claim_validation import ClaimValidator, EvidenceLineInfo
 from ..observability.otel import otel_span
+from ..plugins import PluginManager
 
 _LOG = get_logger("gateway")
 
@@ -42,11 +43,14 @@ class GatewayRouter:
         *,
         registry: ModelRegistry | None = None,
         http_client_factory: Callable[..., httpx.AsyncClient] | None = None,
+        plugin_manager: PluginManager | None = None,
     ) -> None:
         self._config = config
         self._registry = registry or ModelRegistry(config.model_registry)
         self._validator = ClaimValidator(config.verification.citation_validator)
         self._client_factory = http_client_factory
+        self._plugins = plugin_manager or PluginManager(config)
+        self._log = _LOG
         self._provider_breakers: dict[str, int] = {}
         self._provider_open_until: dict[str, float] = {}
         self._decode_limits: dict[str, asyncio.Semaphore] = {}
@@ -255,9 +259,9 @@ class GatewayRouter:
                 payload = _build_repair_payload(payload, errors)
                 payload["temperature"] = 0.0
             if stage.decode.strategy != "standard":
-                backend = self._registry.decode_backend(stage)
-                if backend is None:
-                    raise UpstreamError("decode_backend_missing", status_code=500)
+                backend = self._resolve_decode_backend(stage)
+                if not _cloud_allowed(self._config, policy.allow_cloud, backend):
+                    raise UpstreamError("cloud_blocked", status_code=403)
                 decode_limit = stage.decode.max_concurrency
                 if stage.decode.strategy == "medusa":
                     decode_limit = 1
@@ -303,6 +307,24 @@ class GatewayRouter:
                 raise UpstreamError("citations_missing", status_code=422)
             return response
         raise UpstreamError("claims_validation_failed", status_code=422)
+
+    def _resolve_decode_backend(self, stage) -> object:
+        backend_id = stage.decode.backend_provider_id
+        if not backend_id:
+            raise UpstreamError("decode_backend_missing", status_code=500)
+        backend = None
+        if self._plugins is not None:
+            try:
+                backend = self._plugins.resolve_extension("decode.backend", backend_id)
+            except Exception as exc:
+                self._log.warning("Decode backend plugin failed ({}): {}", backend_id, exc)
+        if backend is None:
+            try:
+                backend = self._registry.decode_backend(stage)
+            except Exception as exc:
+                raise UpstreamError("decode_backend_missing", status_code=500) from exc
+        _validate_decode_backend(backend)
+        return backend
 
     async def _call_upstream(
         self,
@@ -583,6 +605,32 @@ def _build_repair_payload(payload: dict[str, Any], errors: list[str]) -> dict[st
         ),
     }
     return {**payload, "messages": messages + [repair_msg], "temperature": 0.0}
+
+
+def _validate_decode_backend(backend: object) -> None:
+    required = (
+        "id",
+        "type",
+        "base_url",
+        "api_key",
+        "api_key_env",
+        "timeout_s",
+        "retries",
+        "headers",
+        "allow_cloud",
+        "circuit_breaker",
+        "max_concurrency",
+    )
+    missing = [name for name in required if not hasattr(backend, name)]
+    if missing:
+        raise UpstreamError(
+            f"decode_backend_invalid: missing {', '.join(sorted(missing))}",
+            status_code=500,
+        )
+    backend_type = getattr(backend, "type", None)
+    backend_url = getattr(backend, "base_url", None)
+    if not backend_url and backend_type != "openai":
+        raise UpstreamError("decode_backend_missing_base_url", status_code=500)
 
 
 def _extract_evidence_map(messages: list[dict[str, Any]]) -> dict[str, EvidenceLineInfo]:

@@ -59,6 +59,34 @@ pack payload sent to LLMs is controlled by `output.context_pack_format` (`json` 
 `tron`). For cloud stages, TRON context packs are used only when
 `output.allow_tron_compression=true` (default `false`).
 
+## Decode Backends (Swift/Lookahead/Medusa)
+
+Decode backends are proxy adapters that point at OpenAI-compatible servers. Launch vLLM:
+```bash
+scripts/run_vllm_gpu_a.sh <model-name>
+scripts/run_vllm_gpu_b.sh <model-name>
+scripts/run_vllm_cpu.sh <model-name>
+```
+Then configure the decode backend in `settings.json`:
+```json
+{
+  "plugins": {
+    "configs": {
+      "autocapture.builtin.decode": {
+        "backends": {
+          "medusa": {
+            "base_url": "http://127.0.0.1:8012",
+            "allow_cloud": false,
+            "max_concurrency": 1
+          }
+        }
+      }
+    }
+  }
+}
+```
+Reference the backend in `model_registry.stages[*].decode.backend_provider_id`.
+
 ## Research Scout
 
 Generate a cached model/paper report (local-first, offline-aware):
@@ -70,6 +98,40 @@ poetry run autocapture research scout --out "docs/research/scout_report.json"
 The scout appends a short summary to `docs/research/scout_log.md` by default.
 Scheduled runs are available via `.github/workflows/research-scout.yml`, which
 opens a PR only when the ranked list changes beyond the configured threshold.
+
+## Training Pipelines (Scaffold)
+
+Training pipelines are scaffolded as plugins only; they do not run real training
+jobs until you supply an implementation.
+
+```bash
+poetry run autocapture training list
+poetry run autocapture training run lora --config path/to/run.yml
+```
+Use `--dry-run` to validate configuration without executing.
+Use `--train` with a local model path and optional deps (`transformers`, `peft`, `torch`).
+Sample datasets for dry-run checks live under `docs/training_sample.json`
+and `docs/dpo_sample.json`.
+
+Example `settings.json` (command-based training):
+```json
+{
+  "plugins": {
+    "configs": {
+      "autocapture.builtin.training": {
+        "pipelines": {
+          "lora": {
+            "command": ["python", "scripts/run_lora.py", "--dataset", "{dataset_path}"],
+            "args": ["--out", "{output_dir}", "--params", "{params_json}"],
+            "timeout_s": 3600
+          }
+        }
+      }
+    }
+  }
+}
+```
+Placeholders: `{dataset_path}`, `{output_dir}`, `{run_id}`, `{params_json}`.
 
 ## TNAS Service Hosting (Optional)
 

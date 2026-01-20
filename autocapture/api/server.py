@@ -452,6 +452,7 @@ def create_app(
                 "embedder": embedder_obj,
                 "vector_index": vector_index,
                 "reranker": reranker,
+                "plugin_manager": plugins,
             },
         )
     except Exception as exc:
@@ -463,6 +464,7 @@ def create_app(
             embedder=embedder_obj,
             vector_index=vector_index,
             reranker=reranker,
+            plugin_manager=plugins,
         )
     thread_retrieval = ThreadRetrievalService(
         config,

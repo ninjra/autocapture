@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from ..logging_utils import get_logger
 from ..security.secret_store import SecretStore as EnvSecretStore
 
-from ..config import AppConfig, LLMConfig, ProviderRoutingConfig, PrivacyConfig
+from ..config import AppConfig, LLMConfig, ProviderRoutingConfig, PrivacyConfig, is_loopback_host
 from ..llm.providers import LLMProvider, OpenAICompatibleProvider, OpenAIProvider, OllamaProvider
 from ..llm.governor import get_global_governor
 from ..llm.prompt_strategy import PromptStrategySettings
@@ -71,15 +71,20 @@ class ProviderRouter:
             selection = RoutingDecision(llm_provider=decision.provider)
             self._log.info("Provider selection: kind=llm provider={}", selection.llm_provider)
             return provider, selection
-        if self._routing.llm == "openai" and not self._privacy.cloud_enabled and not self._offline:
+        if self._routing.llm == "openai" and not _cloud_allowed(self._privacy, self._offline):
             raise RuntimeError(
                 "Cloud provider blocked. Enable a cloud profile (privacy.cloud_enabled=true) "
-                "to allow OpenAI usage."
+                "and disable offline mode to allow OpenAI usage."
             )
         if self._routing.llm == "openai_compatible":
             base_url = self._llm_config.openai_compatible_base_url
             if not base_url:
                 raise RuntimeError("openai_compatible_base_url is required for openai_compatible")
+            if _is_cloud_endpoint(base_url) and not _cloud_allowed(self._privacy, self._offline):
+                raise RuntimeError(
+                    "Cloud provider blocked. Enable a cloud profile (privacy.cloud_enabled=true) "
+                    "and disable offline mode to allow OpenAI-compatible usage."
+                )
             api_key = self._llm_config.openai_compatible_api_key
             if not api_key:
                 record = self._secrets.get("OPENAI_COMPATIBLE_API_KEY")
@@ -99,6 +104,11 @@ class ProviderRouter:
                 selection,
             )
         if self._routing.llm.startswith("openai") and self._llm_config.openai_api_key:
+            if not _cloud_allowed(self._privacy, self._offline):
+                raise RuntimeError(
+                    "Cloud provider blocked. Enable a cloud profile (privacy.cloud_enabled=true) "
+                    "and disable offline mode to allow OpenAI usage."
+                )
             selection = RoutingDecision(llm_provider="openai")
             self._log.info("Provider selection: kind=llm provider={}", selection.llm_provider)
             return (
@@ -115,6 +125,12 @@ class ProviderRouter:
         if self._routing.llm.startswith("openai") and not self._llm_config.openai_api_key:
             record = self._secrets.get("OPENAI_API_KEY")
             if record:
+                if not _cloud_allowed(self._privacy, self._offline):
+                    raise RuntimeError(
+                        "Cloud provider blocked. Enable a cloud profile "
+                        "(privacy.cloud_enabled=true) and disable offline mode to allow OpenAI "
+                        "usage."
+                    )
                 selection = RoutingDecision(llm_provider="openai")
                 self._log.info("Provider selection: kind=llm provider={}", selection.llm_provider)
                 return (
@@ -142,6 +158,22 @@ class ProviderRouter:
             ),
             selection,
         )
+
+
+def _cloud_allowed(privacy: PrivacyConfig, offline: bool) -> bool:
+    if offline:
+        return False
+    return bool(privacy.cloud_enabled)
+
+
+def _is_cloud_endpoint(base_url: str) -> bool:
+    from urllib.parse import urlparse
+
+    parsed = urlparse(base_url)
+    host = parsed.hostname or ""
+    if not host:
+        return False
+    return not is_loopback_host(host)
 
     def select_embedding(self) -> ProviderSelection:
         provider_id = (self._routing.embedding or "local").strip().lower()

@@ -263,6 +263,34 @@ graph_service:
   hypergraphrag_cli: "scripts/hypergraphrag_worker.sh"
   hyperrag_cli: "scripts/hyperrag_worker.sh"
   worker_timeout_s: 60.0
+plugins:
+  directory: null
+  safe_mode: false
+  # Plugin configs (decode/training) live in settings.json, for example:
+  # {
+  #   "plugins": {
+  #     "configs": {
+  #       "autocapture.builtin.decode": {
+  #         "backends": {
+  #           "medusa": {
+  #             "base_url": "http://127.0.0.1:8012",
+  #             "allow_cloud": false,
+  #             "max_concurrency": 1
+  #           }
+  #         }
+  #       },
+  #       "autocapture.builtin.training": {
+  #         "pipelines": {
+  #           "lora": {
+  #             "command": ["python", "scripts/run_lora.py", "--dataset", "{dataset_path}"],
+  #             "args": ["--out", "{output_dir}"],
+  #             "timeout_s": 3600
+  #           }
+  #         }
+  #       }
+  #     }
+  #   }
+  # }
 model_registry:
   enabled: true
   providers:

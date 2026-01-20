@@ -1,0 +1,41 @@
+schema_version: 1
+plugin_id: autocapture.builtin.graph
+name: Autocapture Builtin Graph Adapters
+version: 1.0.0
+description: Built-in graph adapter clients (GraphRAG, HyperGraphRAG, Hyper-RAG).
+enabled_by_default: true
+extensions:
+  - kind: graph.adapter
+    id: graphrag
+    name: GraphRAG Adapter
+    aliases: [graph]
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_graph_adapter_graphrag
+  - kind: graph.adapter
+    id: hypergraphrag
+    name: HyperGraphRAG Adapter
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_graph_adapter_hypergraphrag
+  - kind: graph.adapter
+    id: hyperrag
+    name: Hyper-RAG Adapter
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_graph_adapter_hyperrag

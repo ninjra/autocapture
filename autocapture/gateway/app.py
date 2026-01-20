@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from ..config import AppConfig, is_loopback_host
+from ..plugins import PluginManager
 from ..logging_utils import get_logger
 from ..observability.metrics import (
     gateway_failures_total,
@@ -26,8 +27,9 @@ def create_gateway_app(
     config: AppConfig,
     *,
     router: GatewayRouter | None = None,
+    plugin_manager: PluginManager | None = None,
 ) -> FastAPI:
-    router = router or GatewayRouter(config)
+    router = router or GatewayRouter(config, plugin_manager=plugin_manager)
     app = FastAPI(title="Autocapture LLM Gateway")
 
     @app.middleware("http")

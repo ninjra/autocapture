@@ -1,0 +1,40 @@
+schema_version: 1
+plugin_id: autocapture.builtin.training
+name: Autocapture Builtin Training Pipelines
+version: 1.0.0
+description: Training pipeline scaffolds (LoRA/QLoRA/DPO).
+enabled_by_default: true
+extensions:
+  - kind: training.pipeline
+    id: lora
+    name: LoRA Pipeline
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_training_pipeline_lora
+  - kind: training.pipeline
+    id: qlora
+    name: QLoRA Pipeline
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_training_pipeline_qlora
+  - kind: training.pipeline
+    id: dpo
+    name: DPO Pipeline
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_training_pipeline_dpo

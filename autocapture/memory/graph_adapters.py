@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 import httpx
 
 from ..config import GraphAdapterConfig, GraphAdaptersConfig
 from ..logging_utils import get_logger
+if TYPE_CHECKING:  # pragma: no cover - typing-only import to avoid circular deps
+    from ..plugins import PluginManager
 from ..resilience import RetryPolicy, retry_sync, is_retryable_exception
 
 
@@ -94,15 +96,35 @@ class GraphAdapterClient:
 
 
 class GraphAdapterGroup:
-    def __init__(self, config: GraphAdaptersConfig) -> None:
+    def __init__(
+        self,
+        config: GraphAdaptersConfig,
+        *,
+        plugin_manager: "PluginManager | None" = None,
+    ) -> None:
+        self._log = get_logger("graph.adapters")
+        self._plugins = plugin_manager
         self._adapters = {
-            "graphrag": GraphAdapterClient("graphrag", config.graphrag),
-            "hypergraphrag": GraphAdapterClient("hypergraphrag", config.hypergraphrag),
-            "hyperrag": GraphAdapterClient("hyperrag", config.hyperrag),
+            "graphrag": self._resolve_adapter("graphrag", config.graphrag),
+            "hypergraphrag": self._resolve_adapter("hypergraphrag", config.hypergraphrag),
+            "hyperrag": self._resolve_adapter("hyperrag", config.hyperrag),
         }
 
+    def _resolve_adapter(self, name: str, config: GraphAdapterConfig) -> object:
+        if self._plugins is None:
+            return GraphAdapterClient(name, config)
+        try:
+            return self._plugins.resolve_extension(
+                "graph.adapter",
+                name,
+                factory_kwargs={"config": config, "adapter_name": name},
+            )
+        except Exception as exc:
+            self._log.warning("Graph adapter plugin failed ({}): {}", name, exc)
+            return GraphAdapterClient(name, config)
+
     def enabled(self) -> bool:
-        return any(adapter.enabled for adapter in self._adapters.values())
+        return any(bool(getattr(adapter, "enabled", False)) for adapter in self._adapters.values())
 
     def query(
         self,
@@ -114,6 +136,8 @@ class GraphAdapterGroup:
     ) -> list[GraphHit]:
         hits: list[GraphHit] = []
         for adapter in self._adapters.values():
+            if not bool(getattr(adapter, "enabled", False)):
+                continue
             hits.extend(adapter.query(query, limit=limit, time_range=time_range, filters=filters))
         return hits
 

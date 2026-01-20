@@ -1,0 +1,12 @@
+[
+  {
+    "prompt": "Summarize the meeting notes.",
+    "chosen": "The meeting focused on shipping the pluginized decode backends and documenting vLLM setup.",
+    "rejected": "We talked about unrelated topics."
+  },
+  {
+    "prompt": "Explain how to enable training pipelines.",
+    "chosen": "Enable a command in settings.json under plugins.configs.autocapture.builtin.training.",
+    "rejected": "Training runs automatically without configuration."
+  }
+]
