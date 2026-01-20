@@ -27,6 +27,11 @@ _DEFAULT_SECRET_PATTERNS = [
     r"(?i)gh[pous]_[A-Za-z0-9-]{8,}",
 ]
 
+_DEFAULT_PERSON_TEXT_PATTERNS = [
+    r"\b(?:employee|person|user|owner|manager|lead|contact)\s*:\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b",
+    r"\b(?:mr|ms|mrs|dr)\.?\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2}\b",
+]
+
 _PREFERENCE_KEYS = {
     "preference",
     "preferences",
@@ -50,6 +55,12 @@ class MemoryPolicyValidator:
         self._secret_patterns = _compile_patterns(
             config.secret_patterns if config.secret_patterns else _DEFAULT_SECRET_PATTERNS
         )
+        person_patterns = (
+            config.person_text_patterns
+            if config.person_text_patterns
+            else _DEFAULT_PERSON_TEXT_PATTERNS
+        )
+        self._person_text_patterns = _compile_patterns(person_patterns)
 
     def validate_proposal(self, proposal: MemoryProposal) -> list[str]:
         reasons: list[str] = []
@@ -69,7 +80,14 @@ class MemoryPolicyValidator:
             reasons.append("policy_secret_detected")
         if self._config.reject_person_entities and _has_person_entity(proposal.entities):
             reasons.append("policy_person_entity_detected")
-        if self._config.reject_preferences and _contains_preferences(proposal.content_json):
+        if self._config.reject_person_text and _contains_patterns(
+            normalize_text(proposal.content_text), self._person_text_patterns
+        ):
+            reasons.append("policy_person_text_detected")
+        if self._config.reject_preferences and (
+            _contains_preferences(proposal.content_json)
+            or _contains_preferences(proposal.content_text)
+        ):
             reasons.append("policy_preference_detected")
         return reasons
 

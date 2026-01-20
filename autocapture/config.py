@@ -1561,6 +1561,8 @@ class MemoryServicePolicyConfig(BaseModel):
     allowed_audiences: list[str] = Field(default_factory=lambda: ["internal"])
     sensitivity_order: list[str] = Field(default_factory=lambda: ["low", "medium", "high"])
     reject_person_entities: bool = Field(True)
+    reject_person_text: bool = Field(False)
+    person_text_patterns: list[str] = Field(default_factory=list)
     reject_preferences: bool = Field(True)
     pii_patterns: list[str] = Field(default_factory=list)
     secret_patterns: list[str] = Field(default_factory=list)

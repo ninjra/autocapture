@@ -6,7 +6,14 @@ import httpx
 
 from ..config import MemoryServiceConfig
 from ..logging_utils import get_logger
-from .schemas import MemoryQueryRequest, MemoryQueryResponse, MemoryIngestRequest, MemoryIngestResponse
+from .schemas import (
+    MemoryFeedbackRequest,
+    MemoryFeedbackResponse,
+    MemoryIngestRequest,
+    MemoryIngestResponse,
+    MemoryQueryRequest,
+    MemoryQueryResponse,
+)
 
 _LOG = get_logger("memory.client")
 
@@ -45,3 +52,14 @@ class MemoryServiceClient:
         )
         response.raise_for_status()
         return MemoryQueryResponse.model_validate(response.json())
+
+    def feedback(self, payload: MemoryFeedbackRequest) -> MemoryFeedbackResponse:
+        url = f"{self._base_url}/v1/memory/feedback"
+        response = httpx.post(
+            url,
+            json=payload.model_dump(mode="json"),
+            headers=self._headers(),
+            timeout=self._config.request_timeout_s,
+        )
+        response.raise_for_status()
+        return MemoryFeedbackResponse.model_validate(response.json())
