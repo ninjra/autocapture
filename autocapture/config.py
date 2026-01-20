@@ -899,7 +899,7 @@ class MemoryHotnessRetentionConfig(BaseModel):
 
 
 class MemoryHotnessConfig(BaseModel):
-    enabled: bool = Field(False)
+    enabled: bool = Field(True)
     mode_default: str = Field("off", description="off|as_of|dynamic")
     scope_default: str = Field("default")
     half_lives: MemoryHotnessHalfLivesConfig = MemoryHotnessHalfLivesConfig()

@@ -158,7 +158,7 @@ memory:
     max_spans: 12
     max_memory_items: 32
   hotness:
-    enabled: false
+    enabled: true
     mode_default: "off" # off|as_of|dynamic
     scope_default: "default"
     half_lives:

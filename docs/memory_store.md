@@ -53,7 +53,7 @@ Configuration (defaults shown):
 ```
 memory:
   hotness:
-    enabled: false
+    enabled: true
     mode_default: "off" # off|as_of|dynamic
     scope_default: "default"
     half_lives:
@@ -89,7 +89,7 @@ memory:
 ```
 
 Determinism rules:
-- Hotness is off by default (`mode_default=off`).
+- Hotness is enabled by default but remains opt-in (`mode_default=off`).
 - When enabled, the compiler requires an explicit `as_of_utc` timestamp; no wall-clock
   time is read inside the compiler.
 - API `memory_hotness_mode=dynamic` sets `as_of_utc` explicitly at the API boundary.
