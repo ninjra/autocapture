@@ -597,7 +597,7 @@ class FFmpegConfig(BaseModel):
     explicit_path: Optional[Path] = Field(None, description="Explicit ffmpeg binary path.")
     allow_system: bool = Field(True, description="Allow falling back to system PATH ffmpeg.")
     allow_disable: bool = Field(
-        True,
+        False,
         description="Allow disabling video capture when ffmpeg is missing.",
     )
     relative_path_candidates: list[str] = Field(
@@ -1069,7 +1069,7 @@ class MemoryConfig(BaseModel):
 
 class PresetConfig(BaseModel):
     active_preset: str = Field(
-        "privacy_first", description="privacy_first or high_fidelity preset name."
+        "high_fidelity", description="privacy_first or high_fidelity preset name."
     )
 
 
