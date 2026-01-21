@@ -1965,9 +1965,10 @@ def load_config(path: Path | str) -> AppConfig:
     return apply_settings_overrides(config)
 
 
-def apply_settings_overrides(config: AppConfig) -> AppConfig:
-    settings_path = Path(config.capture.data_dir) / "settings.json"
-    raw = read_settings(settings_path)
+def apply_settings_overrides(config: AppConfig, raw: dict | None = None) -> AppConfig:
+    if raw is None:
+        settings_path = Path(config.capture.data_dir) / "settings.json"
+        raw = read_settings(settings_path)
     if not raw:
         apply_preset(config, config.presets.active_preset)
         return apply_dev_overrides(config)
@@ -1993,6 +1994,21 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
         config.llm = LLMConfig(**merged)
     privacy = raw.get("privacy")
     if isinstance(privacy, dict):
+        cloud_enabled = privacy.get("cloud_enabled")
+        if isinstance(cloud_enabled, bool):
+            config.privacy.cloud_enabled = cloud_enabled
+        sanitize_default = privacy.get("sanitize_default")
+        if isinstance(sanitize_default, bool):
+            config.privacy.sanitize_default = sanitize_default
+        extractive_only_default = privacy.get("extractive_only_default")
+        if isinstance(extractive_only_default, bool):
+            config.privacy.extractive_only_default = extractive_only_default
+        allow_cloud_images = privacy.get("allow_cloud_images")
+        if isinstance(allow_cloud_images, bool):
+            config.privacy.allow_cloud_images = allow_cloud_images
+        allow_token_vault_decrypt = privacy.get("allow_token_vault_decrypt")
+        if isinstance(allow_token_vault_decrypt, bool):
+            config.privacy.allow_token_vault_decrypt = allow_token_vault_decrypt
         paused = privacy.get("paused")
         if isinstance(paused, bool):
             config.privacy.paused = paused
@@ -2017,6 +2033,20 @@ def apply_settings_overrides(config: AppConfig) -> AppConfig:
         mask_regions = privacy.get("mask_regions")
         if isinstance(mask_regions, list):
             config.privacy.mask_regions = list(mask_regions)
+    tracking = raw.get("tracking")
+    if isinstance(tracking, dict):
+        enabled = tracking.get("enabled")
+        if isinstance(enabled, bool):
+            config.tracking.enabled = enabled
+        track_mouse = tracking.get("track_mouse_movement")
+        if isinstance(track_mouse, bool):
+            config.tracking.track_mouse_movement = track_mouse
+        enable_clipboard = tracking.get("enable_clipboard")
+        if isinstance(enable_clipboard, bool):
+            config.tracking.enable_clipboard = enable_clipboard
+        retention_days = tracking.get("retention_days")
+        if isinstance(retention_days, int) or retention_days is None:
+            config.tracking.retention_days = retention_days
     active_preset = raw.get("active_preset")
     if isinstance(active_preset, str) and active_preset:
         config.presets.active_preset = active_preset

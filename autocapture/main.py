@@ -55,9 +55,61 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub.add_parser("graph-worker", help="Run the graph retrieval worker service.")
     sub.add_parser("memory-service", help="Run the organizational Memory Service.")
     sub.add_parser("worker", help="Run the OCR ingest worker loop only.")
-    sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
+    doctor = sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
+    doctor.add_argument("--json", action="store_true", help="Output JSON.")
+    doctor.add_argument("--verbose", action="store_true", help="Include verbose details.")
     sub.add_parser("smoke", help="Run minimal smoke checks and exit.")
+    status = sub.add_parser("status", help="Show current state snapshot.")
+    status.add_argument("--json", action="store_true", help="Output JSON.")
     sub.add_parser("print-config", help="Load config and print resolved values.")
+    settings = sub.add_parser("settings", help="Settings schema, preview, and apply.")
+    settings_sub = settings.add_subparsers(dest="settings_cmd", required=True)
+    settings_schema = settings_sub.add_parser("schema", help="Show settings schema.")
+    settings_schema.add_argument("--json", action="store_true", help="Output JSON.")
+    settings_get = settings_sub.add_parser("get", help="Show current settings + effective view.")
+    settings_get.add_argument("--json", action="store_true", help="Output JSON.")
+    settings_preview = settings_sub.add_parser("preview", help="Preview a settings change.")
+    settings_preview.add_argument("--file", required=True, help="Path to candidate settings JSON.")
+    settings_preview.add_argument("--tier", default=None, help="guided|advanced|expert")
+    settings_preview.add_argument("--json", action="store_true", help="Output JSON.")
+    settings_apply = settings_sub.add_parser("apply", help="Apply a settings change.")
+    settings_apply.add_argument("--file", required=True, help="Path to candidate settings JSON.")
+    settings_apply.add_argument("--preview-id", required=True, help="Preview token from preview.")
+    settings_apply.add_argument("--confirm", action="store_true", help="Confirm expert changes.")
+    settings_apply.add_argument("--confirm-phrase", default=None, help="Expert confirm phrase.")
+    settings_apply.add_argument("--tier", default=None, help="guided|advanced|expert")
+    settings_apply.add_argument("--json", action="store_true", help="Output JSON.")
+    delete = sub.add_parser("delete", help="Delete data with preview/apply.")
+    delete_sub = delete.add_subparsers(dest="delete_cmd", required=True)
+    delete_preview = delete_sub.add_parser("preview", help="Preview deletion.")
+    delete_preview.add_argument("kind", choices=["range", "all"], help="Delete kind.")
+    delete_preview.add_argument("--start-utc", default=None, help="Start time (ISO).")
+    delete_preview.add_argument("--end-utc", default=None, help="End time (ISO).")
+    delete_preview.add_argument("--process", default=None, help="Filter by process name.")
+    delete_preview.add_argument("--window-title", default=None, help="Filter by window title.")
+    delete_preview.add_argument("--sample-limit", type=int, default=20, help="Sample size.")
+    delete_preview.add_argument("--json", action="store_true", help="Output JSON.")
+    delete_apply = delete_sub.add_parser("apply", help="Apply deletion.")
+    delete_apply.add_argument("kind", choices=["range", "all"], help="Delete kind.")
+    delete_apply.add_argument("--start-utc", default=None, help="Start time (ISO).")
+    delete_apply.add_argument("--end-utc", default=None, help="End time (ISO).")
+    delete_apply.add_argument("--process", default=None, help="Filter by process name.")
+    delete_apply.add_argument("--window-title", default=None, help="Filter by window title.")
+    delete_apply.add_argument("--sample-limit", type=int, default=20, help="Sample size.")
+    delete_apply.add_argument("--preview-id", required=True, help="Preview token.")
+    delete_apply.add_argument("--confirm", action="store_true", help="Confirm deletion.")
+    delete_apply.add_argument("--confirm-phrase", default="DELETE", help="Confirmation phrase (DELETE or I UNDERSTAND).")
+    delete_apply.add_argument("--expected-counts", default=None, help="JSON map of counts.")
+    delete_apply.add_argument("--json", action="store_true", help="Output JSON.")
+    audit = sub.add_parser("audit", help="Audit recent requests/answers.")
+    audit_sub = audit.add_subparsers(dest="audit_cmd", required=True)
+    audit_list = audit_sub.add_parser("list", help="List recent request runs.")
+    audit_list.add_argument("--limit", type=int, default=20, help="Max entries.")
+    audit_list.add_argument("--json", action="store_true", help="Output JSON.")
+    audit_answer = audit_sub.add_parser("answer", help="Show answer audit details.")
+    audit_answer.add_argument("answer_id", help="Answer identifier.")
+    audit_answer.add_argument("--verbose", action="store_true", help="Include answer text.")
+    audit_answer.add_argument("--json", action="store_true", help="Output JSON.")
     export = sub.add_parser("export", help="Export events + media for backup.")
     export.add_argument("--out", required=True, help="Output path for export bundle.")
     export.add_argument("--days", type=int, default=90, help="Export last N days.")
@@ -235,7 +287,152 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if cmd == "doctor":
+        if getattr(args, "json", False):
+            from .ux.doctor_service import DoctorService
+
+            report = DoctorService(config).run(verbose=getattr(args, "verbose", False))
+            print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
+            raise SystemExit(0 if report.ok else 2)
         raise SystemExit(_doctor(config))
+
+    if cmd == "status":
+        from .ux.state_service import StateService
+        from .plugins import PluginManager
+
+        db = DatabaseManager(config.database)
+        plugins = PluginManager(config)
+        snapshot = StateService(config, db, plugins=plugins).snapshot(unlocked=True)
+        if args.json:
+            print(json.dumps(snapshot.model_dump(mode="json"), indent=2, sort_keys=True))
+        else:
+            logger.info("Overall status: {}", snapshot.health.overall)
+            logger.info("OCR pending: {} processing: {}", snapshot.queues.ocr_pending, snapshot.queues.ocr_processing)
+            logger.info(
+                "Embeddings pending spans: {} events: {}",
+                snapshot.queues.span_embed_pending,
+                snapshot.queues.event_embed_pending,
+            )
+            logger.info("Storage usage: {} bytes", snapshot.storage.media_usage_bytes)
+        raise SystemExit(0 if snapshot.health.overall == "ok" else 2)
+
+    if cmd == "settings":
+        from .ux.settings_service import SettingsService
+        from .plugins import PluginManager
+        from .ux.models import SettingsApplyRequest, SettingsPreviewRequest
+
+        plugins = PluginManager(config)
+        service = SettingsService(config, plugins=plugins)
+        if args.settings_cmd == "schema":
+            schema = service.schema()
+            if args.json:
+                print(json.dumps(schema.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                logger.info("Settings schema version {}", schema.schema_version)
+                for tier in schema.tiers:
+                    logger.info("Tier: {} ({})", tier.label, tier.tier_id)
+            raise SystemExit(0)
+        if args.settings_cmd == "get":
+            effective = service.effective()
+            if args.json:
+                print(json.dumps(effective.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                logger.info("Active preset: {}", effective.settings.get("active_preset"))
+                logger.info("Privacy paused: {}", effective.settings.get("privacy", {}).get("paused"))
+            raise SystemExit(0)
+        if args.settings_cmd == "preview":
+            candidate = json.loads(Path(args.file).read_text(encoding="utf-8"))
+            preview = service.preview(SettingsPreviewRequest(candidate=candidate, tier=args.tier))
+            if args.json:
+                print(json.dumps(preview.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                logger.info("Preview id: {}", preview.preview_id)
+                for item in preview.diff:
+                    logger.info("{}: {} -> {}", item.path, item.before, item.after)
+            raise SystemExit(0)
+        if args.settings_cmd == "apply":
+            candidate = json.loads(Path(args.file).read_text(encoding="utf-8"))
+            response = service.apply(
+                SettingsApplyRequest(
+                    candidate=candidate,
+                    preview_id=args.preview_id,
+                    confirm=bool(args.confirm),
+                    confirm_phrase=args.confirm_phrase,
+                    tier=args.tier,
+                )
+            )
+            if args.json:
+                print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                logger.info("Settings applied: {}", response.status)
+            raise SystemExit(0)
+
+    if cmd == "delete":
+        from .ux.delete_service import DeleteService
+        from .ux.models import DeleteApplyRequest, DeleteCriteria, DeletePreviewRequest
+
+        db = DatabaseManager(config.database)
+        service = DeleteService(config, db)
+        if args.delete_cmd == "preview":
+            criteria = DeleteCriteria(
+                kind=args.kind,
+                start_utc=args.start_utc,
+                end_utc=args.end_utc,
+                process=args.process,
+                window_title=args.window_title,
+                sample_limit=args.sample_limit,
+            )
+            preview = service.preview(DeletePreviewRequest(criteria=criteria))
+            if args.json:
+                print(json.dumps(preview.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                logger.info("Preview id: {}", preview.preview_id)
+                logger.info("Counts: {}", preview.counts)
+            raise SystemExit(0)
+        if args.delete_cmd == "apply":
+            expected_counts = json.loads(args.expected_counts) if args.expected_counts else None
+            criteria = DeleteCriteria(
+                kind=args.kind,
+                start_utc=args.start_utc,
+                end_utc=args.end_utc,
+                process=args.process,
+                window_title=args.window_title,
+                sample_limit=args.sample_limit,
+            )
+            response = service.apply(
+                DeleteApplyRequest(
+                    criteria=criteria,
+                    preview_id=args.preview_id,
+                    confirm=bool(args.confirm),
+                    confirm_phrase=args.confirm_phrase,
+                    expected_counts=expected_counts,
+                )
+            )
+            if args.json:
+                print(json.dumps(response.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                logger.info("Delete applied: {}", response.counts)
+            raise SystemExit(0)
+
+    if cmd == "audit":
+        from .ux.audit_service import AuditService
+
+        db = DatabaseManager(config.database)
+        audit = AuditService(db)
+        if args.audit_cmd == "list":
+            summary = audit.list_requests(limit=args.limit)
+            if args.json:
+                print(json.dumps(summary.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                for item in summary.requests:
+                    logger.info("{} {} {}", item.request_id, item.status, item.query_text)
+            raise SystemExit(0)
+        if args.audit_cmd == "answer":
+            detail = audit.answer_detail(args.answer_id, verbose=bool(args.verbose))
+            if args.json:
+                print(json.dumps(detail.model_dump(mode="json"), indent=2, sort_keys=True))
+            else:
+                logger.info("Answer {} mode {}", detail.answer.answer_id, detail.answer.mode)
+            raise SystemExit(0)
 
     if cmd == "smoke":
         from .smoke import run_smoke

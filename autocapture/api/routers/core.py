@@ -73,6 +73,8 @@ from ...storage.models import (
     QueryHistoryRecord,
 )
 from ...storage.retention import RetentionManager
+from ...ux.banners import BannerPolicy, build_evidence_summary
+from ...ux.models import AnswerBanner, EvidenceSummary
 from ..container import AppContainer
 from ..security_helpers import _bridge_token_valid, _require_api_key
 
@@ -211,10 +213,15 @@ class AnswerResponse(BaseModel):
     citations: list[str]
     used_context_pack: dict[str, Any]
     latency_ms: float
+    used_llm: Optional[bool] = None
     response_json: Optional[dict[str, Any]] = None
     response_tron: Optional[str] = None
     context_pack_tron: Optional[str] = None
     prompt_strategy: Optional[PromptStrategyInfo] = None
+    banner: AnswerBanner | None = None
+    evidence_summary: EvidenceSummary | None = None
+    latency_breakdown: dict[str, Any] | None = None
+    debug: dict[str, Any] | None = None
     no_evidence: bool = False
     message: str | None = None
     mode: str | None = None
@@ -1341,6 +1348,7 @@ def build_router(
         )
         time_only = is_time_only_expression(query_text)
         evidence_query = "" if time_only else query_text
+        retrieval_start = monotonic_now()
         evidence, events, no_evidence, message = await asyncio.to_thread(
             _build_evidence,
             retrieval,
@@ -1352,6 +1360,8 @@ def build_router(
             k,
             sanitized,
         )
+        retrieval_ms = elapsed_ms(retrieval_start)
+        evidence_summary = build_evidence_summary(evidence, resolved_time_range)
         routing_data = _merge_routing(config.routing, request.routing)
         routing_override = request.routing.get("llm") if request.routing else None
         aggregates = _build_aggregates(db, resolved_time_range)
@@ -1375,22 +1385,32 @@ def build_router(
             )
             notice = message or _no_evidence_message(query_text, bool(resolved_time_range), None)
             response_json, response_tron = _build_answer_payload(
-                notice,
+                "",
                 [],
                 warnings=["no_evidence"],
                 used_llm=False,
                 context_pack=empty_pack.to_json(),
                 output_format=output_format,
             )
+            banner = BannerPolicy.evaluate(
+                locked=False,
+                evidence=evidence_summary,
+                degraded_reasons=[],
+                mode="NO_EVIDENCE",
+            )
             return AnswerResponse(
-                answer=notice,
+                answer="",
                 citations=[],
                 used_context_pack=empty_pack.to_json(),
-                latency_ms=0.0,
+                latency_ms=retrieval_ms,
+                used_llm=False,
                 response_json=response_json,
                 response_tron=response_tron,
                 context_pack_tron=None,
                 prompt_strategy=None,
+                banner=banner,
+                evidence_summary=evidence_summary,
+                latency_breakdown={"retrieval_ms": retrieval_ms},
                 no_evidence=True,
                 message=notice,
                 mode="NO_EVIDENCE",
@@ -1417,6 +1437,7 @@ def build_router(
         pack_text = pack_tron_text or pack_json_text
         context_pack_tron = pack_tron_text if context_pack_format == "tron" else None
         start = monotonic_now()
+        used_llm = False
         graph_attempted = False
         graph_used_llm = False
         prompt_strategy_info: PromptStrategyInfo | None = None
@@ -1440,6 +1461,7 @@ def build_router(
                 answer_text = result.answer
                 citations = result.citations
                 graph_used_llm = result.used_llm
+                used_llm = bool(result.used_llm)
                 graph_result = result
                 if result.prompt_strategy:
                     prompt_strategy_info = _prompt_strategy_info(result.prompt_strategy)
@@ -1490,6 +1512,7 @@ def build_router(
                 context_pack=pack.to_json(),
                 output_format=output_format,
             )
+            used_llm = False
         elif extractive_only:
             compressed = extractive_answer(evidence)
             answer_text = compressed.answer
@@ -1503,6 +1526,7 @@ def build_router(
                 context_pack=pack.to_json(),
                 output_format=output_format,
             )
+            used_llm = False
         elif graph_attempted and graph_used_llm:
             pass
         elif graph_attempted and getattr(graph_result, "mode", None) in {
@@ -1586,6 +1610,7 @@ def build_router(
                     context_pack=pack.to_json(),
                     output_format=output_format,
                 )
+                used_llm = True
             except Exception as exc:
                 log.warning("LLM unavailable; falling back to extractive answer: {}", exc)
                 compressed = extractive_answer(evidence)
@@ -1600,16 +1625,31 @@ def build_router(
                     context_pack=pack.to_json(),
                     output_format=output_format,
                 )
+                used_llm = False
         latency = elapsed_ms(start)
+        degraded_reasons = list(getattr(graph_result, "degraded_stages", []) or [])
+        banner = BannerPolicy.evaluate(
+            locked=False,
+            evidence=evidence_summary,
+            degraded_reasons=degraded_reasons,
+            mode=getattr(graph_result, "mode", None),
+        )
         return AnswerResponse(
             answer=answer_text,
             citations=citations,
             used_context_pack=pack.to_json(),
             latency_ms=latency,
+            used_llm=used_llm,
             response_json=response_json,
             response_tron=response_tron,
             context_pack_tron=context_pack_tron,
             prompt_strategy=prompt_strategy_info,
+            banner=banner,
+            evidence_summary=evidence_summary,
+            latency_breakdown={
+                "retrieval_ms": retrieval_ms,
+                "answer_ms": latency,
+            },
             no_evidence=False,
             message=None,
             mode=getattr(graph_result, "mode", None),
@@ -1799,6 +1839,16 @@ def build_router(
             settings["privacy"] = {
                 "paused": config.privacy.paused,
                 "snooze_until_utc": _to_iso(config.privacy.snooze_until_utc),
+                "sanitize_default": config.privacy.sanitize_default,
+                "extractive_only_default": config.privacy.extractive_only_default,
+                "cloud_enabled": config.privacy.cloud_enabled,
+                "allow_cloud_images": config.privacy.allow_cloud_images,
+                "allow_token_vault_decrypt": config.privacy.allow_token_vault_decrypt,
+                "exclude_monitors": list(config.privacy.exclude_monitors),
+                "exclude_processes": list(config.privacy.exclude_processes),
+                "exclude_window_title_regex": list(config.privacy.exclude_window_title_regex),
+                "exclude_regions": list(config.privacy.exclude_regions),
+                "mask_regions": list(config.privacy.mask_regions),
             }
         if "active_preset" not in settings:
             settings["active_preset"] = config.presets.active_preset

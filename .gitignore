@@ -41,6 +41,8 @@ artifacts/bench/
 artifacts/logs/
 bench/results/*
 !bench/results/.gitkeep
+data/state/
+data/.preview_secret
 
 # OS files
 .DS_Store
