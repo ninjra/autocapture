@@ -34,7 +34,9 @@ def _parse_qdrant_url(url: str) -> QdrantEndpoint | None:
 
 
 def should_manage_sidecar(config: AppConfig) -> bool:
-    if not config.qdrant.enabled:
+    vector_backend = (getattr(config.routing, "vector_backend", "") or "").strip().lower()
+    spans_backend = (getattr(config.routing, "spans_v2_backend", "") or "").strip().lower()
+    if vector_backend != "qdrant" and spans_backend != "qdrant":
         return False
     endpoint = _parse_qdrant_url(config.qdrant.url)
     if not endpoint:

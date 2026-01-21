@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
@@ -29,9 +30,15 @@ from .schemas import (
     MemoryQueryRequest,
     MemoryQueryResponse,
 )
-from .store import MemoryServiceStore
+from .store import MemoryServiceStore, SqliteMemoryServiceStore
 
 _LOG = get_logger("memory.api")
+
+
+def resolve_memory_service_db_url(config: AppConfig) -> str:
+    data_dir = Path(config.capture.data_dir)
+    path = data_dir / "memory_service.db"
+    return f"sqlite:///{path.as_posix()}"
 
 
 def create_memory_service_app(
@@ -47,11 +54,16 @@ def create_memory_service_app(
     db_config = config.database
     if mem_cfg.database_url:
         db_config = db_config.model_copy(update={"url": mem_cfg.database_url})
+    else:
+        db_config = db_config.model_copy(update={"url": resolve_memory_service_db_url(config)})
     db = db_manager or DatabaseManager(db_config)
 
     embedder = build_embedder(mem_cfg.embedder, allow_local=not config.offline)
     reranker = build_reranker(mem_cfg.reranker)
-    store = MemoryServiceStore(db, mem_cfg, embedder, reranker)
+    if db.engine.dialect.name == "sqlite":
+        store = SqliteMemoryServiceStore(db, mem_cfg, embedder, reranker)
+    else:
+        store = MemoryServiceStore(db, mem_cfg, embedder, reranker)
 
     app = FastAPI(title="Autocapture Memory Service")
 

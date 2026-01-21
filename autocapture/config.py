@@ -737,6 +737,9 @@ class ProviderRoutingConfig(BaseModel):
     ocr: str = Field("local")
     embedding: str = Field("local")
     retrieval: str = Field("local")
+    vector_backend: str = Field("local", description="Vector backend plugin id.")
+    spans_v2_backend: str = Field("local", description="Spans v2 backend plugin id.")
+    table_extractor: str = Field("disabled", description="Table extractor plugin id.")
     reranker: str = Field("disabled")
     compressor: str = Field("extractive")
     verifier: str = Field("rules")
@@ -836,6 +839,10 @@ class SecurityConfig(BaseModel):
         True, description="Require local unlock session for sensitive endpoints."
     )
     session_ttl_seconds: int = Field(300, ge=30, description="Unlock session TTL in seconds.")
+    secure_mode: bool = Field(
+        True,
+        description="Fail closed on checksum mismatches or unknown native extensions.",
+    )
     provider: str = Field(
         default_factory=_default_security_provider,
         description="windows_hello|cred_ui|test|disabled",
@@ -1684,6 +1691,13 @@ class ThreadingConfig(BaseModel):
     max_events_per_thread: int = Field(100, ge=10)
 
 
+class TableExtractorConfig(BaseModel):
+    enabled: bool = Field(False, description="Enable table extraction pipeline.")
+    allow_cloud: bool = Field(
+        False, description="Allow cloud-backed table extraction when enabled."
+    )
+
+
 class AppConfig(BaseModel):
     offline: bool = Field(
         True,
@@ -1733,6 +1747,7 @@ class AppConfig(BaseModel):
     promptops: PromptOpsConfig = PromptOpsConfig()
     agents: AgentConfig = AgentConfig()
     enrichment: EnrichmentSchedulerConfig = EnrichmentSchedulerConfig()
+    table_extractor: TableExtractorConfig = TableExtractorConfig()
     threads: ThreadingConfig = ThreadingConfig()
 
     @field_validator("capture")
@@ -2100,9 +2115,12 @@ def apply_dev_overrides(config: AppConfig) -> AppConfig:
     if not is_dev_mode():
         return config
     logger = logging.getLogger(__name__)
-    if config.qdrant.enabled:
-        logger.info("Dev mode: disabling qdrant backend.")
-        config.qdrant.enabled = False
+    if (config.routing.vector_backend or "").strip().lower() == "qdrant":
+        logger.info("Dev mode: routing vector backend to sqlite.")
+        config.routing.vector_backend = "local"
+    if (config.routing.spans_v2_backend or "").strip().lower() == "qdrant":
+        logger.info("Dev mode: routing spans v2 backend to sqlite.")
+        config.routing.spans_v2_backend = "local"
     if config.ocr.device.lower() != "cpu":
         logger.info("Dev mode: forcing OCR device to cpu.")
         config.ocr.device = "cpu"

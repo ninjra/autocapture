@@ -1,0 +1,19 @@
+schema_version: 1
+plugin_id: autocapture.builtin.vector_sqlite
+name: Autocapture Builtin SQLite Vector Backend
+version: 1.0.0
+description: Built-in SQLite vector backend.
+enabled_by_default: true
+extensions:
+  - kind: vector.backend
+    id: sqlite
+    name: SQLite
+    aliases: [local]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_vector_backend_sqlite

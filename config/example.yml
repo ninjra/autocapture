@@ -26,6 +26,7 @@ api:
 security:
   local_unlock_enabled: true
   session_ttl_seconds: 300
+  secure_mode: true
   provider: "windows_hello"
 templates:
   enabled: true
@@ -267,6 +268,9 @@ routing:
   ocr: "local"
   embedding: "local"
   retrieval: "local"
+  vector_backend: "local"
+  spans_v2_backend: "local"
+  table_extractor: "disabled"
   reranker: "disabled"
   compressor: "extractive"
   verifier: "rules"
@@ -830,6 +834,9 @@ enrichment:
   max_events_per_scan: 2000
   window_days: null
   at_risk_hours: 24
+table_extractor:
+  enabled: false
+  allow_cloud: false
 threads:
   enabled: true
   max_gap_minutes: 15.0

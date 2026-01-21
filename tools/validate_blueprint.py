@@ -16,6 +16,31 @@ REQUIRED_HEADINGS = [
 
 SRC_DECL_RE = re.compile(r"^\s*-\s*(SRC-\d{3})\s*:")
 SRC_RE = re.compile(r"SRC-\d{3}")
+FORBIDDEN_PHRASES = [
+    re.compile(r"\bwork[- ]later\b", re.IGNORECASE),
+]
+OBJECT_ID_RE = re.compile(r"^\s*Object_ID\s*:", re.IGNORECASE)
+ADR_ID_RE = re.compile(r"^\s*ADR_ID\s*:", re.IGNORECASE)
+SOURCES_RE = re.compile(r"^\s*Sources\s*:", re.IGNORECASE)
+
+
+def _is_table_separator(line: str) -> bool:
+    if "|" not in line:
+        return False
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    cells = [cell.strip() for cell in stripped.split("|") if cell.strip()]
+    if not cells:
+        return False
+    for cell in cells:
+        if not cell:
+            return False
+        if any(ch not in "-:" for ch in cell):
+            return False
+    return True
 
 
 def _find_line_index(lines: list[str], target: str) -> int | None:
@@ -31,6 +56,10 @@ def validate_blueprint(path: Path) -> list[str]:
         return [f"Blueprint not found: {path}"]
 
     text = path.read_text(encoding="utf-8")
+    for phrase in FORBIDDEN_PHRASES:
+        if phrase.search(text):
+            errors.append("Forbidden placeholder language detected (work-later).")
+            break
     if "http://" in text or "https://" in text:
         errors.append("External links are not allowed (http/https detected).")
 
@@ -110,6 +139,38 @@ def validate_blueprint(path: Path) -> list[str]:
         if multiple:
             errors.append(
                 "Coverage_Map references SRC IDs more than once: " + ", ".join(multiple)
+            )
+
+    block_starts: list[tuple[str, int]] = []
+    for idx, line in enumerate(lines):
+        if OBJECT_ID_RE.match(line) or ADR_ID_RE.match(line):
+            block_starts.append((line.strip(), idx))
+
+    for block_label, start_idx in block_starts:
+        has_sources = False
+        for line in lines[start_idx + 1 :]:
+            if line.startswith("# ") or not line.strip():
+                break
+            if SOURCES_RE.match(line):
+                has_sources = True
+                break
+        if not has_sources:
+            errors.append(f"Missing Sources for block starting at line {start_idx + 1}: {block_label}")
+
+    table_indices: list[int] = []
+    for idx, line in enumerate(lines[:-1]):
+        if "|" in line and _is_table_separator(lines[idx + 1]):
+            table_indices.append(idx)
+
+    for header_idx in table_indices:
+        data_rows = 0
+        for line in lines[header_idx + 2 :]:
+            if not line.strip() or "|" not in line:
+                break
+            data_rows += 1
+        if data_rows < 3:
+            errors.append(
+                f"Few-shot table starting at line {header_idx + 1} has fewer than 3 data rows."
             )
 
     return errors

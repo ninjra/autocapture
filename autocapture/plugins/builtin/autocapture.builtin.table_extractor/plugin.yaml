@@ -1,0 +1,19 @@
+schema_version: 1
+plugin_id: autocapture.builtin.table_extractor
+name: Autocapture Builtin Table Extractor
+version: 1.0.0
+description: Built-in table extractor (stub).
+enabled_by_default: true
+extensions:
+  - kind: table.extractor
+    id: stub
+    name: Stub
+    aliases: [local]
+    pillars:
+      data_handling:
+        cloud: none
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_table_extractor_stub

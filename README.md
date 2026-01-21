@@ -6,7 +6,7 @@ A local-first desktop recall app for Windows 11 that runs as a single binary: tr
 
 - **Tray + local web UI** with a lightweight search popup and dashboard.
 - **VLM-first screen understanding** using DXCam (with MSS fallback), full-screen tiling, and a RapidOCR fallback.
-- **Embedded search** with Qdrant-backed vector indexes and fast embeddings (falls back to lexical-only retrieval if Qdrant is unavailable). Windows release builds bundle a local Qdrant sidecar.
+- **Embedded search** with SQLite-backed vector + spans_v2 indexes by default. Qdrant remains optional via routing overrides.
 - **Private by default** with local storage and optional cloud LLM fallback.
 - **Time-aware Q&A** with deterministic time parsing, citations, and optional TRON/JSON outputs.
 - **Stage-routed LLM pipeline** with query refinement, draft generation, and final answer stages (local-first defaults).
@@ -68,8 +68,8 @@ pyproject.toml        # Project dependencies and tooling configuration
 
 ### Windows release bundling
 
-Windows release builds bundle Qdrant + FFmpeg so local mode runs without Docker. Use the vendor
-bootstrap before packaging:
+Windows release builds can bundle Qdrant + FFmpeg so local mode runs without Docker when Qdrant
+is explicitly selected via routing. Use the vendor bootstrap before packaging:
 
 ```powershell
 python tools/vendor_windows_binaries.py
@@ -85,6 +85,12 @@ poetry run pytest -q
 ```
 
 Node.js is not required for the core workflows; the UI assets are bundled in the repo.
+
+### Spec and Schema Validation
+
+- Canonical spec: `BLUEPRINT.md`
+- Validate: `python tools/validate_blueprint.py BLUEPRINT.md`
+- Grounded SQL artifacts: `docs/schemas/*.sql`
 
 PowerShell helper:
 ```powershell

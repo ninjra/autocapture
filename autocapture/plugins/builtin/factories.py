@@ -26,6 +26,7 @@ from ...gateway.decode import decode_backend_from_settings, extract_backend_sett
 from ...memory.graph_adapters import GraphAdapterClient
 from ...memory.retrieval import RetrievalService
 from ...indexing.vector_index import QdrantBackend, VectorBackend
+from ...indexing.spans_v2 import QdrantSpansV2Backend
 from ...paths import resource_root
 from ..policy import PolicyGate
 from ..sdk.context import PluginContext, LLMProviderInfo
@@ -364,9 +365,46 @@ def create_vector_backend_qdrant(context: PluginContext, **kwargs) -> VectorBack
     dim = kwargs.get("dim")
     if dim is None:
         raise ValueError("Vector backend requires dim")
-    if not config.qdrant.enabled:
-        return None
     return QdrantBackend(config, int(dim))
+
+
+def create_vector_backend_sqlite(context: PluginContext, **kwargs) -> VectorBackend:
+    config: AppConfig = context.config
+    dim = kwargs.get("dim")
+    if dim is None:
+        raise ValueError("Vector backend requires dim")
+    from ...indexing.sqlite_backends import SqliteVectorBackend
+    from ...storage.database import DatabaseManager
+
+    db = kwargs.get("db") or DatabaseManager(config.database)
+    return SqliteVectorBackend(db, dim=int(dim), config=config)
+
+
+def create_spans_v2_backend_qdrant(context: PluginContext, **kwargs):
+    config: AppConfig = context.config
+    dim = kwargs.get("dim")
+    if dim is None:
+        raise ValueError("Spans v2 backend requires dim")
+    return QdrantSpansV2Backend(config, int(dim))
+
+
+def create_spans_v2_backend_sqlite(context: PluginContext, **kwargs):
+    config: AppConfig = context.config
+    dim = kwargs.get("dim")
+    if dim is None:
+        raise ValueError("Spans v2 backend requires dim")
+    from ...indexing.sqlite_backends import SqliteSpansV2Backend
+    from ...storage.database import DatabaseManager
+
+    db = kwargs.get("db") or DatabaseManager(config.database)
+    return SqliteSpansV2Backend(db, dim=int(dim), config=config)
+
+
+def create_table_extractor_stub(context: PluginContext, **kwargs):
+    _ = context
+    from ...enrichment.table_extractor import StubTableExtractor
+
+    return StubTableExtractor()
 
 
 def create_prompt_bundle_builtin(context: PluginContext, **kwargs) -> Path:

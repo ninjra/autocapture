@@ -18,7 +18,7 @@
 ## Memory Service
 - `memory_service.enabled`: enable the Memory Service (default: false).
 - `memory_service.bind_host` / `memory_service.port`: bind address and port.
-- `memory_service.database_url`: optional DB URL override for the Memory Service.
+- `memory_service.database_url`: optional DB URL override for the Memory Service (defaults to `${data_dir}/memory_service.db`).
 - `memory_service.default_namespace`: namespace used when none supplied by clients.
 - `memory_service.enable_ingest` / `enable_query` / `enable_feedback`: endpoint toggles.
 - `memory_service.embedder.provider`: `stub` or `local` (default: stub).
@@ -34,6 +34,15 @@
 - `retrieval.fusion_enabled`, `retrieval.rrf_enabled`: enable fusion + RRF.
 - `retrieval.traces_enabled`: persist retrieval traces.
 - `retrieval.graph_adapters.*`: HTTP graph adapters (defaults to Graph service).
+
+## Routing (Backends)
+- `routing.vector_backend`: vector backend plugin id (default: `local` for SQLite).
+- `routing.spans_v2_backend`: spans_v2 backend plugin id (default: `local` for SQLite).
+- `routing.table_extractor`: table extractor plugin id (default: `disabled`).
+
+## Table Extractor
+- `table_extractor.enabled`: enable the table extraction pipeline (default: false).
+- `table_extractor.allow_cloud`: allow cloud-backed table extraction when enabled (default: false).
 
 ## Citation Validation
 - `verification.citation_validator.allow_legacy_evidence_ids`: allow evidence_ids-only claims.
@@ -74,3 +83,6 @@
 - `observability.telemetry.otlp_protocol`: protocol (http/protobuf).
 - `observability.telemetry.allow_cloud_export`: allow telemetry export to non-loopback endpoints.
 - `observability.telemetry.max_attr_len`: max attribute length for spans.
+
+## Security
+- `security.secure_mode`: fail closed on checksum mismatches or unknown native extensions.

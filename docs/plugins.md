@@ -81,6 +81,12 @@ Graph retrieval adapters are exposed via `graph.adapter` extensions. Built-in ad
 wrap the configured HTTP clients for `graphrag`, `hypergraphrag`, and `hyperrag`.
 These adapters still use `retrieval.graph_adapters.*` config for endpoints and timeouts.
 
+## Table extractors
+Table extraction providers are exposed via `table.extractor` extensions. Enable the
+pipeline with `table_extractor.enabled=true` and select a provider with
+`routing.table_extractor`. Cloud-backed extractors are additionally gated by
+`table_extractor.allow_cloud` and privacy/offline policy gates.
+
 ## Decode backends
 Decode backends are exposed via `decode.backend` extensions (swift/lookahead/medusa).
 They are proxy adapters that forward requests to OpenAI-compatible servers. Configure

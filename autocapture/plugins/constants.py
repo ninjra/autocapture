@@ -9,6 +9,8 @@ EXTENSION_KINDS = (
     "embedder.text",
     "retrieval.strategy",
     "vector.backend",
+    "spans_v2.backend",
+    "table.extractor",
     "reranker",
     "compressor",
     "verifier",

@@ -12,6 +12,7 @@ from ..embeddings.service import EmbeddingService
 from ..encryption import EncryptionManager
 from ..indexing.pruner import IndexPruner
 from ..indexing.vector_index import VectorIndex
+from ..indexing.spans_v2 import SpansV2Index
 from ..logging_utils import get_logger
 from ..media.store import MediaStore
 from ..memory.compiler import ContextCompiler
@@ -82,17 +83,61 @@ def build_container(
     if embedder_obj is None:
         embedder_obj = EmbeddingService(config.embed)
     dim = getattr(embedder_obj, "dim", None) or int(config.qdrant.text_vector_size)
+    log.info(
+        "Routing: vector_backend={} spans_v2_backend={} table_extractor={}",
+        getattr(config.routing, "vector_backend", "local"),
+        getattr(config.routing, "spans_v2_backend", "local"),
+        getattr(config.routing, "table_extractor", "disabled"),
+    )
     if vector_index is None:
+        vector_backend_id = (getattr(config.routing, "vector_backend", "local") or "local").strip()
+        vector_record = None
+        try:
+            vector_record = plugins.resolve_record("vector.backend", vector_backend_id)
+        except Exception as exc:
+            log.warning("Vector backend record lookup failed ({}): {}", vector_backend_id, exc)
         try:
             backend = plugins.resolve_extension(
                 "vector.backend",
-                "qdrant",
-                factory_kwargs={"dim": dim},
+                vector_backend_id,
+                factory_kwargs={"dim": dim, "db": db},
             )
         except Exception as exc:
-            log.warning("Vector backend plugin failed: {}", exc)
+            log.warning("Vector backend plugin failed ({}): {}", vector_backend_id, exc)
             backend = None
         vector_index = VectorIndex(config, dim, backend=backend)
+        if vector_record:
+            log.info(
+                "Resolved vector.backend '{}' -> {}",
+                vector_backend_id,
+                vector_record.plugin_id,
+            )
+    spans_index = None
+    if config.retrieval.use_spans_v2 or config.retrieval.sparse_enabled or config.retrieval.late_enabled:
+        spans_backend_id = (
+            getattr(config.routing, "spans_v2_backend", "local") or "local"
+        ).strip()
+        spans_record = None
+        try:
+            spans_record = plugins.resolve_record("spans_v2.backend", spans_backend_id)
+        except Exception as exc:
+            log.warning("Spans v2 backend record lookup failed ({}): {}", spans_backend_id, exc)
+        try:
+            spans_backend = plugins.resolve_extension(
+                "spans_v2.backend",
+                spans_backend_id,
+                factory_kwargs={"dim": dim, "db": db},
+            )
+        except Exception as exc:
+            log.warning("Spans v2 backend plugin failed ({}): {}", spans_backend_id, exc)
+            spans_backend = None
+        spans_index = SpansV2Index(config, dim, backend=spans_backend)
+        if spans_record:
+            log.info(
+                "Resolved spans_v2.backend '{}' -> {}",
+                spans_backend_id,
+                spans_record.plugin_id,
+            )
     reranker = None
     reranker_id = (config.routing.reranker or "disabled").strip().lower()
     try:
@@ -109,6 +154,7 @@ def build_container(
                 "db": db,
                 "embedder": embedder_obj,
                 "vector_index": vector_index,
+                "spans_index": spans_index,
                 "reranker": reranker,
                 "plugin_manager": plugins,
             },
@@ -120,6 +166,7 @@ def build_container(
             config,
             embedder=embedder_obj,
             vector_index=vector_index,
+            spans_index=spans_index,
             reranker=reranker,
             plugin_manager=plugins,
         )

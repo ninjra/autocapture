@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import math
 from dataclasses import dataclass, field
+import json
 import sqlalchemy as sa
 
 from ..logging_utils import get_logger
@@ -746,6 +747,636 @@ class MemoryServiceStore:
             )
             citations.setdefault(row[0], []).append(pointer)
         return citations
+
+
+class SqliteMemoryServiceStore(MemoryServiceStore):
+    def __init__(
+        self,
+        db: DatabaseManager,
+        config: MemoryServiceConfig,
+        embedder: Embedder,
+        reranker: Reranker | None,
+    ) -> None:
+        self._signature_seed = 260118
+        self._signature_bits = 63
+        self._bucket_bits = 16
+        self._candidate_factor = 20
+        self._candidate_min = 200
+        self._candidate_max = 5000
+        self._fts_available = False
+        super().__init__(db, config, embedder, reranker)
+        self._fts_available = self._ensure_schema()
+
+    def _ensure_rls(self) -> None:
+        return
+
+    def _set_rls_namespace(self, session, namespace: str) -> None:
+        _ = session, namespace
+        return
+
+    def _require_postgres(self) -> None:
+        return
+
+    def _ensure_schema(self) -> bool:
+        engine = self._db.engine
+        fts_available = True
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE IF NOT EXISTS artifact_versions ("
+                    "artifact_version_id TEXT PRIMARY KEY,"
+                    "namespace TEXT NOT NULL,"
+                    "artifact_id TEXT,"
+                    "content_hash TEXT NOT NULL,"
+                    "source_uri TEXT,"
+                    "title TEXT,"
+                    "labels_json TEXT NOT NULL,"
+                    "metadata_json TEXT NOT NULL,"
+                    "created_at TEXT NOT NULL"
+                    ")"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE IF NOT EXISTS artifact_chunks ("
+                    "chunk_id TEXT PRIMARY KEY,"
+                    "artifact_version_id TEXT NOT NULL,"
+                    "namespace TEXT NOT NULL,"
+                    "start_offset INTEGER NOT NULL,"
+                    "end_offset INTEGER NOT NULL,"
+                    "excerpt_hash TEXT NOT NULL,"
+                    "created_at TEXT NOT NULL,"
+                    "FOREIGN KEY(artifact_version_id) REFERENCES artifact_versions(artifact_version_id) "
+                    "ON DELETE CASCADE"
+                    ")"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE IF NOT EXISTS memory_items ("
+                    "memory_id TEXT PRIMARY KEY,"
+                    "namespace TEXT NOT NULL,"
+                    "memory_type TEXT NOT NULL,"
+                    "content_text TEXT NOT NULL,"
+                    "content_json TEXT NOT NULL,"
+                    "content_hash TEXT NOT NULL,"
+                    "status TEXT NOT NULL,"
+                    "importance REAL NOT NULL,"
+                    "trust_tier REAL NOT NULL,"
+                    "audiences_json TEXT NOT NULL,"
+                    "sensitivity TEXT NOT NULL,"
+                    "sensitivity_rank INTEGER NOT NULL,"
+                    "valid_from TEXT,"
+                    "valid_to TEXT,"
+                    "policy_labels_json TEXT NOT NULL,"
+                    "created_at TEXT NOT NULL,"
+                    "updated_at TEXT NOT NULL"
+                    ")"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE IF NOT EXISTS memory_embeddings ("
+                    "memory_id TEXT NOT NULL,"
+                    "model TEXT NOT NULL,"
+                    "embedding BLOB,"
+                    "norm REAL NOT NULL,"
+                    "signature INTEGER NOT NULL,"
+                    "bucket INTEGER NOT NULL,"
+                    "created_at TEXT NOT NULL,"
+                    "PRIMARY KEY (memory_id, model),"
+                    "FOREIGN KEY(memory_id) REFERENCES memory_items(memory_id) ON DELETE CASCADE"
+                    ")"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE IF NOT EXISTS memory_provenance ("
+                    "memory_id TEXT NOT NULL,"
+                    "artifact_version_id TEXT NOT NULL,"
+                    "chunk_id TEXT NOT NULL,"
+                    "start_offset INTEGER NOT NULL,"
+                    "end_offset INTEGER NOT NULL,"
+                    "excerpt_hash TEXT NOT NULL,"
+                    "created_at TEXT NOT NULL,"
+                    "PRIMARY KEY (memory_id, chunk_id),"
+                    "FOREIGN KEY(memory_id) REFERENCES memory_items(memory_id) ON DELETE CASCADE,"
+                    "FOREIGN KEY(artifact_version_id) REFERENCES artifact_versions(artifact_version_id) "
+                    "ON DELETE CASCADE,"
+                    "FOREIGN KEY(chunk_id) REFERENCES artifact_chunks(chunk_id) ON DELETE CASCADE"
+                    ")"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE IF NOT EXISTS entities ("
+                    "entity_id TEXT PRIMARY KEY,"
+                    "namespace TEXT NOT NULL,"
+                    "kind TEXT NOT NULL,"
+                    "name TEXT NOT NULL,"
+                    "created_at TEXT NOT NULL,"
+                    "UNIQUE(namespace, kind, name)"
+                    ")"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE IF NOT EXISTS memory_entities ("
+                    "memory_id TEXT NOT NULL,"
+                    "entity_id TEXT NOT NULL,"
+                    "PRIMARY KEY (memory_id, entity_id),"
+                    "FOREIGN KEY(memory_id) REFERENCES memory_items(memory_id) ON DELETE CASCADE,"
+                    "FOREIGN KEY(entity_id) REFERENCES entities(entity_id) ON DELETE CASCADE"
+                    ")"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE IF NOT EXISTS edges ("
+                    "edge_id TEXT PRIMARY KEY,"
+                    "namespace TEXT NOT NULL,"
+                    "from_entity_id TEXT NOT NULL,"
+                    "to_entity_id TEXT NOT NULL,"
+                    "relation TEXT NOT NULL,"
+                    "weight REAL NOT NULL,"
+                    "created_at TEXT NOT NULL,"
+                    "FOREIGN KEY(from_entity_id) REFERENCES entities(entity_id) ON DELETE CASCADE,"
+                    "FOREIGN KEY(to_entity_id) REFERENCES entities(entity_id) ON DELETE CASCADE"
+                    ")"
+                )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE IF NOT EXISTS memory_feedback ("
+                    "feedback_id TEXT PRIMARY KEY,"
+                    "memory_id TEXT NOT NULL,"
+                    "namespace TEXT NOT NULL,"
+                    "useful INTEGER NOT NULL,"
+                    "reason TEXT,"
+                    "request_id TEXT,"
+                    "created_at TEXT NOT NULL"
+                    ")"
+                )
+            )
+            conn.execute(
+                sa.text("CREATE INDEX IF NOT EXISTS ix_memory_items_namespace ON memory_items(namespace)")
+            )
+            conn.execute(
+                sa.text("CREATE INDEX IF NOT EXISTS ix_memory_items_type ON memory_items(memory_type)")
+            )
+            conn.execute(
+                sa.text("CREATE INDEX IF NOT EXISTS ix_memory_items_status ON memory_items(status)")
+            )
+            conn.execute(
+                sa.text("CREATE INDEX IF NOT EXISTS ix_memory_embeddings_bucket ON memory_embeddings(bucket)")
+            )
+            conn.execute(
+                sa.text("CREATE INDEX IF NOT EXISTS ix_memory_provenance_memory ON memory_provenance(memory_id)")
+            )
+            try:
+                conn.execute(
+                    sa.text(
+                        "CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts "
+                        "USING fts5(memory_id UNINDEXED, content_text)"
+                    )
+                )
+            except Exception:
+                fts_available = False
+        return fts_available
+
+    def _candidate_cap(self, k: int) -> int:
+        cap = max(k * self._candidate_factor, self._candidate_min)
+        return min(cap, self._candidate_max)
+
+    def _insert_memory_item(
+        self,
+        session,
+        proposal: MemoryProposal,
+        namespace: str,
+        memory_id: str,
+        content_text: str,
+        now: dt.datetime,
+    ) -> None:
+        sensitivity_rank = self._config.policy.sensitivity_order.index(
+            proposal.policy.sensitivity
+        )
+        audiences = sorted({aud for aud in proposal.policy.audience if aud})
+        content_json = json.dumps(proposal.content_json or {}, separators=(",", ":"), sort_keys=True)
+        policy_labels = json.dumps(
+            {
+                "audience": audiences,
+                "sensitivity": proposal.policy.sensitivity,
+                "labels": proposal.policy.labels,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        session.execute(
+            sa.text(
+                "INSERT INTO memory_items("
+                "memory_id, namespace, memory_type, content_text, content_json, content_hash, "
+                "status, importance, trust_tier, audiences_json, sensitivity, sensitivity_rank, "
+                "valid_from, valid_to, policy_labels_json, created_at, updated_at"
+                ") VALUES ("
+                ":memory_id, :namespace, :memory_type, :content_text, :content_json, :content_hash, "
+                ":status, :importance, :trust_tier, :audiences_json, :sensitivity, :sensitivity_rank, "
+                ":valid_from, :valid_to, :policy_labels_json, :created_at, :updated_at"
+                ") ON CONFLICT(memory_id) DO NOTHING"
+            ),
+            {
+                "memory_id": memory_id,
+                "namespace": namespace,
+                "memory_type": proposal.memory_type,
+                "content_text": content_text,
+                "content_json": content_json,
+                "content_hash": hash_text(content_text),
+                "status": "validated",
+                "importance": float(proposal.importance),
+                "trust_tier": float(proposal.trust),
+                "audiences_json": json.dumps(audiences, separators=(",", ":"), sort_keys=True),
+                "sensitivity": proposal.policy.sensitivity,
+                "sensitivity_rank": sensitivity_rank,
+                "valid_from": proposal.valid_from.isoformat() if proposal.valid_from else None,
+                "valid_to": proposal.valid_to.isoformat() if proposal.valid_to else None,
+                "policy_labels_json": policy_labels,
+                "created_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+            },
+        )
+        if self._fts_available:
+            session.execute(
+                sa.text("DELETE FROM memory_fts WHERE memory_id = :memory_id"),
+                {"memory_id": memory_id},
+            )
+            session.execute(
+                sa.text(
+                    "INSERT INTO memory_fts(memory_id, content_text) "
+                    "VALUES (:memory_id, :content_text)"
+                ),
+                {"memory_id": memory_id, "content_text": content_text},
+            )
+
+    def _insert_embedding(
+        self,
+        session,
+        proposal: MemoryProposal,
+        memory_id: str,
+        content_text: str,
+        now: dt.datetime,
+    ) -> None:
+        if not self._config.enable_query_embedding:
+            return
+        vectors = self._embedder.embed_texts([content_text])
+        if not vectors:
+            return
+        from ..indexing.sqlite_utils import vector_norm, vector_signature, vector_to_blob, signature_bucket
+
+        vector = vectors[0]
+        norm = vector_norm(vector)
+        signature = vector_signature(vector, seed=self._signature_seed, bits=self._signature_bits)
+        bucket = signature_bucket(signature, bits=self._bucket_bits)
+        session.execute(
+            sa.text(
+                "INSERT INTO memory_embeddings("
+                "memory_id, model, embedding, norm, signature, bucket, created_at"
+                ") VALUES ("
+                ":memory_id, :model, :embedding, :norm, :signature, :bucket, :created_at"
+                ") ON CONFLICT(memory_id, model) DO NOTHING"
+            ),
+            {
+                "memory_id": memory_id,
+                "model": self._embedder.model_id,
+                "embedding": vector_to_blob(vector),
+                "norm": norm,
+                "signature": signature,
+                "bucket": bucket,
+                "created_at": now.isoformat(),
+            },
+        )
+
+    def _audience_allows(self, audiences_json: str | None, allowed: list[str]) -> bool:
+        if not allowed:
+            return False
+        if not audiences_json:
+            return False
+        try:
+            audiences = json.loads(audiences_json)
+        except Exception:
+            return False
+        return any(aud in audiences for aud in allowed)
+
+    def _gather_candidates(
+        self, request: MemoryQueryRequest, namespace: str, now: dt.datetime
+    ) -> dict[str, CandidateScores]:
+        scores: dict[str, CandidateScores] = {}
+        max_rank = self._config.policy.sensitivity_order.index(request.policy.sensitivity_max)
+        allowed_statuses = ["active", "validated"]
+
+        def _record(memory_id: str, key: str, value: float, reason: str) -> None:
+            entry = scores.setdefault(memory_id, CandidateScores())
+            setattr(entry, key, max(getattr(entry, key), value))
+            entry.reasons.add(reason)
+
+        with self._db.session() as session:
+            if self._config.enable_query_embedding and request.query_embedding:
+                query_vector = request.query_embedding
+            elif self._config.enable_query_embedding:
+                query_vector = self._embedder.embed_texts([request.query])[0]
+            else:
+                query_vector = None
+
+            if query_vector and self._config.retrieval.topk_vector > 0:
+                from ..indexing.sqlite_utils import (
+                    cosine_similarity,
+                    signature_bucket,
+                    vector_from_blob,
+                    vector_norm,
+                    vector_signature,
+                )
+
+                signature = vector_signature(
+                    query_vector, seed=self._signature_seed, bits=self._signature_bits
+                )
+                bucket = signature_bucket(signature, bits=self._bucket_bits)
+                cap = self._candidate_cap(
+                    request.topk_vector or self._config.retrieval.topk_vector
+                )
+                rows = session.execute(
+                    sa.text(
+                        "SELECT mi.memory_id, me.embedding, me.norm, mi.audiences_json "
+                        "FROM memory_items mi "
+                        "JOIN memory_embeddings me ON mi.memory_id = me.memory_id "
+                        "WHERE mi.namespace = :namespace "
+                        "AND mi.status IN (:status_a, :status_b) "
+                        "AND mi.sensitivity_rank <= :max_rank "
+                        "AND (mi.valid_from IS NULL OR mi.valid_from <= :now) "
+                        "AND (mi.valid_to IS NULL OR mi.valid_to >= :now) "
+                        "AND me.model = :model "
+                        "AND me.bucket = :bucket "
+                        "ORDER BY mi.memory_id ASC "
+                        "LIMIT :limit"
+                    ),
+                    {
+                        "namespace": namespace,
+                        "status_a": allowed_statuses[0],
+                        "status_b": allowed_statuses[1],
+                        "max_rank": max_rank,
+                        "now": now.isoformat(),
+                        "model": self._embedder.model_id,
+                        "bucket": bucket,
+                        "limit": cap,
+                    },
+                ).fetchall()
+                if len(rows) < (request.topk_vector or self._config.retrieval.topk_vector):
+                    rows = session.execute(
+                        sa.text(
+                            "SELECT mi.memory_id, me.embedding, me.norm, mi.audiences_json "
+                            "FROM memory_items mi "
+                            "JOIN memory_embeddings me ON mi.memory_id = me.memory_id "
+                            "WHERE mi.namespace = :namespace "
+                            "AND mi.status IN (:status_a, :status_b) "
+                            "AND mi.sensitivity_rank <= :max_rank "
+                            "AND (mi.valid_from IS NULL OR mi.valid_from <= :now) "
+                            "AND (mi.valid_to IS NULL OR mi.valid_to >= :now) "
+                            "AND me.model = :model "
+                            "ORDER BY mi.memory_id ASC "
+                            "LIMIT :limit"
+                        ),
+                        {
+                            "namespace": namespace,
+                            "status_a": allowed_statuses[0],
+                            "status_b": allowed_statuses[1],
+                            "max_rank": max_rank,
+                            "now": now.isoformat(),
+                            "model": self._embedder.model_id,
+                            "limit": cap,
+                        },
+                    ).fetchall()
+                for memory_id, embedding, norm, audiences_json in rows:
+                    if not self._audience_allows(audiences_json, request.policy.audience):
+                        continue
+                    stored = vector_from_blob(embedding)
+                    sem_score = cosine_similarity(
+                        query_vector,
+                        stored,
+                        left_norm=vector_norm(query_vector),
+                        right_norm=float(norm or 0.0),
+                    )
+                    _record(memory_id, "semantic", sem_score, "semantic")
+
+            if self._config.retrieval.topk_keyword > 0:
+                limit = request.topk_keyword or self._config.retrieval.topk_keyword
+                if self._fts_available:
+                    rows = session.execute(
+                        sa.text(
+                            "SELECT mi.memory_id, bm25(memory_fts) AS rank, mi.audiences_json "
+                            "FROM memory_fts "
+                            "JOIN memory_items mi ON mi.memory_id = memory_fts.memory_id "
+                            "WHERE memory_fts MATCH :query "
+                            "AND mi.namespace = :namespace "
+                            "AND mi.status IN (:status_a, :status_b) "
+                            "AND mi.sensitivity_rank <= :max_rank "
+                            "AND (mi.valid_from IS NULL OR mi.valid_from <= :now) "
+                            "AND (mi.valid_to IS NULL OR mi.valid_to >= :now) "
+                            "ORDER BY rank ASC, mi.memory_id ASC "
+                            "LIMIT :limit"
+                        ),
+                        {
+                            "query": request.query,
+                            "namespace": namespace,
+                            "status_a": allowed_statuses[0],
+                            "status_b": allowed_statuses[1],
+                            "max_rank": max_rank,
+                            "now": now.isoformat(),
+                            "limit": limit,
+                        },
+                    ).fetchall()
+                    for memory_id, rank, audiences_json in rows:
+                        if not self._audience_allows(audiences_json, request.policy.audience):
+                            continue
+                        kw_score = 1.0 / (1.0 + abs(float(rank or 0.0)))
+                        _record(memory_id, "keyword", kw_score, "keyword")
+                else:
+                    rows = session.execute(
+                        sa.text(
+                            "SELECT memory_id, content_text, audiences_json "
+                            "FROM memory_items "
+                            "WHERE namespace = :namespace "
+                            "AND status IN (:status_a, :status_b) "
+                            "AND sensitivity_rank <= :max_rank "
+                            "AND (valid_from IS NULL OR valid_from <= :now) "
+                            "AND (valid_to IS NULL OR valid_to >= :now) "
+                            "ORDER BY memory_id ASC"
+                        ),
+                        {
+                            "namespace": namespace,
+                            "status_a": allowed_statuses[0],
+                            "status_b": allowed_statuses[1],
+                            "max_rank": max_rank,
+                            "now": now.isoformat(),
+                        },
+                    ).fetchall()
+                    tokens = [tok.lower() for tok in request.query.split() if tok.strip()]
+                    scored: list[tuple[str, float]] = []
+                    for memory_id, content_text, audiences_json in rows:
+                        if not self._audience_allows(audiences_json, request.policy.audience):
+                            continue
+                        text_lower = (content_text or "").lower()
+                        score = sum(1.0 for token in tokens if token in text_lower)
+                        if score > 0:
+                            scored.append((memory_id, score))
+                    scored.sort(key=lambda item: (-item[1], item[0]))
+                    for memory_id, score in scored[:limit]:
+                        _record(memory_id, "keyword", float(score), "keyword")
+
+            if request.entity_hints and self._config.retrieval.topk_graph > 0:
+                entity_ids = self._resolve_entity_ids(session, namespace, request.entity_hints)
+                graph_ids = self._expand_graph(session, namespace, entity_ids)
+                if graph_ids:
+                    sql, params = _build_in_clause("entity_id", graph_ids)
+                    rows = session.execute(
+                        sa.text(
+                            "SELECT DISTINCT me.memory_id, mi.audiences_json "
+                            "FROM memory_entities me "
+                            "JOIN memory_items mi ON mi.memory_id = me.memory_id "
+                            f"WHERE {sql} "
+                            "AND mi.namespace = :namespace "
+                            "AND mi.status IN (:status_a, :status_b) "
+                            "AND mi.sensitivity_rank <= :max_rank "
+                            "AND (mi.valid_from IS NULL OR mi.valid_from <= :now) "
+                            "AND (mi.valid_to IS NULL OR mi.valid_to >= :now) "
+                            "LIMIT :limit"
+                        ),
+                        {
+                            **params,
+                            "namespace": namespace,
+                            "status_a": allowed_statuses[0],
+                            "status_b": allowed_statuses[1],
+                            "max_rank": max_rank,
+                            "now": now.isoformat(),
+                            "limit": request.topk_graph or self._config.retrieval.topk_graph,
+                        },
+                    ).fetchall()
+                    for memory_id, audiences_json in rows:
+                        if not self._audience_allows(audiences_json, request.policy.audience):
+                            continue
+                        _record(memory_id, "graph", 1.0, "entity")
+        return scores
+
+    def _load_memory_items(self, session, memory_ids: list[str]) -> list[CandidateItem]:
+        if not memory_ids:
+            return []
+        sql, params = _build_in_clause("memory_id", memory_ids)
+        rows = session.execute(
+            sa.text(
+                "SELECT memory_id, memory_type, content_text, content_json, importance, trust_tier, "
+                "created_at, sensitivity_rank "
+                f"FROM memory_items WHERE {sql} ORDER BY memory_id ASC"
+            ),
+            params,
+        ).fetchall()
+        items: list[CandidateItem] = []
+        for row in rows:
+            created_at = _parse_dt(row[6]) or utc_now()
+            content_json = {}
+            if isinstance(row[3], str):
+                try:
+                    content_json = json.loads(row[3])
+                except Exception:
+                    content_json = {}
+            items.append(
+                CandidateItem(
+                    memory_id=row[0],
+                    memory_type=row[1],
+                    content_text=row[2],
+                    content_json=content_json,
+                    importance=float(row[4]),
+                    trust_tier=float(row[5]),
+                    created_at=created_at,
+                    sensitivity_rank=int(row[7]),
+                    scores=CandidateScores(),
+                )
+            )
+        return items
+
+    def _resolve_entity_ids(self, session, namespace: str, hints) -> list[str]:
+        names = [hint.name for hint in hints]
+        if not names:
+            return []
+        sql, params = _build_in_clause("name", names)
+        rows = session.execute(
+            sa.text(
+                f"SELECT entity_id FROM entities WHERE namespace = :namespace AND {sql} "
+                "ORDER BY entity_id ASC"
+            ),
+            {"namespace": namespace, **params},
+        ).fetchall()
+        return [row[0] for row in rows]
+
+    def _expand_graph(self, session, namespace: str, entity_ids: list[str]) -> list[str]:
+        if not entity_ids or self._config.retrieval.graph_depth <= 0:
+            return entity_ids
+        visited = set(entity_ids)
+        frontier = list(entity_ids)
+        for _depth in range(self._config.retrieval.graph_depth):
+            if not frontier:
+                break
+            sql, params = _build_in_clause("from_entity_id", frontier)
+            rows = session.execute(
+                sa.text(
+                    f"SELECT to_entity_id, relation, weight FROM edges "
+                    f"WHERE namespace = :namespace AND {sql} "
+                    "ORDER BY relation ASC, weight DESC, to_entity_id ASC"
+                ),
+                {"namespace": namespace, **params},
+            ).fetchall()
+            next_frontier: list[str] = []
+            for to_entity_id, _relation, _weight in rows:
+                if to_entity_id in visited:
+                    continue
+                visited.add(to_entity_id)
+                next_frontier.append(to_entity_id)
+                if len(visited) >= self._config.retrieval.graph_max_nodes:
+                    return list(visited)
+            frontier = next_frontier
+        return list(visited)
+
+    def health(self) -> dict[str, object]:
+        warnings: list[str] = []
+        with self._db.engine.connect() as conn:
+            db_connected = conn.execute(sa.text("SELECT 1")).scalar() == 1
+            tables_ready = (
+                conn.execute(
+                    sa.text(
+                        "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_items'"
+                    )
+                ).first()
+                is not None
+            )
+        if not self._fts_available:
+            warnings.append("fts_unavailable")
+        return {
+            "status": "ok" if db_connected else "error",
+            "db_connected": db_connected,
+            "pgvector": False,
+            "tables_ready": tables_ready,
+            "warnings": warnings,
+        }
+
+
+def _parse_dt(value: object) -> dt.datetime | None:
+    if isinstance(value, dt.datetime):
+        return _ensure_aware(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        try:
+            parsed = dt.datetime.fromisoformat(raw)
+        except Exception:
+            return None
+        return _ensure_aware(parsed)
+    return None
 
 
 def _build_in_clause(column: str, values: list[str]) -> tuple[str, dict[str, object]]:

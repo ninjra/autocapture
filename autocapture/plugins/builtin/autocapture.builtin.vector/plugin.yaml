@@ -3,12 +3,12 @@ plugin_id: autocapture.builtin.vector
 name: Autocapture Builtin Vector Backend
 version: 1.0.0
 description: Built-in vector backend (Qdrant).
-enabled_by_default: true
+enabled_by_default: false
 extensions:
   - kind: vector.backend
     id: qdrant
     name: Qdrant
-    aliases: [local]
+    aliases: [qdrant]
     pillars:
       data_handling:
         cloud: optional

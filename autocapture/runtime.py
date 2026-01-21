@@ -208,16 +208,36 @@ class AppRuntime:
                 config.embed, pause_controller=self._runtime_context.pause
             )
         dim = getattr(self._retrieval_embedder, "dim", None) or int(config.qdrant.text_vector_size)
+        self._log.info(
+            "Routing: vector_backend={} spans_v2_backend={} table_extractor={}",
+            getattr(config.routing, "vector_backend", "local"),
+            getattr(config.routing, "spans_v2_backend", "local"),
+            getattr(config.routing, "table_extractor", "disabled"),
+        )
+        vector_backend_id = (getattr(config.routing, "vector_backend", "local") or "local").strip()
+        vector_record = None
+        try:
+            vector_record = self._plugins.resolve_record("vector.backend", vector_backend_id)
+        except Exception as exc:
+            self._log.warning(
+                "Vector backend record lookup failed ({}): {}", vector_backend_id, exc
+            )
         try:
             backend = self._plugins.resolve_extension(
                 "vector.backend",
-                "qdrant",
-                factory_kwargs={"dim": dim},
+                vector_backend_id,
+                factory_kwargs={"dim": dim, "db": self._db},
             )
         except Exception as exc:
-            self._log.warning("Vector backend plugin failed: {}", exc)
+            self._log.warning("Vector backend plugin failed ({}): {}", vector_backend_id, exc)
             backend = None
         self._vector_index = VectorIndex(config, dim, backend=backend)
+        if vector_record:
+            self._log.info(
+                "Resolved vector.backend '{}' -> {}",
+                vector_backend_id,
+                vector_record.plugin_id,
+            )
         self._tracker = (
             HostVectorTracker(
                 config=config.tracking,

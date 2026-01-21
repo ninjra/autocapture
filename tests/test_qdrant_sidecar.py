@@ -21,18 +21,21 @@ def _base_config(tmp_path: Path) -> AppConfig:
 
 def test_should_manage_sidecar_localhost(tmp_path: Path) -> None:
     config = _base_config(tmp_path)
+    config.routing.vector_backend = "qdrant"
     config.qdrant.url = "http://127.0.0.1:6333"
     assert should_manage_sidecar(config) is True
 
 
 def test_should_manage_sidecar_remote(tmp_path: Path) -> None:
     config = _base_config(tmp_path)
+    config.routing.vector_backend = "qdrant"
     config.qdrant.url = "http://qdrant.example.com:6333"
     assert should_manage_sidecar(config) is False
 
 
 def test_sidecar_missing_binary_no_crash(tmp_path: Path, monkeypatch) -> None:
     config = _base_config(tmp_path)
+    config.routing.vector_backend = "qdrant"
     config.qdrant.url = "http://127.0.0.1:6333"
     monkeypatch.setattr(
         "autocapture.qdrant.sidecar.resolve_qdrant_path",

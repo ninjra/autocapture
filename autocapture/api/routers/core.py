@@ -511,7 +511,9 @@ def build_router(
             checks["db"] = {"ok": False, "detail": f"{exc}"}
             overall_ok = False
 
-        if config.qdrant.enabled:
+        vector_backend = (getattr(config.routing, "vector_backend", "") or "").strip().lower()
+        spans_backend = (getattr(config.routing, "spans_v2_backend", "") or "").strip().lower()
+        if vector_backend == "qdrant" or spans_backend == "qdrant":
             try:
                 from qdrant_client import QdrantClient
 
@@ -543,7 +545,7 @@ def build_router(
         else:
             checks["qdrant"] = {
                 "ok": True,
-                "detail": "disabled",
+                "detail": "disabled (routing)",
                 "skipped": True,
             }
 

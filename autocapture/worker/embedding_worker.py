@@ -616,7 +616,7 @@ class EmbeddingWorker:
                         "span_id": span_id,
                         "event_id": event.event_id,
                         "embedding_model": self._embedder.model_name,
-                        "index_backend": "qdrant" if self._config.qdrant.enabled else "none",
+                        "index_backend": getattr(self._config.routing, "vector_backend", "local"),
                         "index_version": self._config.next10.index_versions.get("vector", "v1"),
                     },
                 )

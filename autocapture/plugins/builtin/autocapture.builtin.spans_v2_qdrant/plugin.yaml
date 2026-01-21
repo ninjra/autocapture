@@ -1,0 +1,19 @@
+schema_version: 1
+plugin_id: autocapture.builtin.spans_v2_qdrant
+name: Autocapture Builtin Qdrant Spans V2 Backend
+version: 1.0.0
+description: Built-in Qdrant spans_v2 backend.
+enabled_by_default: false
+extensions:
+  - kind: spans_v2.backend
+    id: qdrant
+    name: Qdrant
+    aliases: [qdrant]
+    pillars:
+      data_handling:
+        cloud: optional
+        cloud_images: none
+        supports_local: true
+    factory:
+      type: python
+      entrypoint: autocapture.plugins.builtin.factories:create_spans_v2_backend_qdrant

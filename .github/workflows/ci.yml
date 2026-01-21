@@ -20,9 +20,13 @@ jobs:
         run: pip install poetry==1.8.3
       - name: Install dependencies
         timeout-minutes: 15
-        run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
+        run: poetry install --with dev --extras "sqlcipher" --no-interaction --no-ansi --sync -vvv
       - name: Run CPU check
         run: make check
+      - name: Verify checksums
+        run: poetry run python tools/verify_checksums.py
+      - name: License guardrails
+        run: poetry run python tools/license_guardrails.py
       - name: Prompt template security gate
         run: poetry run python -m autocapture.promptops.validate
 
@@ -46,9 +50,13 @@ jobs:
           poetry --version
       - name: Install dependencies
         timeout-minutes: 15
-        run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
+        run: poetry install --with dev --extras "sqlcipher" --no-interaction --no-ansi --sync -vvv
       - name: Memory guard
         run: python .tools/memory_guard.py --check
+      - name: Verify checksums
+        run: poetry run python tools/verify_checksums.py
+      - name: License guardrails
+        run: poetry run python tools/license_guardrails.py
 
       - name: Release gate
         env:
@@ -106,13 +114,17 @@ jobs:
           poetry --version
       - name: Install dependencies
         timeout-minutes: 20
-        run: poetry install --with dev --extras "ui windows ocr ocr-gpu embed-fast" --no-interaction --no-ansi --sync -vvv
+        run: poetry install --with dev --extras "ui windows ocr ocr-gpu embed-fast sqlcipher" --no-interaction --no-ansi --sync -vvv
       - name: Memory guard
         run: python .tools/memory_guard.py --check
       - name: Install Inno Setup
         run: choco install innosetup -y
       - name: Release gate
         run: poetry run python tools/release_gate.py
+      - name: Verify checksums
+        run: poetry run python tools/verify_checksums.py
+      - name: License guardrails
+        run: poetry run python tools/license_guardrails.py
       - name: Overlay tracker Windows tests
         run: poetry run pytest -q tests/test_overlay_tracker_windows.py
       - name: Upload PyInstaller bundle
@@ -143,9 +155,13 @@ jobs:
         run: pip install poetry==1.8.3
       - name: Install dependencies
         timeout-minutes: 20
-        run: poetry install --with dev --no-interaction --no-ansi --sync -vvv
+        run: poetry install --with dev --extras "sqlcipher" --no-interaction --no-ansi --sync -vvv
       - name: Pillar gate
         run: poetry run python tools/pillar_gate.py
+      - name: Verify checksums
+        run: poetry run python tools/verify_checksums.py
+      - name: License guardrails
+        run: poetry run python tools/license_guardrails.py
       - name: Privacy scanner
         run: poetry run python tools/privacy_scanner.py
       - name: Provenance gate

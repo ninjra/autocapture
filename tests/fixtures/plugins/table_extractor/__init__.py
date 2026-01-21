@@ -1,0 +1,1 @@
+"""Table extractor plugin fixture."""

@@ -18,13 +18,16 @@ It ingests structured memory proposals with provenance anchors and serves bounde
 - `GET /metrics`
 
 ## Run Locally
-1. Ensure Postgres is running and `pgvector` is enabled.
-2. Run migrations (same repo Alembic workflow):
-   - `poetry run alembic upgrade head`
-3. Start the service:
-   - `poetry run autocapture memory-service`
+By default the Memory Service uses a local SQLite file at `${data_dir}/memory_service.db` and
+initializes schema automatically.
 
-You can override the service database URL via `memory_service.database_url` in config.
+To use Postgres instead:
+1. Ensure Postgres is running and `pgvector` is enabled.
+2. Set `memory_service.database_url` to the Postgres URL.
+3. Run migrations (same repo Alembic workflow):
+   - `poetry run alembic upgrade head`
+4. Start the service:
+   - `poetry run autocapture memory-service`
 
 ## Configuration Highlights
 ```yaml

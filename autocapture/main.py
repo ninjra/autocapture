@@ -754,7 +754,7 @@ def main(argv: list[str] | None = None) -> None:
             from .indexing.vector_index import VectorIndex
 
             vector_index = None
-            if args.include_vectors and config.qdrant.enabled:
+            if args.include_vectors:
                 try:
                     embedder = EmbeddingService(config.embed)
                     vector_index = VectorIndex(config, embedder.dim)
@@ -785,7 +785,7 @@ def main(argv: list[str] | None = None) -> None:
                 return
             vector_index = None
             spans_index = None
-            if args.include_vectors and config.qdrant.enabled:
+            if args.include_vectors:
                 try:
                     embedder = EmbeddingService(config.embed)
                     vector_index = VectorIndex(config, embedder.dim)

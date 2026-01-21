@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import threading
-from typing import Optional
+from typing import Optional, Protocol
 
 from ..config import AppConfig
 from ..logging_utils import get_logger
@@ -29,17 +29,62 @@ class SpanV2Upsert:
     embedding_model: str
 
 
+class SpansV2Backend(Protocol):
+    def upsert(self, upserts: list[SpanV2Upsert]) -> None: ...
+
+    def search_dense(
+        self,
+        vector: list[float],
+        k: int,
+        *,
+        filters: dict | None,
+        embedding_model: str,
+    ) -> list[VectorHit]: ...
+
+    def search_sparse(
+        self,
+        vector: SparseEmbedding,
+        k: int,
+        *,
+        filters: dict | None,
+    ) -> list[VectorHit]: ...
+
+    def search_late(
+        self,
+        vectors: list[list[float]],
+        k: int,
+        *,
+        filters: dict | None,
+    ) -> list[VectorHit]: ...
+
+    def delete_event_ids(self, event_ids: list[str]) -> int: ...
+
+
 class SpansV2Index:
-    def __init__(self, config: AppConfig, dim: int, *, backend: Optional[object] = None) -> None:
+    def __init__(
+        self, config: AppConfig, dim: int, *, backend: Optional[SpansV2Backend] = None
+    ) -> None:
         self._config = config
         self._dim = dim
         self._log = get_logger("index.spans_v2")
         self._backend = backend
-        if self._backend is None and config.qdrant.enabled:
-            self._backend = QdrantSpansV2Backend(config, dim)
-            self._log.info("Spans v2 index: Qdrant")
-        elif self._backend is None:
-            self._log.info("Spans v2 index: disabled")
+        if self._backend is None:
+            backend_id = (
+                (getattr(config.routing, "spans_v2_backend", "") or "local")
+                .strip()
+                .lower()
+            )
+            if backend_id in {"local", "sqlite"}:
+                from .sqlite_backends import SqliteSpansV2Backend
+                from ..storage.database import DatabaseManager
+
+                self._backend = SqliteSpansV2Backend(DatabaseManager(config.database), dim, config)
+                self._log.info("Spans v2 index: SQLite")
+            elif backend_id == "qdrant":
+                self._backend = QdrantSpansV2Backend(config, dim)
+                self._log.info("Spans v2 index: Qdrant")
+            else:
+                self._log.info("Spans v2 index: disabled")
 
     def upsert(self, upserts: list[SpanV2Upsert]) -> None:
         if not self._backend:

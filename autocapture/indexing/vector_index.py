@@ -1,4 +1,4 @@
-"""Vector index utilities (Qdrant backend only)."""
+"""Vector index utilities."""
 
 from __future__ import annotations
 
@@ -263,7 +263,14 @@ class VectorIndex:
         self._log = get_logger("index.vector")
         self._backend: Optional[VectorBackend] = backend
         if self._backend is None:
-            if config.qdrant.enabled:
+            backend_id = (getattr(config.routing, "vector_backend", "") or "local").strip().lower()
+            if backend_id in {"local", "sqlite"}:
+                from .sqlite_backends import SqliteVectorBackend
+                from ..storage.database import DatabaseManager
+
+                self._backend = SqliteVectorBackend(DatabaseManager(config.database), dim, config)
+                self._log.info("Vector index: SQLite")
+            elif backend_id == "qdrant":
                 self._backend = QdrantBackend(config, dim)
                 self._log.info("Vector index: Qdrant")
             else:

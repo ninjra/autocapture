@@ -21,6 +21,7 @@ from .protocols import (
     GraphAdapter,
     DecodeBackend,
     TrainingPipeline,
+    TableExtractor,
 )
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "GraphAdapter",
     "DecodeBackend",
     "TrainingPipeline",
+    "TableExtractor",
 ]

@@ -209,9 +209,15 @@ def _parse_qdrant_host(url: str) -> tuple[str | None, int]:
     return host, port
 
 
+def _uses_qdrant(config: AppConfig) -> bool:
+    vector_backend = (getattr(config.routing, "vector_backend", "") or "").strip().lower()
+    spans_backend = (getattr(config.routing, "spans_v2_backend", "") or "").strip().lower()
+    return vector_backend == "qdrant" or spans_backend == "qdrant"
+
+
 def _check_qdrant(config: AppConfig) -> DoctorCheckResult:
-    if not config.qdrant.enabled:
-        return DoctorCheckResult("qdrant", True, "Disabled")
+    if not _uses_qdrant(config):
+        return DoctorCheckResult("qdrant", True, "Disabled (routing)")
     host, port = _parse_qdrant_host(config.qdrant.url)
     if not host:
         return DoctorCheckResult("qdrant", False, "Invalid qdrant.url")
@@ -375,8 +381,8 @@ def _check_embeddings(config: AppConfig) -> DoctorCheckResult:
 
 
 def _check_vector_index(config: AppConfig) -> DoctorCheckResult:
-    if not config.qdrant.enabled:
-        return DoctorCheckResult("vector_index", True, "Disabled")
+    if not _uses_qdrant(config):
+        return DoctorCheckResult("vector_index", True, "SQLite (routing)")
     host, _port = _parse_qdrant_host(config.qdrant.url)
     if host and is_loopback_host(host) and resolve_qdrant_path(config.qdrant):
         return DoctorCheckResult(

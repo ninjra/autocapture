@@ -48,7 +48,8 @@ def run_retrieval_eval(
         database=DatabaseConfig(url=f"sqlite:///{tmp.name}", sqlite_wal=False),
     )
     config.embed.text_model = "local-test"
-    config.qdrant.enabled = False
+    config.routing.vector_backend = "local"
+    config.routing.spans_v2_backend = "local"
     config.retrieval.fusion_enabled = False
     config.retrieval.sparse_enabled = False
     config.retrieval.late_enabled = False

@@ -42,7 +42,8 @@ def test_parse_time_expression_at_1700_yesterday() -> None:
 def test_time_only_retrieval_returns_range(tmp_path) -> None:
     config = AppConfig(database=DatabaseConfig(url=f"sqlite:///{tmp_path / 'db.sqlite'}"))
     config.embed.text_model = "local-test"
-    config.qdrant.enabled = False
+    config.routing.vector_backend = "local"
+    config.routing.spans_v2_backend = "local"
     db = DatabaseManager(config.database)
 
     inside = EventRecord(

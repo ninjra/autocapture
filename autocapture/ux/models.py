@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime as dt
 from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -69,6 +68,9 @@ class RoutingSummary(BaseModel):
     ocr: str = "local"
     embedding: str = "local"
     retrieval: str = "local"
+    vector_backend: str = "local"
+    spans_v2_backend: str = "local"
+    table_extractor: str = "disabled"
     reranker: str = "disabled"
     compressor: str = "extractive"
     verifier: str = "rules"

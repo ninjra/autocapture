@@ -260,7 +260,7 @@ class GatewayRouter:
                 payload["temperature"] = 0.0
             if stage.decode.strategy != "standard":
                 backend = self._resolve_decode_backend(stage)
-                if not _cloud_allowed(self._config, policy.allow_cloud, backend):
+                if not _cloud_allowed(self._config, stage.allow_cloud, backend):
                     raise UpstreamError("cloud_blocked", status_code=403)
                 decode_limit = stage.decode.max_concurrency
                 if stage.decode.strategy == "medusa":

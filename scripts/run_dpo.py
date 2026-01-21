@@ -49,7 +49,6 @@ def main() -> int:
         return 0
 
     try:
-        import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
         from trl import DPOTrainer
         import datasets

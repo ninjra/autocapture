@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence
+from typing import Protocol, Sequence, TYPE_CHECKING
 
 from ...llm.providers import LLMProvider
 from ...vision.types import ExtractionResult
@@ -15,6 +15,12 @@ from ...config import CircuitBreakerConfig
 from ...memory.graph_adapters import GraphHit
 from ...training.models import TrainingRunRequest, TrainingRunResult
 from ...memory.verification import Claim
+if TYPE_CHECKING:
+    from ...enrichment.table_extractor import (
+        TableExtractionRequest,
+        TableExtractionResult,
+        TableExtractorSpec,
+    )
 
 
 class VisionExtractor(Protocol):
@@ -75,6 +81,12 @@ class TrainingPipeline(Protocol):
     def run(self, request: TrainingRunRequest) -> TrainingRunResult: ...
 
 
+class TableExtractor(Protocol):
+    def describe(self) -> "TableExtractorSpec": ...
+
+    def extract(self, request: "TableExtractionRequest") -> "TableExtractionResult": ...
+
+
 __all__ = [
     "LLMProvider",
     "VisionExtractor",
@@ -89,4 +101,5 @@ __all__ = [
     "GraphAdapter",
     "DecodeBackend",
     "TrainingPipeline",
+    "TableExtractor",
 ]

@@ -137,8 +137,10 @@ Placeholders: `{dataset_path}`, `{output_dir}`, `{run_id}`, `{params_json}`.
 
 Autocapture local mode on Windows does **not** require Docker. Qdrant and FFmpeg
 are bundled in release builds, and the app starts a local Qdrant sidecar
-automatically when `qdrant.url` points at localhost. Use TNAS/Docker only when
-you want centralized storage or shared services.
+automatically when `qdrant.url` points at localhost and routing selects Qdrant.
+SQLite backends are the default; Qdrant is opt-in via `routing.vector_backend`
+and `routing.spans_v2_backend`. Use TNAS/Docker only when you want centralized
+storage or shared services.
 
 1. **Install Docker on the TNAS.** Use TerraMaster’s Docker Center (or SSH with
    `docker`/`docker-compose`) so Postgres, Qdrant, Prometheus, and Grafana all

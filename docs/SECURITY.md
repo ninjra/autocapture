@@ -36,6 +36,11 @@
 - Use `autocapture db encrypt` to migrate a plaintext SQLite DB to encrypted form safely.
 - Host tracking DB supports optional SQLCipher encryption via `tracking.encryption_enabled`.
 
+## Native extensions
+- Native SQLite extensions must be allowlisted in `CHECKSUMS.json`.
+- `security.secure_mode=true` fails closed on unknown or mismatched checksums.
+- Run `python tools/verify_checksums.py` to validate the allowlist offline.
+
 ## Encryption in motion
 - Postgres URLs must include `sslmode=require`/`verify-*` when `database.require_tls_for_remote=true`.
 - Qdrant URLs must be HTTPS when `qdrant.require_tls_for_remote=true`.

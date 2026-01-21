@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections import defaultdict
-from typing import Any
+
 
 from sqlalchemy import func, select
 
