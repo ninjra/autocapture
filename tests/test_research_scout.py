@@ -158,4 +158,14 @@ def test_scout_report_includes_watchlist(tmp_path: Path) -> None:
 
     report = run_scout(config, now=now)
     urls = {item.get("url") for item in report.get("watchlist", [])}
-    assert "https://arxiv.org/abs/2509.26507" in urls
+    expected = {
+        "https://arxiv.org/abs/2509.26507",
+        "https://github.com/Hannibal046/Awesome-LLM",
+        "https://github.com/BerriAI/litellm",
+        "https://github.com/Future-House/paper-qa",
+        "https://github.com/Cinnamon/kotaemon",
+        "https://github.com/poly-mcp/Polymcp",
+        "https://github.com/bytedance/Dolphin",
+        "https://github.com/Significant-Gravitas/AutoGPT",
+    }
+    assert expected.issubset(urls)
