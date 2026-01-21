@@ -279,7 +279,10 @@ class UIGroundingConfig(BaseModel):
 
 
 class VisionExtractConfig(BaseModel):
-    engine: str = Field("vlm", description="vlm|rapidocr|deepseek-ocr|disabled")
+    engine: str = Field(
+        "rapidocr-onnxruntime",
+        description="rapidocr-onnxruntime|rapidocr|vlm|deepseek-ocr|disabled",
+    )
     fallback_engine: str = Field("rapidocr-onnxruntime")
     tiles_x: int = Field(3, ge=1)
     tiles_y: int = Field(2, ge=1)

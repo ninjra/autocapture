@@ -577,6 +577,9 @@ ocr:
   paddle_ppstructure_enabled: false
   paddle_ppstructure_model_dir: null
   paddle_ppstructure_use_gpu: false
+vision_extract:
+  engine: rapidocr-onnxruntime
+  fallback_engine: rapidocr-onnxruntime
 embed:
   text_model: BAAI/bge-base-en-v1.5
   image_model: google/siglip2-so400m-patch14-384
