@@ -101,7 +101,10 @@ def plan_setup(config_path: Path, *, profile: str = "full") -> SetupPlan:
         warnings.append("database.url is not sqlite; SQLCipher encryption applies to sqlite only.")
 
     if not _has_module("pysqlcipher3"):
-        warnings.append("SQLCipher module missing; run: poetry install --extras sqlcipher")
+        detail = "SQLCipher module missing; run: poetry install --extras sqlcipher"
+        if os.name == "nt":
+            detail += " (Windows uses rotki-pysqlcipher3 wheels)"
+        warnings.append(detail)
 
     if not _has_module("torch"):
         warnings.append("PyTorch missing; install a CUDA-enabled build.")

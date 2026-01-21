@@ -194,7 +194,7 @@ class DatabaseManager:
         if importlib.util.find_spec("pysqlcipher3") is None:
             raise RuntimeError(
                 "SQLCipher support requires pysqlcipher3. Install via: "
-                "poetry install --extras sqlcipher"
+                "poetry install --extras sqlcipher (Windows uses rotki-pysqlcipher3 wheels)."
             )
         import pysqlcipher3.dbapi2 as sqlcipher  # type: ignore
 
