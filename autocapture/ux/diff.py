@@ -24,7 +24,9 @@ def diff_values(before: Any, after: Any, path: str = "") -> list[DiffEntry]:
                 entries.append(DiffEntry(path=next_path, before=None, after=after[key], kind="add"))
                 continue
             if key not in after:
-                entries.append(DiffEntry(path=next_path, before=before[key], after=None, kind="remove"))
+                entries.append(
+                    DiffEntry(path=next_path, before=before[key], after=None, kind="remove")
+                )
                 continue
             entries.extend(diff_values(before[key], after[key], next_path))
         return entries

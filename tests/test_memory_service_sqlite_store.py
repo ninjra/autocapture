@@ -84,7 +84,9 @@ def _seed_provenance(db: DatabaseManager, *, namespace: str) -> ProvenancePointe
     )
 
 
-def _build_store(tmp_path: Path, *, encrypted: bool) -> tuple[SqliteMemoryServiceStore, DatabaseManager]:
+def _build_store(
+    tmp_path: Path, *, encrypted: bool
+) -> tuple[SqliteMemoryServiceStore, DatabaseManager]:
     cfg = _db_config(tmp_path / "memory.db", encrypted=encrypted)
     mem_cfg = MemoryServiceConfig()
     db = DatabaseManager(cfg)

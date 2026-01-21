@@ -93,12 +93,8 @@ def upgrade() -> None:
         "CREATE INDEX IF NOT EXISTS ix_vec_spans_v2_model ON vec_spans_v2_meta(embedding_model)"
     )
     op.execute("CREATE INDEX IF NOT EXISTS ix_vec_spans_v2_app ON vec_spans_v2_meta(app)")
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_vec_spans_v2_domain ON vec_spans_v2_meta(domain)"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS ix_vec_spans_v2_bucket ON vec_spans_v2_dense(bucket)"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS ix_vec_spans_v2_domain ON vec_spans_v2_meta(domain)")
+    op.execute("CREATE INDEX IF NOT EXISTS ix_vec_spans_v2_bucket ON vec_spans_v2_dense(bucket)")
     op.execute(
         "CREATE INDEX IF NOT EXISTS ix_vec_spans_v2_sparse_token ON vec_spans_v2_sparse(token_id)"
     )

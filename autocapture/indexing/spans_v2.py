@@ -70,9 +70,7 @@ class SpansV2Index:
         self._backend = backend
         if self._backend is None:
             backend_id = (
-                (getattr(config.routing, "spans_v2_backend", "") or "local")
-                .strip()
-                .lower()
+                (getattr(config.routing, "spans_v2_backend", "") or "local").strip().lower()
             )
             if backend_id in {"local", "sqlite"}:
                 from .sqlite_backends import SqliteSpansV2Backend

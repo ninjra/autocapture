@@ -22,6 +22,21 @@ class InputVectorEvent:
 
 
 @dataclass(slots=True)
+class RawInputEvent:
+    ts_ms: int
+    monotonic_ms: int
+    device: Literal["keyboard", "mouse"]
+    kind: Literal[
+        "key_down",
+        "key_up",
+        "mouse_move",
+        "mouse_button",
+        "mouse_wheel",
+    ]
+    payload: dict[str, int]
+
+
+@dataclass(slots=True)
 class ForegroundChangeEvent:
     ts_ms: int
     new: ForegroundContext
@@ -41,6 +56,19 @@ class HostEventRow:
     id: str
     ts_start_ms: int
     ts_end_ms: int
+    kind: str
+    session_id: str | None
+    app_name: str | None
+    window_title: str | None
+    payload_json: str
+
+
+@dataclass(slots=True)
+class RawInputRow:
+    id: str
+    ts_ms: int
+    monotonic_ms: int
+    device: str
     kind: str
     session_id: str | None
     app_name: str | None

@@ -53,6 +53,27 @@
 - `features.enable_memory_service_write_hook`: enable Memory Service ingest hook.
 - `features.enable_memory_service_read_hook`: enable Memory Service read hook.
 
+## Paths & Storage
+- `paths.base_dir`: optional base directory; derives capture/worker/memory defaults.
+- `paths.data_dir` / `paths.staging_dir`: overrides for capture storage paths.
+- `paths.worker_dir`: overrides worker data dir.
+- `paths.memory_dir`: overrides memory store root.
+- `paths.tracking_db_path`: overrides host event SQLite file.
+- `paths.database_path`: overrides SQLite metadata DB file path.
+
+## Tracking
+- `tracking.raw_event_stream_enabled`: persist raw keyboard/mouse events (default: true).
+- `tracking.raw_event_flush_interval_ms`: raw input flush cadence in ms (default: 500).
+- `tracking.raw_event_batch_size`: buffer size before flush (default: 500).
+- `tracking.raw_event_retention_days`: raw input retention window (default: 60).
+
+## UI (Search Popup)
+- `ui.search_popup.focus_steal_on_show`: focus on open (default: true).
+- `ui.search_popup.focus_return_on_submit`: return focus after submit (default: true).
+- `ui.search_popup.fade_when_inactive`: fade when inactive (default: true).
+- `ui.search_popup.active_opacity` / `inactive_opacity`: opacity levels.
+- `ui.search_popup.pin_default`: keep popup interactive by default (default: false).
+
 ## Model Registry
 - `model_registry.enabled`: enable stage-based routing registry.
 - `model_registry.providers.*.max_concurrency`: per-provider concurrency cap.

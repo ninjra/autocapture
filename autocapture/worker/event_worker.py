@@ -547,8 +547,11 @@ class EventIngestWorker:
                     ts_end=None,
                     app_name=capture.foreground_process,
                     window_title=capture.foreground_window,
-                    url=None,
-                    domain=_extract_domain(capture.foreground_window, ocr_text),
+                    url=getattr(capture, "url", None),
+                    domain=(
+                        getattr(capture, "domain", None)
+                        or _extract_domain(capture.foreground_window, ocr_text)
+                    ),
                     screenshot_path=capture.image_path,
                     focus_path=focus_path,
                     screenshot_hash=screenshot_hash or "",
@@ -997,9 +1000,11 @@ class EventIngestWorker:
             update: dict[str, object] = {}
             if not proposal.provenance:
                 update["provenance"] = provenance
-            if (proposal.policy is None or not proposal.policy.audience or not proposal.policy.sensitivity) and (
-                default_policy is not None
-            ):
+            if (
+                proposal.policy is None
+                or not proposal.policy.audience
+                or not proposal.policy.sensitivity
+            ) and (default_policy is not None):
                 update["policy"] = default_policy
             if update:
                 proposal = proposal.model_copy(update=update)

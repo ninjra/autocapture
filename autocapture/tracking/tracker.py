@@ -12,13 +12,15 @@ from uuid import uuid4
 
 from ..config import TrackingConfig
 from ..logging_utils import get_logger
-from .store import SqliteHostEventStore, safe_payload
+from .store import SqliteHostEventStore, resolve_tracking_db_path, safe_payload
 from .types import (
     ClipboardChangeEvent,
     ForegroundChangeEvent,
     ForegroundContext,
     HostEventRow,
     InputVectorEvent,
+    RawInputEvent,
+    RawInputRow,
 )
 from .win_clipboard import (
     clipboard_has_image,
@@ -28,7 +30,7 @@ from .win_clipboard import (
 from .win_foreground import get_foreground_context
 
 
-EventType = InputVectorEvent | ForegroundChangeEvent | ClipboardChangeEvent
+EventType = InputVectorEvent | ForegroundChangeEvent | ClipboardChangeEvent | RawInputEvent
 
 
 class EventSource(Protocol):
@@ -380,15 +382,14 @@ class HostVectorTracker:
         self._last_drop_log = 0.0
         self._sources: list[EventSource] = []
         self._rows_written = 0
+        self._raw_rows_written = 0
         self._db_path = self._resolve_db_path()
+        self._foreground_ctx: ForegroundContext | None = None
 
     def _resolve_db_path(self) -> str:
-        db_path = self._config.db_path
-        if not db_path.is_absolute():
-            if not self._data_dir:
-                return str(db_path)
-            return str((Path(self._data_dir) / db_path).resolve())
-        return str(db_path)
+        return str(
+            resolve_tracking_db_path(self._config, Path(self._data_dir) if self._data_dir else None)
+        )
 
     def start(self) -> None:
         if not self._config.enabled:
@@ -429,7 +430,7 @@ class HostVectorTracker:
             self._thread.join(timeout=3.0)
         self._log.info(
             "Host vector tracker stopped (rows={}, dropped={})",
-            self._rows_written,
+            self._rows_written + self._raw_rows_written,
             self._dropped,
         )
 
@@ -461,6 +462,10 @@ class HostVectorTracker:
             idle_grace_ms=self._idle_grace_ms,
             track_mouse_movement=self._config.track_mouse_movement,
         )
+        raw_buffer: list[RawInputRow] = []
+        raw_last_flush = time.monotonic()
+        raw_flush_interval = self._config.raw_event_flush_interval_ms / 1000.0
+        raw_batch_size = self._config.raw_event_batch_size
         last_prune_check = 0.0
         while not self._stop.is_set() or not self._queue.empty():
             now_ms = _now_ms()
@@ -470,23 +475,60 @@ class HostVectorTracker:
                 event = None
             rows: list[HostEventRow] = []
             if event is not None:
-                rows.extend(aggregator.handle_event(event, now_ms))
+                if isinstance(event, RawInputEvent):
+                    if self._config.raw_event_stream_enabled:
+                        raw_buffer.append(self._raw_row(event, aggregator.session_id))
+                else:
+                    if isinstance(event, ForegroundChangeEvent):
+                        self._foreground_ctx = event.new
+                    rows.extend(aggregator.handle_event(event, now_ms))
                 self._queue.task_done()
             rows.extend(aggregator.handle_tick(now_ms))
             if rows:
                 store.insert_many(rows)
                 self._rows_written += len(rows)
-            if self._config.retention_days is not None:
+            if raw_buffer and (
+                len(raw_buffer) >= raw_batch_size
+                or (time.monotonic() - raw_last_flush) >= raw_flush_interval
+            ):
+                store.insert_raw_events(raw_buffer)
+                self._raw_rows_written += len(raw_buffer)
+                raw_buffer = []
+                raw_last_flush = time.monotonic()
+            if (
+                self._config.retention_days is not None
+                or self._config.raw_event_retention_days is not None
+            ):
                 now = time.monotonic()
                 if now - last_prune_check > 60:
                     last_prune_check = now
-                    cutoff_ms = _now_ms() - int(self._config.retention_days * 86400 * 1000)
-                    store.prune_older_than(cutoff_ms)
+                    if self._config.retention_days is not None:
+                        cutoff_ms = _now_ms() - int(self._config.retention_days * 86400 * 1000)
+                        store.prune_older_than(cutoff_ms)
+                    if self._config.raw_event_retention_days is not None:
+                        raw_cutoff = _now_ms() - int(
+                            self._config.raw_event_retention_days * 86400 * 1000
+                        )
+                        store.prune_raw_older_than(raw_cutoff)
         rows = aggregator.flush_all(_now_ms())
         if rows:
             store.insert_many(rows)
             self._rows_written += len(rows)
+        if raw_buffer:
+            store.insert_raw_events(raw_buffer)
+            self._raw_rows_written += len(raw_buffer)
         store.close()
+
+    def _raw_row(self, event: RawInputEvent, session_id: str | None) -> RawInputRow:
+        return _raw_event_row(event, session_id, self._foreground_ctx)
+
+    def ingest_raw_event(self, event: RawInputEvent) -> None:
+        if not self._config.enabled or not self._config.raw_event_stream_enabled:
+            return
+        try:
+            self._queue.put_nowait(event)
+        except queue.Full:
+            self._dropped += 1
 
 
 def _now_ms() -> int:
@@ -497,6 +539,35 @@ def _truncate(value: str, limit: int = 80) -> str:
     if len(value) <= limit:
         return value
     return value[:limit] + "…"
+
+
+def _raw_payload(payload: dict[str, int]) -> str:
+    return safe_payload(payload)
+
+
+def _raw_context(ctx: ForegroundContext | None) -> tuple[str | None, str | None]:
+    if ctx is None:
+        return None, None
+    return ctx.process_name, ctx.window_title
+
+
+def _raw_event_row(
+    event: RawInputEvent,
+    session_id: str | None,
+    ctx: ForegroundContext | None,
+) -> RawInputRow:
+    app_name, window_title = _raw_context(ctx)
+    return RawInputRow(
+        id=str(uuid4()),
+        ts_ms=event.ts_ms,
+        monotonic_ms=event.monotonic_ms,
+        device=event.device,
+        kind=event.kind,
+        session_id=session_id,
+        app_name=app_name,
+        window_title=window_title,
+        payload_json=_raw_payload(event.payload),
+    )
 
 
 def _clipboard_kind(has_text: bool, has_image: bool) -> str:

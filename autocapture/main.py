@@ -98,7 +98,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     delete_apply.add_argument("--sample-limit", type=int, default=20, help="Sample size.")
     delete_apply.add_argument("--preview-id", required=True, help="Preview token.")
     delete_apply.add_argument("--confirm", action="store_true", help="Confirm deletion.")
-    delete_apply.add_argument("--confirm-phrase", default="DELETE", help="Confirmation phrase (DELETE or I UNDERSTAND).")
+    delete_apply.add_argument(
+        "--confirm-phrase", default="DELETE", help="Confirmation phrase (DELETE or I UNDERSTAND)."
+    )
     delete_apply.add_argument("--expected-counts", default=None, help="JSON map of counts.")
     delete_apply.add_argument("--json", action="store_true", help="Output JSON.")
     audit = sub.add_parser("audit", help="Audit recent requests/answers.")
@@ -306,7 +308,11 @@ def main(argv: list[str] | None = None) -> None:
             print(json.dumps(snapshot.model_dump(mode="json"), indent=2, sort_keys=True))
         else:
             logger.info("Overall status: {}", snapshot.health.overall)
-            logger.info("OCR pending: {} processing: {}", snapshot.queues.ocr_pending, snapshot.queues.ocr_processing)
+            logger.info(
+                "OCR pending: {} processing: {}",
+                snapshot.queues.ocr_pending,
+                snapshot.queues.ocr_processing,
+            )
             logger.info(
                 "Embeddings pending spans: {} events: {}",
                 snapshot.queues.span_embed_pending,
@@ -337,7 +343,9 @@ def main(argv: list[str] | None = None) -> None:
                 print(json.dumps(effective.model_dump(mode="json"), indent=2, sort_keys=True))
             else:
                 logger.info("Active preset: {}", effective.settings.get("active_preset"))
-                logger.info("Privacy paused: {}", effective.settings.get("privacy", {}).get("paused"))
+                logger.info(
+                    "Privacy paused: {}", effective.settings.get("privacy", {}).get("paused")
+                )
             raise SystemExit(0)
         if args.settings_cmd == "preview":
             candidate = json.loads(Path(args.file).read_text(encoding="utf-8"))
@@ -649,9 +657,7 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(0)
         if args.training_cmd == "run":
             request = (
-                load_training_request(Path(args.config))
-                if args.config
-                else TrainingRunRequest()
+                load_training_request(Path(args.config)) if args.config else TrainingRunRequest()
             )
             if getattr(args, "dry_run", False):
                 request.dry_run = True

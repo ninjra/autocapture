@@ -13,7 +13,7 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
 
-from .paths import default_data_dir, default_memory_dir, default_staging_dir
+from .paths import default_data_dir, default_memory_dir, default_staging_dir, normalize_storage_path
 from .presets import apply_preset
 from .settings_store import read_settings
 
@@ -185,6 +185,9 @@ class CaptureConfig(BaseModel):
 
 class TrackingConfig(BaseModel):
     enabled: bool = True
+    raw_event_stream_enabled: bool = Field(
+        True, description="Enable raw input event storage for action replay timelines."
+    )
     db_path: Path = Field(
         Path("./host_events.sqlite"),
         description="SQLite file path for host events (relative to capture.data_dir).",
@@ -196,7 +199,16 @@ class TrackingConfig(BaseModel):
     track_mouse_movement: bool = True
     mouse_move_sample_ms: int = Field(50, ge=10)
     enable_clipboard: bool = False
+    raw_event_flush_interval_ms: int = Field(
+        500, ge=50, description="Flush cadence (ms) for raw input event batches."
+    )
+    raw_event_batch_size: int = Field(
+        500, ge=50, description="Max raw input events to buffer before flush."
+    )
     retention_days: int | None = None
+    raw_event_retention_days: int | None = Field(
+        60, ge=1, description="Days to retain raw input event data."
+    )
     encryption_enabled: bool = Field(
         False, description="Enable SQLCipher encryption for host events DB."
     )
@@ -349,6 +361,23 @@ class WorkerConfig(BaseModel):
     )
 
 
+class StoragePathsConfig(BaseModel):
+    base_dir: Path | None = Field(
+        None,
+        description="Base directory for capture/worker/storage paths (optional).",
+    )
+    data_dir: Path | None = Field(None, description="Override capture.data_dir (optional).")
+    staging_dir: Path | None = Field(None, description="Override capture.staging_dir (optional).")
+    worker_dir: Path | None = Field(None, description="Override worker.data_dir (optional).")
+    memory_dir: Path | None = Field(
+        None, description="Override memory.storage.root_dir (optional)."
+    )
+    tracking_db_path: Path | None = Field(None, description="Override tracking.db_path (optional).")
+    database_path: Path | None = Field(
+        None, description="Override SQLite database file path (optional)."
+    )
+
+
 class RuntimeAutoPauseConfig(BaseModel):
     enabled: bool = Field(
         True, description="Enable fullscreen auto-pause handling (alias: on_fullscreen)."
@@ -463,8 +492,8 @@ class RuntimeConfig(BaseModel):
 
 
 class RetentionPolicyConfig(BaseModel):
-    video_days: int = Field(3, ge=1)
-    roi_days: int = Field(14, ge=1)
+    video_days: int = Field(60, ge=1)
+    roi_days: int = Field(60, ge=1)
     max_media_gb: int = Field(200, ge=1)
     screenshot_ttl_days: int = Field(
         60, ge=1, description="Days to keep raw screenshots before pruning."
@@ -595,9 +624,7 @@ class EncryptionConfig(BaseModel):
 
 
 class TelemetryConfig(BaseModel):
-    capture_payloads: str = Field(
-        "none", description="Payload capture mode (none|redacted|full)."
-    )
+    capture_payloads: str = Field("none", description="Payload capture mode (none|redacted|full).")
     exporter: str = Field("none", description="Exporter (none|otlp).")
     otlp_endpoint: Optional[str] = None
     otlp_protocol: str = Field("http/protobuf", description="OTLP protocol (http/protobuf).")
@@ -1121,10 +1148,26 @@ class TemplateHardeningConfig(BaseModel):
     log_provenance: bool = Field(True, description="Log template provenance hashes on load.")
 
 
+class SearchPopupConfig(BaseModel):
+    focus_steal_on_show: bool = Field(True, description="Steal focus when opening the popup.")
+    focus_return_on_submit: bool = Field(True, description="Return focus after submitting a query.")
+    fade_when_inactive: bool = Field(True, description="Fade popup when inactive.")
+    active_opacity: float = Field(0.96, ge=0.2, le=1.0)
+    inactive_opacity: float = Field(0.7, ge=0.1, le=1.0)
+    pin_default: bool = Field(False, description="Keep popup interactive by default.")
+
+    @model_validator(mode="after")
+    def _validate_opacity(self) -> "SearchPopupConfig":
+        if self.inactive_opacity > self.active_opacity:
+            self.inactive_opacity = self.active_opacity
+        return self
+
+
 class UIConfig(BaseModel):
     overlay_citations_enabled: bool = Field(
         False, description="Enable citation overlay rendering in the UI/API."
     )
+    search_popup: SearchPopupConfig = SearchPopupConfig()
 
 
 class OverlayHotkeySpec(BaseModel):
@@ -1703,6 +1746,7 @@ class AppConfig(BaseModel):
         True,
         description="Hard offline mode: blocks all network egress unless a cloud profile is active.",
     )
+    paths: StoragePathsConfig = StoragePathsConfig()
     capture: CaptureConfig = CaptureConfig()
     tracking: TrackingConfig = TrackingConfig()
     ocr: OCRConfig = OCRConfig()
@@ -1913,6 +1957,95 @@ def resolve_overlay_bind_host(interface: str) -> str | None:
     return ips[0]
 
 
+def _apply_storage_paths_overrides(data: dict, logger: logging.Logger) -> None:
+    paths = data.get("paths")
+    if not isinstance(paths, dict):
+        return
+
+    def _norm(value: object) -> Path | None:
+        if value is None:
+            return None
+        try:
+            return normalize_storage_path(value)
+        except Exception as exc:
+            logger.warning("Invalid storage path %s: %s", value, exc)
+            return None
+
+    base_dir = _norm(paths.get("base_dir"))
+    data_dir = _norm(paths.get("data_dir"))
+    staging_dir = _norm(paths.get("staging_dir"))
+    worker_dir = _norm(paths.get("worker_dir"))
+    memory_dir = _norm(paths.get("memory_dir"))
+    tracking_db_path = _norm(paths.get("tracking_db_path"))
+    database_path = _norm(paths.get("database_path"))
+
+    if base_dir:
+        capture = data.setdefault("capture", {})
+        if "data_dir" not in capture:
+            capture["data_dir"] = str(base_dir / "data")
+        if "staging_dir" not in capture:
+            capture["staging_dir"] = str(base_dir / "staging")
+        worker = data.setdefault("worker", {})
+        if "data_dir" not in worker:
+            worker["data_dir"] = str(base_dir / "worker")
+        memory = data.setdefault("memory", {})
+        storage = memory.setdefault("storage", {})
+        if "root_dir" not in storage:
+            storage["root_dir"] = str(base_dir / "memory")
+        database = data.setdefault("database", {})
+        if "url" not in database:
+            default_db_path = Path(capture.get("data_dir") or base_dir / "data") / "autocapture.db"
+            database["url"] = f"sqlite:///{default_db_path.as_posix()}"
+
+    if data_dir:
+        capture = data.setdefault("capture", {})
+        capture["data_dir"] = str(data_dir)
+    if staging_dir:
+        capture = data.setdefault("capture", {})
+        capture["staging_dir"] = str(staging_dir)
+    if worker_dir:
+        worker = data.setdefault("worker", {})
+        worker["data_dir"] = str(worker_dir)
+    if memory_dir:
+        memory = data.setdefault("memory", {})
+        storage = memory.setdefault("storage", {})
+        storage["root_dir"] = str(memory_dir)
+    if tracking_db_path:
+        tracking = data.setdefault("tracking", {})
+        tracking["db_path"] = str(tracking_db_path)
+    if database_path:
+        database = data.setdefault("database", {})
+        database["url"] = f"sqlite:///{database_path.as_posix()}"
+
+    capture = data.get("capture")
+    if isinstance(capture, dict):
+        if "data_dir" in capture:
+            norm = _norm(capture.get("data_dir"))
+            if norm:
+                capture["data_dir"] = str(norm)
+        if "staging_dir" in capture:
+            norm = _norm(capture.get("staging_dir"))
+            if norm:
+                capture["staging_dir"] = str(norm)
+    worker = data.get("worker")
+    if isinstance(worker, dict) and "data_dir" in worker:
+        norm = _norm(worker.get("data_dir"))
+        if norm:
+            worker["data_dir"] = str(norm)
+    tracking = data.get("tracking")
+    if isinstance(tracking, dict) and "db_path" in tracking:
+        norm = _norm(tracking.get("db_path"))
+        if norm:
+            tracking["db_path"] = str(norm)
+    memory = data.get("memory")
+    if isinstance(memory, dict):
+        storage = memory.get("storage")
+        if isinstance(storage, dict) and "root_dir" in storage:
+            norm = _norm(storage.get("root_dir"))
+            if norm:
+                storage["root_dir"] = str(norm)
+
+
 def load_config(path: Path | str) -> AppConfig:
     """Load YAML configuration from disk."""
 
@@ -1972,6 +2105,7 @@ def load_config(path: Path | str) -> AppConfig:
             qdrant["text_collection"] = qdrant.get("collection_name")
         if "text_vector_size" not in qdrant and qdrant.get("vector_size"):
             qdrant["text_vector_size"] = qdrant.get("vector_size")
+    _apply_storage_paths_overrides(data, logger)
     # Pydantic v2 compatibility (model_validate) with v1 fallback (parse_obj).
     if hasattr(AppConfig, "model_validate"):
         config = AppConfig.model_validate(data)
@@ -2056,12 +2190,18 @@ def apply_settings_overrides(config: AppConfig, raw: dict | None = None) -> AppC
         track_mouse = tracking.get("track_mouse_movement")
         if isinstance(track_mouse, bool):
             config.tracking.track_mouse_movement = track_mouse
+        raw_stream = tracking.get("raw_event_stream_enabled")
+        if isinstance(raw_stream, bool):
+            config.tracking.raw_event_stream_enabled = raw_stream
         enable_clipboard = tracking.get("enable_clipboard")
         if isinstance(enable_clipboard, bool):
             config.tracking.enable_clipboard = enable_clipboard
         retention_days = tracking.get("retention_days")
         if isinstance(retention_days, int) or retention_days is None:
             config.tracking.retention_days = retention_days
+        raw_retention = tracking.get("raw_event_retention_days")
+        if isinstance(raw_retention, int) or raw_retention is None:
+            config.tracking.raw_event_retention_days = raw_retention
     active_preset = raw.get("active_preset")
     if isinstance(active_preset, str) and active_preset:
         config.presets.active_preset = active_preset

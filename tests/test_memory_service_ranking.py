@@ -163,9 +163,7 @@ class _ExplodingDB:
 
 def test_query_policy_rejects_before_db() -> None:
     config = MemoryServiceConfig()
-    store = MemoryServiceStore(
-        _ExplodingDB(), config, HashEmbedder(dim=config.embedder.dim), None
-    )
+    store = MemoryServiceStore(_ExplodingDB(), config, HashEmbedder(dim=config.embedder.dim), None)
     request = MemoryQueryRequest(
         namespace="default",
         query="query",

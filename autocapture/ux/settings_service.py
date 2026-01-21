@@ -128,8 +128,10 @@ class SettingsService:
             data["tracking"] = {
                 "enabled": self._config.tracking.enabled,
                 "track_mouse_movement": self._config.tracking.track_mouse_movement,
+                "raw_event_stream_enabled": self._config.tracking.raw_event_stream_enabled,
                 "enable_clipboard": self._config.tracking.enable_clipboard,
                 "retention_days": self._config.tracking.retention_days,
+                "raw_event_retention_days": self._config.tracking.raw_event_retention_days,
             }
         if "plugins" not in data:
             data["plugins"] = {
@@ -168,8 +170,10 @@ class SettingsService:
             "tracking": {
                 "enabled": config.tracking.enabled,
                 "track_mouse_movement": config.tracking.track_mouse_movement,
+                "raw_event_stream_enabled": config.tracking.raw_event_stream_enabled,
                 "enable_clipboard": config.tracking.enable_clipboard,
                 "retention_days": config.tracking.retention_days,
+                "raw_event_retention_days": config.tracking.raw_event_retention_days,
             },
         }
 
@@ -193,6 +197,8 @@ class SettingsService:
                 impacts.append("Capture paused")
             if path == "tracking.enabled" and entry.after is False:
                 impacts.append("Host event tracking disabled")
+            if path == "tracking.raw_event_stream_enabled" and entry.after is True:
+                warnings.append("Raw input tracking may capture sensitive input patterns")
             if path == "tracking.enable_clipboard" and entry.after is True:
                 warnings.append("Clipboard tracking may capture sensitive data")
         impacts = sorted(set(impacts))

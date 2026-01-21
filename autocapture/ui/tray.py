@@ -110,7 +110,7 @@ class TrayApp(QtCore.QObject):
         self._startup_action.setChecked(is_startup_enabled())
 
         self._api_url = f"http://{config.api.bind_host}:{config.api.port}"
-        self._popup = SearchPopup(self._api_url)
+        self._popup = SearchPopup(self._api_url, config=self._config.ui.search_popup)
         self._tray.activated.connect(self._on_tray_activated)
         self._health_timer = QtCore.QTimer(self)
         self._health_timer.setInterval(5000)

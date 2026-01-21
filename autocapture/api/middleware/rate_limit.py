@@ -45,7 +45,9 @@ class RateLimiter:
             return False, retry_after
 
 
-def install_rate_limit_middleware(app, *, rate_limiter: RateLimiter, rate_limited_paths: set[str]) -> None:
+def install_rate_limit_middleware(
+    app, *, rate_limiter: RateLimiter, rate_limited_paths: set[str]
+) -> None:
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):  # type: ignore[no-redef]
         if request.url.path in rate_limited_paths and request.method == "POST":

@@ -285,6 +285,13 @@ def build_settings_schema() -> SettingsSchema:
                     tier="advanced",
                 ),
                 SettingsField(
+                    path="tracking.raw_event_stream_enabled",
+                    label="Raw input event stream",
+                    description="Persist raw keyboard/mouse events for action replay timelines.",
+                    kind="bool",
+                    tier="expert",
+                ),
+                SettingsField(
                     path="tracking.enable_clipboard",
                     label="Track clipboard",
                     description="Capture clipboard events.",
@@ -295,6 +302,14 @@ def build_settings_schema() -> SettingsSchema:
                     path="tracking.retention_days",
                     label="Tracking retention days",
                     description="Days to retain host event tracking data.",
+                    kind="int",
+                    tier="expert",
+                    placeholder="Leave blank for default",
+                ),
+                SettingsField(
+                    path="tracking.raw_event_retention_days",
+                    label="Raw input retention days",
+                    description="Days to retain raw input events.",
                     kind="int",
                     tier="expert",
                     placeholder="Leave blank for default",

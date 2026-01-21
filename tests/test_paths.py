@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import types
+
 from autocapture import paths
 
 
@@ -58,3 +60,17 @@ def test_doctor_path_failure_includes_env_hint(monkeypatch, tmp_path: Path) -> N
     assert "path=" in result.detail
     assert "missing_env=LOCALAPPDATA" in result.detail
     assert "set LOCALAPPDATA" in result.detail
+
+
+def test_normalize_storage_path_maps_windows_to_wsl(monkeypatch) -> None:
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu")
+    monkeypatch.setattr(
+        paths,
+        "platform",
+        types.SimpleNamespace(release=lambda: "5.15.90-microsoft-standard"),
+    )
+    resolved = paths.normalize_storage_path(r"C:\Users\Casey\data")
+    assert resolved is not None
+    normalized = str(resolved).replace("\\", "/")
+    assert normalized.endswith("/Users/Casey/data")
+    assert normalized.startswith("/mnt/c/")

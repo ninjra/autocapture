@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import sys
-import os
 import ctypes
+import os
+import platform
+import re
+import sys
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,6 +23,48 @@ def resource_root() -> Path:
     if getattr(sys, "_MEIPASS", None):  # pragma: no cover - runtime bundle
         return Path(sys._MEIPASS)
     return Path(__file__).resolve().parents[1]
+
+
+def is_wsl() -> bool:
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    release = platform.release().lower()
+    return "microsoft" in release or "wsl" in release
+
+
+def _in_test_mode() -> bool:
+    return bool(os.environ.get("AUTOCAPTURE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def windows_to_wsl_path(raw: str) -> str:
+    match = re.match(r"^([A-Za-z]):[\\\\/](.+)$", raw)
+    if not match:
+        return raw
+    drive = match.group(1).lower()
+    rest = match.group(2).replace("\\", "/")
+    return f"/mnt/{drive}/{rest}"
+
+
+def wsl_to_windows_path(raw: str) -> str:
+    match = re.match(r"^/mnt/([A-Za-z])/(.+)$", raw)
+    if not match:
+        return raw
+    drive = match.group(1).upper()
+    rest = match.group(2).replace("/", "\\")
+    return f"{drive}:\\{rest}"
+
+
+def normalize_storage_path(value: Path | str | None) -> Path | None:
+    if value is None:
+        return None
+    raw = os.path.expandvars(str(value)).strip()
+    if not raw:
+        return Path(raw)
+    if is_wsl():
+        raw = windows_to_wsl_path(raw)
+    elif os.name == "nt":
+        raw = wsl_to_windows_path(raw)
+    return Path(raw).expanduser()
 
 
 def _split_path_parts(raw: str) -> list[str]:
@@ -119,14 +163,22 @@ def app_local_data_dir(app_name: str = "Autocapture") -> Path:
 
 
 def default_data_dir() -> Path:
+    if _in_test_mode():
+        return Path("./data")
     if sys.platform == "win32":
         return app_local_data_dir() / "data"
+    if is_wsl():
+        return Path.home() / ".autocapture" / "data"
     return Path("./data")
 
 
 def default_staging_dir() -> Path:
+    if _in_test_mode():
+        return Path("./staging")
     if sys.platform == "win32":
         return app_local_data_dir() / "staging"
+    if is_wsl():
+        return Path.home() / ".autocapture" / "staging"
     return Path("./staging")
 
 
@@ -134,6 +186,8 @@ def default_memory_dir() -> Path:
     override = os.environ.get("AUTOCAPTURE_MEMORY_DIR")
     if override:
         return Path(override)
+    if _in_test_mode():
+        return Path("./memory")
     if sys.platform == "win32":
         return app_local_data_dir() / "memory"
     return Path.home() / ".autocapture" / "memory"

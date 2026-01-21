@@ -41,11 +41,7 @@ def test_validator_requires_sources_in_object_blocks(tmp_path: Path) -> None:
 
 
 def test_validator_requires_three_table_rows(tmp_path: Path) -> None:
-    table = (
-        "| Input | Output |\n"
-        "| --- | --- |\n"
-        "| A | B |\n"
-    )
+    table = "| Input | Output |\n" "| --- | --- |\n" "| A | B |\n"
     content = _minimal_blueprint(extra=table)
     path = tmp_path / "BLUEPRINT.md"
     path.write_text(content, encoding="utf-8")

@@ -11,7 +11,16 @@ from typing import Sequence
 
 from ..config import TrackingConfig
 from ..logging_utils import get_logger
-from .types import HostEventRow
+from .types import HostEventRow, RawInputRow
+
+
+def resolve_tracking_db_path(config: TrackingConfig, data_dir: Path | None) -> Path:
+    db_path = config.db_path
+    if not db_path.is_absolute():
+        if data_dir is None:
+            return Path(db_path)
+        return (Path(data_dir) / db_path).resolve()
+    return Path(db_path)
 
 
 class SqliteHostEventStore:
@@ -60,10 +69,34 @@ class SqliteHostEventStore:
             """
         )
         cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS host_input_events (
+              id TEXT PRIMARY KEY,
+              ts_ms INTEGER NOT NULL,
+              monotonic_ms INTEGER NOT NULL,
+              device TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              session_id TEXT,
+              app_name TEXT,
+              window_title TEXT,
+              payload_json TEXT NOT NULL
+            );
+            """
+        )
+        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_host_events_ts_start ON host_events(ts_start_ms);"
         )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_host_events_kind ON host_events(kind);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_host_events_app ON host_events(app_name);")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_host_input_events_ts ON host_input_events(ts_ms);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_host_input_events_kind ON host_input_events(kind);"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_host_input_events_app ON host_input_events(app_name);"
+        )
         self._conn.commit()
         cursor.close()
         self._log.info("Host events schema initialized")
@@ -101,6 +134,41 @@ class SqliteHostEventStore:
             elapsed_ms,
         )
 
+    def insert_raw_events(self, rows: Sequence[RawInputRow]) -> None:
+        if not rows:
+            return
+        start = time.perf_counter()
+        payload = [
+            (
+                row.id,
+                row.ts_ms,
+                row.monotonic_ms,
+                row.device,
+                row.kind,
+                row.session_id,
+                row.app_name,
+                row.window_title,
+                row.payload_json,
+            )
+            for row in rows
+        ]
+        with self._conn:
+            self._conn.executemany(
+                """
+                INSERT INTO host_input_events (
+                  id, ts_ms, monotonic_ms, device, kind,
+                  session_id, app_name, window_title, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                payload,
+            )
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        self._log.info(
+            "Inserted {} raw input events in {:.2f}ms",
+            len(rows),
+            elapsed_ms,
+        )
+
     def prune_older_than(self, cutoff_ms: int) -> int:
         with self._conn:
             cursor = self._conn.execute(
@@ -111,11 +179,61 @@ class SqliteHostEventStore:
         self._log.info("Pruned {} host events older than {}", deleted, cutoff_ms)
         return deleted
 
+    def prune_raw_older_than(self, cutoff_ms: int) -> int:
+        with self._conn:
+            cursor = self._conn.execute(
+                "DELETE FROM host_input_events WHERE ts_ms < ?",
+                (cutoff_ms,),
+            )
+        deleted = cursor.rowcount or 0
+        self._log.info("Pruned {} raw input events older than {}", deleted, cutoff_ms)
+        return deleted
+
     def query_recent(self, limit: int = 50) -> list[sqlite3.Row]:
         cursor = self._conn.execute(
             "SELECT * FROM host_events ORDER BY ts_start_ms DESC LIMIT ?",
             (limit,),
         )
+        rows = cursor.fetchall()
+        cursor.close()
+        return rows
+
+    def query_raw_events(
+        self,
+        *,
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        limit: int = 200,
+        offset: int = 0,
+        device: str | None = None,
+        kind: str | None = None,
+        app_name: str | None = None,
+        window_title: str | None = None,
+    ) -> list[sqlite3.Row]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if start_ms is not None:
+            clauses.append("ts_ms >= ?")
+            params.append(start_ms)
+        if end_ms is not None:
+            clauses.append("ts_ms <= ?")
+            params.append(end_ms)
+        if device:
+            clauses.append("device = ?")
+            params.append(device)
+        if kind:
+            clauses.append("kind = ?")
+            params.append(kind)
+        if app_name:
+            clauses.append("app_name = ?")
+            params.append(app_name)
+        if window_title:
+            clauses.append("window_title = ?")
+            params.append(window_title)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = "SELECT * FROM host_input_events " f"{where} ORDER BY ts_ms ASC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+        cursor = self._conn.execute(sql, params)
         rows = cursor.fetchall()
         cursor.close()
         return rows

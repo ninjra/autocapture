@@ -358,6 +358,8 @@ class CaptureRecord(Base):
     focus_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     foreground_process: Mapped[str] = mapped_column(String(256))
     foreground_window: Mapped[str] = mapped_column(String(512))
+    url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(256), nullable=True)
     monitor_id: Mapped[str] = mapped_column(String(64))
     monitor_bounds: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     is_fullscreen: Mapped[bool] = mapped_column(default=False)

@@ -8,7 +8,13 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
-from .models import DeleteApplyRequest, DeleteApplyResponse, DeletePreviewRequest, DeletePreviewResponse, DeleteSample
+from .models import (
+    DeleteApplyRequest,
+    DeleteApplyResponse,
+    DeletePreviewRequest,
+    DeletePreviewResponse,
+    DeleteSample,
+)
 from .preview import PreviewTokenManager, hash_payload
 from .redaction import normalize_path
 from ..config import AppConfig
@@ -35,7 +41,9 @@ class DeleteService:
         start, end = self._resolve_range(criteria)
         process = criteria.process
         window_title = criteria.window_title
-        counts, samples = self._collect_counts(start, end, process, window_title, criteria.sample_limit)
+        counts, samples = self._collect_counts(
+            start, end, process, window_title, criteria.sample_limit
+        )
         preview_id = self._preview.issue(
             kind="delete",
             version=hash_payload(criteria.model_dump(mode="json")),
@@ -103,8 +111,10 @@ class DeleteService:
         sample_limit: int,
     ) -> tuple[dict[str, int], list[DeleteSample]]:
         with self._db.session() as session:
-            captures_stmt = select(func.count()).select_from(CaptureRecord).where(
-                CaptureRecord.captured_at.between(start, end)
+            captures_stmt = (
+                select(func.count())
+                .select_from(CaptureRecord)
+                .where(CaptureRecord.captured_at.between(start, end))
             )
             if process:
                 captures_stmt = captures_stmt.where(
@@ -114,8 +124,10 @@ class DeleteService:
                 captures_stmt = captures_stmt.where(CaptureRecord.foreground_window == window_title)
             captures = session.execute(captures_stmt).scalar_one()
 
-            events_stmt = select(func.count()).select_from(EventRecord).where(
-                EventRecord.ts_start.between(start, end)
+            events_stmt = (
+                select(func.count())
+                .select_from(EventRecord)
+                .where(EventRecord.ts_start.between(start, end))
             )
             if process:
                 events_stmt = events_stmt.where(func.lower(EventRecord.app_name) == process.lower())
@@ -123,8 +135,10 @@ class DeleteService:
                 events_stmt = events_stmt.where(EventRecord.window_title == window_title)
             events = session.execute(events_stmt).scalar_one()
 
-            segments_stmt = select(func.count()).select_from(SegmentRecord).where(
-                SegmentRecord.started_at.between(start, end)
+            segments_stmt = (
+                select(func.count())
+                .select_from(SegmentRecord)
+                .where(SegmentRecord.started_at.between(start, end))
             )
             segments = session.execute(segments_stmt).scalar_one()
 

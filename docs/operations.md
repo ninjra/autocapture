@@ -44,7 +44,13 @@ Acceleration references:
 
 If `autocapture doctor` reports a writable-path failure on Windows, confirm
 `LOCALAPPDATA` is set (Git Bash/MSYS sometimes omits it) or explicitly set
-`capture.data_dir`/`capture.staging_dir` in your config.
+`capture.data_dir`/`capture.staging_dir` in your config. For WSL, prefer POSIX
+paths (e.g. `/mnt/c/Autocapture` or `~/.autocapture`) and use `paths.base_dir`
+to relocate capture, worker, and memory stores together.
+
+GPU checks use `nvidia-smi` plus `torch.cuda.is_available()` when installed. If
+the doctor reports missing GPU while running in WSL, ensure WSL2 GPU support is
+enabled or set `AUTOCAPTURE_GPU_MODE=off` for CPU-only operation.
 
 ## Model Stages (Routing)
 
@@ -86,6 +92,21 @@ Then configure the decode backend in `settings.json`:
 }
 ```
 Reference the backend in `model_registry.stages[*].decode.backend_provider_id`.
+
+## Retention defaults
+
+Media retention defaults to 60 days for video, focus crops, and screenshots. Tune
+`retention.video_days`, `retention.roi_days`, and `retention.screenshot_ttl_days`
+in `autocapture.yml` to shorten or extend this window.
+
+## Action replay event stream
+
+Raw keyboard/mouse events are stored in the tracking DB when
+`tracking.raw_event_stream_enabled=true`. Query via:
+
+- `GET /api/tracking/events` with `start_ms`, `end_ms`, `limit`, `offset`,
+  `device`, `kind`, `app_name`, and `window_title`.
+- Requires an unlock token (`POST /api/unlock`) in local mode.
 
 ## Research Scout
 

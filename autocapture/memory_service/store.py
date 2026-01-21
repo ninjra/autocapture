@@ -110,7 +110,9 @@ class MemoryServiceStore:
                 if exists:
                     deduped += 1
                 else:
-                    self._insert_memory_item(session, proposal, namespace, memory_id, content_text, now)
+                    self._insert_memory_item(
+                        session, proposal, namespace, memory_id, content_text, now
+                    )
                     accepted += 1
 
                 self._insert_provenance(session, proposal, namespace, memory_id, now)
@@ -179,8 +181,7 @@ class MemoryServiceStore:
                 is not None
             )
             tables_ready = (
-                conn.execute(sa.text("SELECT to_regclass('public.memory_items')"))
-                .scalar()
+                conn.execute(sa.text("SELECT to_regclass('public.memory_items')")).scalar()
                 is not None
             )
         if not pgvector:
@@ -232,9 +233,7 @@ class MemoryServiceStore:
                             f"{table} USING (namespace = "
                             "current_setting('autocapture.namespace', true))"
                         )
-                        conn.execute(
-                            sa.text(policy_sql)
-                        )
+                        conn.execute(sa.text(policy_sql))
         except Exception as exc:  # pragma: no cover - best effort setup
             _LOG.warning("Failed to enable memory service RLS: {}", exc)
 
@@ -249,9 +248,7 @@ class MemoryServiceStore:
         except Exception as exc:  # pragma: no cover - best effort
             _LOG.warning("Failed to set memory service namespace: {}", exc)
 
-    def _validate_provenance(
-        self, session, proposal: MemoryProposal, namespace: str
-    ) -> str | None:
+    def _validate_provenance(self, session, proposal: MemoryProposal, namespace: str) -> str | None:
         for pointer in proposal.provenance:
             row = session.execute(
                 sa.text(
@@ -281,9 +278,7 @@ class MemoryServiceStore:
         content_text: str,
         now: dt.datetime,
     ) -> None:
-        sensitivity_rank = self._config.policy.sensitivity_order.index(
-            proposal.policy.sensitivity
-        )
+        sensitivity_rank = self._config.policy.sensitivity_order.index(proposal.policy.sensitivity)
         audiences = sorted({aud for aud in proposal.policy.audience if aud})
         session.execute(
             sa.text(
@@ -618,9 +613,7 @@ class MemoryServiceStore:
                     continue
                 entry.rerank = float(score)
                 entry.reasons.add("rerank")
-            max_rerank = max(
-                (candidates[item.memory_id].rerank for item in window), default=1.0
-            )
+            max_rerank = max((candidates[item.memory_id].rerank for item in window), default=1.0)
 
         ranked: list[CandidateItem] = []
         for item in items:
@@ -919,19 +912,27 @@ class SqliteMemoryServiceStore(MemoryServiceStore):
                 )
             )
             conn.execute(
-                sa.text("CREATE INDEX IF NOT EXISTS ix_memory_items_namespace ON memory_items(namespace)")
+                sa.text(
+                    "CREATE INDEX IF NOT EXISTS ix_memory_items_namespace ON memory_items(namespace)"
+                )
             )
             conn.execute(
-                sa.text("CREATE INDEX IF NOT EXISTS ix_memory_items_type ON memory_items(memory_type)")
+                sa.text(
+                    "CREATE INDEX IF NOT EXISTS ix_memory_items_type ON memory_items(memory_type)"
+                )
             )
             conn.execute(
                 sa.text("CREATE INDEX IF NOT EXISTS ix_memory_items_status ON memory_items(status)")
             )
             conn.execute(
-                sa.text("CREATE INDEX IF NOT EXISTS ix_memory_embeddings_bucket ON memory_embeddings(bucket)")
+                sa.text(
+                    "CREATE INDEX IF NOT EXISTS ix_memory_embeddings_bucket ON memory_embeddings(bucket)"
+                )
             )
             conn.execute(
-                sa.text("CREATE INDEX IF NOT EXISTS ix_memory_provenance_memory ON memory_provenance(memory_id)")
+                sa.text(
+                    "CREATE INDEX IF NOT EXISTS ix_memory_provenance_memory ON memory_provenance(memory_id)"
+                )
             )
             try:
                 conn.execute(
@@ -957,11 +958,11 @@ class SqliteMemoryServiceStore(MemoryServiceStore):
         content_text: str,
         now: dt.datetime,
     ) -> None:
-        sensitivity_rank = self._config.policy.sensitivity_order.index(
-            proposal.policy.sensitivity
-        )
+        sensitivity_rank = self._config.policy.sensitivity_order.index(proposal.policy.sensitivity)
         audiences = sorted({aud for aud in proposal.policy.audience if aud})
-        content_json = json.dumps(proposal.content_json or {}, separators=(",", ":"), sort_keys=True)
+        content_json = json.dumps(
+            proposal.content_json or {}, separators=(",", ":"), sort_keys=True
+        )
         policy_labels = json.dumps(
             {
                 "audience": audiences,
@@ -1029,7 +1030,12 @@ class SqliteMemoryServiceStore(MemoryServiceStore):
         vectors = self._embedder.embed_texts([content_text])
         if not vectors:
             return
-        from ..indexing.sqlite_utils import vector_norm, vector_signature, vector_to_blob, signature_bucket
+        from ..indexing.sqlite_utils import (
+            vector_norm,
+            vector_signature,
+            vector_to_blob,
+            signature_bucket,
+        )
 
         vector = vectors[0]
         norm = vector_norm(vector)
@@ -1098,9 +1104,7 @@ class SqliteMemoryServiceStore(MemoryServiceStore):
                     query_vector, seed=self._signature_seed, bits=self._signature_bits
                 )
                 bucket = signature_bucket(signature, bits=self._bucket_bits)
-                cap = self._candidate_cap(
-                    request.topk_vector or self._config.retrieval.topk_vector
-                )
+                cap = self._candidate_cap(request.topk_vector or self._config.retrieval.topk_vector)
                 rows = session.execute(
                     sa.text(
                         "SELECT mi.memory_id, me.embedding, me.norm, mi.audiences_json "

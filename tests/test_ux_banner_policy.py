@@ -18,5 +18,7 @@ def test_banner_locked() -> None:
 
 def test_banner_degraded() -> None:
     summary = EvidenceSummary(total=2, citable=2, redacted=0, injection_risk_max=0.1)
-    banner = BannerPolicy.evaluate(locked=False, evidence=summary, degraded_reasons=["stage_timeout"])
+    banner = BannerPolicy.evaluate(
+        locked=False, evidence=summary, degraded_reasons=["stage_timeout"]
+    )
     assert banner.level == "degraded"

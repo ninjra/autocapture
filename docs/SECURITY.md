@@ -35,6 +35,8 @@
 - SQLCipher keys can be stored via DPAPI-protected files (`dpapi_file`), plain files, or env vars.
 - Use `autocapture db encrypt` to migrate a plaintext SQLite DB to encrypted form safely.
 - Host tracking DB supports optional SQLCipher encryption via `tracking.encryption_enabled`.
+- Raw input timelines (if enabled) are stored in the tracking DB and pruned via
+  `tracking.raw_event_retention_days`.
 
 ## Native extensions
 - Native SQLite extensions must be allowlisted in `CHECKSUMS.json`.

@@ -29,3 +29,20 @@ def test_check_port_permission_error_is_skipped(monkeypatch) -> None:
     result = doctor._check_port("api_port", "127.0.0.1", 1234)
     assert result.ok is True
     assert "permission denied" in result.detail.lower()
+
+
+def test_doctor_handles_check_exceptions() -> None:
+    config = AppConfig(
+        database=DatabaseConfig(url="sqlite:///:memory:"),
+        tracking={"enabled": False},
+        embed={"text_model": "local-test"},
+    )
+
+    def exploding(_config: AppConfig) -> DoctorCheckResult:
+        raise RuntimeError("boom")
+
+    code, report = run_doctor(config, checks=[exploding])
+    assert code == 2
+    assert report.ok is False
+    assert report.results[0].ok is False
+    assert "boom" in report.results[0].detail

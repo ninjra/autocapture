@@ -113,10 +113,12 @@ def build_container(
                 vector_record.plugin_id,
             )
     spans_index = None
-    if config.retrieval.use_spans_v2 or config.retrieval.sparse_enabled or config.retrieval.late_enabled:
-        spans_backend_id = (
-            getattr(config.routing, "spans_v2_backend", "local") or "local"
-        ).strip()
+    if (
+        config.retrieval.use_spans_v2
+        or config.retrieval.sparse_enabled
+        or config.retrieval.late_enabled
+    ):
+        spans_backend_id = (getattr(config.routing, "spans_v2_backend", "local") or "local").strip()
         spans_record = None
         try:
             spans_record = plugins.resolve_record("spans_v2.backend", spans_backend_id)

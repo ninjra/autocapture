@@ -28,7 +28,7 @@ Metadata fields:
 - `observation_id` (optional UUID for idempotency)
 - `captured_at` (ISO8601 timestamp, optional; defaults to now)
 - `app_name`, `window_title`, `monitor_id`, `is_fullscreen`
-- `url`, `domain` (optional; currently not persisted)
+- `url`, `domain` (optional; persisted to capture metadata and propagated to events)
 
 If the app/window is excluded by privacy filters, the server will skip storage before disk write.
 
