@@ -2,7 +2,7 @@
   "frozen": {
     "autocapture/memory/context_pack.py": {
       "frozen_at_utc": "2026-01-20T00:07:37Z",
-      "reason": "SPEC-1 context pack fields + evidence metadata updates",
+      "reason": "SPEC-SINGLE-MACHINE context pack fields + evidence metadata updates",
       "sha256": "d545044588e4543e9ecd51c088599ebe8ae4a1737b653b08900989b9b6cafc70"
     },
     "autocapture/tracking/store.py": {

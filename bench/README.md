@@ -1,4 +1,4 @@
-# SPEC-1 LLM Bench
+# SPEC-SINGLE-MACHINE LLM Bench
 
 This folder contains the deterministic, offline LLM benchmark harness used for CI regression gating.
 

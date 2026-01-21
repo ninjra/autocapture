@@ -94,7 +94,7 @@ PowerShell helper:
 
 ### WSL2 local services
 
-See `docs/runbook-single-machine.md` for the full SPEC-1 runbook. Quick summary:
+See `docs/runbook-single-machine.md` for the full SPEC-SINGLE-MACHINE runbook. Quick summary:
 
 ```bash
 docker compose -f infra/compose.yaml up -d

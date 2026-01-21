@@ -1,4 +1,4 @@
-# Config Reference (SPEC-1 Additions)
+# Config Reference (SPEC-SINGLE-MACHINE Additions)
 
 ## Gateway
 - `gateway.enabled`: enable the LLM Gateway (default: true).

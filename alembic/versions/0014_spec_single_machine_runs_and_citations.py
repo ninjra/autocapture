@@ -1,4 +1,4 @@
-"""SPEC-1 run logging, claim citations, and chunks FTS.
+"""SPEC-SINGLE-MACHINE run logging, claim citations, and chunks FTS.
 
 Revision ID: 0014_spec1_runs_and_citations
 Revises: 0013_spec1_gateway_claims

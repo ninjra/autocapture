@@ -1,9 +1,9 @@
-# SPEC-1 audit (2026-01-19)
+# SPEC-SINGLE-MACHINE audit (2026-01-19)
 
 ## Baseline
 - Clean tree before changes: `git status -sb` → `## main...origin/main`, `git diff --stat` empty.
 - Baseline HEAD: `1c945996eaec23422644fb681d651df448a65369`.
-- Branch created: `spec-1-plugin-system`.
+- Branch created: `spec-single-machine-plugin-system`.
 
 ## Entry points + config load
 - CLI entrypoint: `autocapture/main.py` (argparse, `main()`), script hook in `pyproject.toml` → `autocapture = "autocapture.main:main"`.
@@ -63,9 +63,9 @@
 ## Packaging / bundling
 - `pyproject.toml` includes package data for `autocapture/prompts/**/*.yaml`, `autocapture/ui/web/**`, `autocapture/bench/fixtures/**`.
 - `pyinstaller.spec` bundles `autocapture/ui/web`, `autocapture/prompts/derived/*.yaml`, `autocapture.yml`, `alembic`, and vendor `ffmpeg`/`qdrant` trees.
-- No plugin manifest/assets paths are currently bundled (would need to add for SPEC-1).
+- No plugin manifest/assets paths are currently bundled (would need to add for SPEC-SINGLE-MACHINE).
 
-## SPEC-1 implementation updates (2026-01-19)
+## SPEC-SINGLE-MACHINE implementation updates (2026-01-19)
 - Plugin core: `autocapture/plugins/` (catalog, manifest models, registry, policy gate, manager, hashing, settings).
 - Built-in manifests: `autocapture/plugins/builtin/**/plugin.yaml` (LLM, vision/OCR, embedder, retrieval, reranker, compressor, verifier, vector, prompts, research).
 - API management surfaces: `autocapture/api/server.py` (`/api/plugins/*`) + asset route `/plugins/{plugin_id}/assets/*`.

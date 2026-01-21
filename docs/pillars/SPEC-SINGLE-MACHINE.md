@@ -1,6 +1,6 @@
-# SPEC-1: Single-Machine Production Stack
+# SPEC-SINGLE-MACHINE: Single-Machine Production Stack
 
-This pillar documents the SPEC-1 commitment for a production-ready, single-machine
+This pillar documents the SPEC-SINGLE-MACHINE commitment for a production-ready, single-machine
 stack that includes an OpenAI-compatible gateway, deterministic claim-level
 citations with validation and entailment gates, retrieval fusion (lexical + vector
 + graph adapters), and first-class observability (OTel + Prometheus).

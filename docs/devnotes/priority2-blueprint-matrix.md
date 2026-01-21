@@ -7,11 +7,11 @@ Head: 9c64ae9
 ## Doctrine sources (authoritative)
 - `docs/ARCHITECTURE.md`
 - `docs/architecture/plugin-system.md`
-- `docs/pillars/SPEC-1.md`
+- `docs/pillars/SPEC-SINGLE-MACHINE.md`
 - `docs/pillars/SPEC-260117.md`
 - `docs/plugins.md`
-- `docs/spec-1/as-is.md`
-- `docs/spec-1/to-be.md`
+- `docs/spec-single-machine/as-is.md`
+- `docs/spec-single-machine/to-be.md`
 
 ## Plugin system contract (summary)
 - Core plugin runtime and policy gates live in `autocapture/plugins/`.

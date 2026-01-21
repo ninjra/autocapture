@@ -1,4 +1,4 @@
-"""SPEC-1 claim/line-map/provider call tables.
+"""SPEC-SINGLE-MACHINE claim/line-map/provider call tables.
 
 Revision ID: 0013_spec1_gateway_claims
 Revises: 0012_next10_contracts

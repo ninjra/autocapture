@@ -1,6 +1,6 @@
-# SPEC-1 To-Be Plan (Single-Machine Production Topology)
+# SPEC-SINGLE-MACHINE To-Be Plan (Single-Machine Production Topology)
 
-This plan documents the SPEC-1 P0 implementation and its file-level anchors.
+This plan documents the SPEC-SINGLE-MACHINE P0 implementation and its file-level anchors.
 
 ## Baseline Anchors (Existing)
 - Stage routing and registry live in `StageRouter` and `ModelRegistry`.
@@ -18,8 +18,8 @@ This plan documents the SPEC-1 P0 implementation and its file-level anchors.
 - Observability primitives (OTel + Prometheus) are wired into API/gateway/retrieval.
   (`autocapture/observability/otel.py:L1-L170`, `autocapture/observability/metrics.py:L1-L214`,
    `autocapture/api/server.py:L395-L410`)
-- DB migrations include SPEC-1 run logging + citations + FTS tables.
-  (`alembic/versions/0014_spec1_runs_and_citations.py:L1-L150`)
+- DB migrations include SPEC-SINGLE-MACHINE run logging + citations + FTS tables.
+  (`alembic/versions/0014_spec_single_machine_runs_and_citations.py:L1-L150`)
 
 ## Port Map (Defaults)
 - API: `api.bind_host`/`api.port` default 127.0.0.1:8008.
@@ -37,7 +37,7 @@ This plan documents the SPEC-1 P0 implementation and its file-level anchors.
 - Harden internal stage endpoints (`/internal/stage/...`) with local-only or API-key enforcement
   (additive to existing gateway). (`autocapture/gateway/app.py:L112-L131`)
 
-## Delta Plan (SPEC-1 P0 Mapping)
+## Delta Plan (SPEC-SINGLE-MACHINE P0 Mapping)
 
 ### 1) Gateway + Registry Hardening
 - Extend `GatewayRouter` to enforce internal auth and stage allowlists.
@@ -50,14 +50,14 @@ This plan documents the SPEC-1 P0 implementation and its file-level anchors.
   explicit claim-level citations.
   (`autocapture/memory/context_pack.py:L49-L138`,
    `autocapture/agents/answer_graph.py:L1525-L1855`,
-   `alembic/versions/0014_spec1_runs_and_citations.py:L1-L150`)
+   `alembic/versions/0014_spec_single_machine_runs_and_citations.py:L1-L150`)
 - Enforce claim-level citations in final answers (no partial compliance), using
   `ClaimValidator` and `check_citations`. (`autocapture/answer/claim_validation.py:L1-L55`,
   `autocapture/answer/integrity.py:L26-L74`)
 
 ### 3) Retrieval Fusion + Worker Wrappers
 - Keep lexical + vector + spans_v2 retrieval and extend fusion with explicit RRF parameters for
-  SPEC-1 defaults. (`autocapture/memory/retrieval.py:L160-L395`)
+  SPEC-SINGLE-MACHINE defaults. (`autocapture/memory/retrieval.py:L160-L395`)
 - Wire graph adapters to GraphRAG/HyperGraphRAG/Hyper-RAG workers via graph service API.
   (`autocapture/graph/app.py:L27-L146`, `autocapture/memory/retrieval.py:L984-L1038`)
 
@@ -68,7 +68,7 @@ This plan documents the SPEC-1 P0 implementation and its file-level anchors.
   (`autocapture/config.py:L1356-L1368`, `autocapture/model_ops/router.py:L182-L193`)
 
 ### 5) Observability + Metrics
-- Extend existing OTel spans and Prometheus counters for SPEC-1 required names, reusing
+- Extend existing OTel spans and Prometheus counters for SPEC-SINGLE-MACHINE required names, reusing
   `otel_span` and metrics registry.
   (`autocapture/observability/otel.py:L110-L126`, `autocapture/observability/metrics.py:L88-L121`)
 
@@ -86,7 +86,7 @@ This plan documents the SPEC-1 P0 implementation and its file-level anchors.
 - **Modify** `autocapture/memory/context_pack.py`: include deterministic line-span references
   required by claim citations (non-breaking additions).
 - **Modify** `autocapture/memory/retrieval.py`: finalize RRF fusion + graph adapter integration
-  toggles for SPEC-1.
+  toggles for SPEC-SINGLE-MACHINE.
 - **Add** `infra/compose.yaml` + `infra/prometheus.yml` + `scripts/` run templates (WSL2).
 - **Add** `docs/runbook-single-machine.md` + `docs/config-reference.md` +
   `docs/Observability.md` (grounded in existing config/metrics).
@@ -101,5 +101,5 @@ This plan documents the SPEC-1 P0 implementation and its file-level anchors.
 ## Rollout & Safety
 - Defaults remain offline + loopback-only unless explicitly configured.
   (`autocapture/config.py:L1438-L1537`, `config/example.yml:L1-L120`)
-- Qdrant, graph workers, and vLLM instances are mandatory in SPEC-1 configs and runbooks.
+- Qdrant, graph workers, and vLLM instances are mandatory in SPEC-SINGLE-MACHINE configs and runbooks.
   (`autocapture.yml:L48-L210`, `config/example.yml:L114-L330`)
