@@ -22,3 +22,31 @@
   title: Tiny diffusion experiments
   url: https://github.com/nathan-barry/tiny-diffusion
   rationale: Track lightweight diffusion experiments for fast local adapters.
+- source: watchlist
+  title: Awesome-LLM
+  url: https://github.com/Hannibal046/Awesome-LLM
+  rationale: Monitor curated LLM ecosystem listings for notable shifts.
+- source: watchlist
+  title: LiteLLM
+  url: https://github.com/BerriAI/litellm
+  rationale: Track repository updates for LLM gateway tooling.
+- source: watchlist
+  title: PaperQA
+  url: https://github.com/Future-House/paper-qa
+  rationale: Monitor literature QA tooling updates for research workflows.
+- source: watchlist
+  title: Kotaemon
+  url: https://github.com/Cinnamon/kotaemon
+  rationale: Track knowledge assistant repository updates and releases.
+- source: watchlist
+  title: Polymcp
+  url: https://github.com/poly-mcp/Polymcp
+  rationale: Monitor MCP ecosystem tooling updates for interoperability signals.
+- source: watchlist
+  title: Dolphin
+  url: https://github.com/bytedance/Dolphin
+  rationale: Track Dolphin repository updates for agent workflow evaluation.
+- source: watchlist
+  title: AutoGPT
+  url: https://github.com/Significant-Gravitas/AutoGPT
+  rationale: Monitor AutoGPT repository updates for agent ecosystem shifts.
