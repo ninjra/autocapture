@@ -106,9 +106,7 @@ def validate_blueprint(path: Path) -> list[str]:
 
         duplicates = sorted({src_id for src_id in src_ids if src_ids.count(src_id) > 1})
         if duplicates:
-            errors.append(
-                "Duplicate SRC entries in Source_Index: " + ", ".join(duplicates)
-            )
+            errors.append("Duplicate SRC entries in Source_Index: " + ", ".join(duplicates))
 
         coverage_lines: list[str] = []
         for line in lines[cov_idx + 1 :]:
@@ -131,15 +129,11 @@ def validate_blueprint(path: Path) -> list[str]:
         counts = {src_id: coverage_ids.count(src_id) for src_id in src_set}
         missing = sorted([src_id for src_id, count in counts.items() if count == 0])
         if missing:
-            errors.append(
-                "Coverage_Map missing SRC IDs from Source_Index: " + ", ".join(missing)
-            )
+            errors.append("Coverage_Map missing SRC IDs from Source_Index: " + ", ".join(missing))
 
         multiple = sorted([src_id for src_id, count in counts.items() if count > 1])
         if multiple:
-            errors.append(
-                "Coverage_Map references SRC IDs more than once: " + ", ".join(multiple)
-            )
+            errors.append("Coverage_Map references SRC IDs more than once: " + ", ".join(multiple))
 
     block_starts: list[tuple[str, int]] = []
     for idx, line in enumerate(lines):
@@ -155,7 +149,9 @@ def validate_blueprint(path: Path) -> list[str]:
                 has_sources = True
                 break
         if not has_sources:
-            errors.append(f"Missing Sources for block starting at line {start_idx + 1}: {block_label}")
+            errors.append(
+                f"Missing Sources for block starting at line {start_idx + 1}: {block_label}"
+            )
 
     table_indices: list[int] = []
     for idx, line in enumerate(lines[:-1]):

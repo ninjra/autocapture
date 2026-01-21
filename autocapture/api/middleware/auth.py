@@ -40,7 +40,9 @@ def install_auth_middleware(
         @app.middleware("http")
         async def api_key_middleware(request: Request, call_next):  # type: ignore[no-redef]
             if request.url.path.startswith("/api/"):
-                if request.url.path == "/api/events/ingest" and _bridge_token_valid(request, config):
+                if request.url.path == "/api/events/ingest" and _bridge_token_valid(
+                    request, config
+                ):
                     return await call_next(request)
                 _require_api_key(request, config)
             return await call_next(request)

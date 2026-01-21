@@ -15,6 +15,7 @@ from ...config import CircuitBreakerConfig
 from ...memory.graph_adapters import GraphHit
 from ...training.models import TrainingRunRequest, TrainingRunResult
 from ...memory.verification import Claim
+
 if TYPE_CHECKING:
     from ...enrichment.table_extractor import (
         TableExtractionRequest,

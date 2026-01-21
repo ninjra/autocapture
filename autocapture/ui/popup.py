@@ -6,10 +6,13 @@ import uuid
 import datetime as dt
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+import sys
+import ctypes
 
 import httpx
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from ..config import SearchPopupConfig
 from ..logging_utils import get_logger
 
 
@@ -17,10 +20,11 @@ class SearchPopup(QtWidgets.QWidget):
     suggestions_ready = QtCore.Signal(str, list)
     answer_ready = QtCore.Signal(str, dict)
 
-    def __init__(self, api_base_url: str) -> None:
+    def __init__(self, api_base_url: str, config: SearchPopupConfig | None = None) -> None:
         super().__init__()
         self._api_base_url = api_base_url.rstrip("/")
         self._executor = ThreadPoolExecutor(max_workers=2)
+        self._config = config or SearchPopupConfig()
         self._suggest_timer = QtCore.QTimer(self)
         self._suggest_timer.setSingleShot(True)
         self._suggest_timer.setInterval(180)
@@ -29,6 +33,13 @@ class SearchPopup(QtWidgets.QWidget):
         self._current_answer_token: str | None = None
         self._unlock_token: str | None = None
         self._unlock_expires_at: dt.datetime | None = None
+        self._pinned = bool(self._config.pin_default)
+        self._focusable = True
+        self._previous_hwnd: int | None = None
+        self._active_opacity = float(self._config.active_opacity)
+        self._inactive_opacity = min(
+            float(self._config.inactive_opacity), float(self._config.active_opacity)
+        )
         self._log = get_logger("ui.popup")
         self._setup_ui()
         self.suggestions_ready.connect(self._apply_suggestions)
@@ -84,6 +95,31 @@ class SearchPopup(QtWidgets.QWidget):
         controls.addWidget(self._sanitize_toggle)
         controls.addWidget(self._extractive_toggle)
 
+        self._pin_button = QtWidgets.QToolButton()
+        self._pin_button.setText("Pin")
+        self._pin_button.setCheckable(True)
+        self._pin_button.setChecked(self._pinned)
+        self._pin_button.clicked.connect(self._toggle_pin)
+        self._pin_button.setStyleSheet(
+            "QToolButton { color: #d0d7ff; padding: 4px 8px; }"
+            "QToolButton:checked { background: rgba(90, 120, 200, 120); }"
+        )
+
+        self._opacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self._opacity_slider.setRange(40, 100)
+        self._opacity_slider.setValue(int(self._active_opacity * 100))
+        self._opacity_slider.setFixedWidth(120)
+        self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
+
+        opacity_label = QtWidgets.QLabel("Opacity")
+        opacity_label.setStyleSheet("color: #d0d7ff; font-size: 11px;")
+
+        popup_controls = QtWidgets.QHBoxLayout()
+        popup_controls.addWidget(self._pin_button)
+        popup_controls.addStretch(1)
+        popup_controls.addWidget(opacity_label)
+        popup_controls.addWidget(self._opacity_slider)
+
         self._suggestions = QtWidgets.QListWidget()
         self._suggestions.setFixedHeight(160)
         self._suggestions.setStyleSheet(
@@ -116,6 +152,7 @@ class SearchPopup(QtWidgets.QWidget):
         layout.setSpacing(12)
         layout.addWidget(self._input)
         layout.addLayout(controls)
+        layout.addLayout(popup_controls)
         layout.addWidget(self._suggestions)
         layout.addWidget(self._preview)
         layout.addWidget(self._citations)
@@ -126,6 +163,8 @@ class SearchPopup(QtWidgets.QWidget):
         self.resize(540, 320)
 
     def show_popup(self) -> None:
+        self._capture_previous_focus()
+        self._set_focusable(True)
         screen = QtGui.QGuiApplication.primaryScreen()
         if screen is not None:
             rect = screen.availableGeometry()
@@ -135,8 +174,10 @@ class SearchPopup(QtWidgets.QWidget):
             )
         self.show()
         self.raise_()
-        self.activateWindow()
-        self._input.setFocus()
+        if self._config.focus_steal_on_show:
+            self.activateWindow()
+            self._input.setFocus()
+        self._apply_opacity(active=True)
 
     def _on_text_changed(self, text: str) -> None:
         self._suggest_timer.start()
@@ -188,6 +229,11 @@ class SearchPopup(QtWidgets.QWidget):
         future.add_done_callback(
             lambda fut: self._emit_future_result(self.answer_ready, token, fut)
         )
+        if self._config.focus_return_on_submit and not self._pinned:
+            self._restore_previous_focus()
+            self._set_focusable(False)
+            if self._config.fade_when_inactive:
+                self._apply_opacity(active=False)
 
     def _fetch_answer(self, query: str) -> dict[str, Any]:
         payload = {
@@ -217,6 +263,15 @@ class SearchPopup(QtWidgets.QWidget):
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self.hide()
         event.ignore()
+
+    def focusInEvent(self, event: QtGui.QFocusEvent) -> None:
+        super().focusInEvent(event)
+        self._apply_opacity(active=True)
+
+    def focusOutEvent(self, event: QtGui.QFocusEvent) -> None:
+        super().focusOutEvent(event)
+        if self._config.fade_when_inactive and not self._pinned:
+            self._apply_opacity(active=False)
 
     def _emit_future_result(self, signal, token: str, future) -> None:
         try:
@@ -285,3 +340,56 @@ class SearchPopup(QtWidgets.QWidget):
                 links.append(str(cite))
         html = "Citations: " + ", ".join(links)
         self._citations.setHtml(html)
+
+    def _toggle_pin(self) -> None:
+        self._pinned = self._pin_button.isChecked()
+        if self._pinned:
+            self._set_focusable(True)
+            self._apply_opacity(active=True)
+        else:
+            if self._config.focus_return_on_submit:
+                self._restore_previous_focus()
+                self._set_focusable(False)
+            if self._config.fade_when_inactive:
+                self._apply_opacity(active=False)
+
+    def _on_opacity_changed(self, value: int) -> None:
+        self._active_opacity = max(0.4, min(1.0, value / 100.0))
+        self._inactive_opacity = min(self._inactive_opacity, self._active_opacity)
+        self._apply_opacity(active=self._pinned or self.hasFocus())
+
+    def _apply_opacity(self, *, active: bool) -> None:
+        if active or self._pinned:
+            self.setWindowOpacity(self._active_opacity)
+        else:
+            self.setWindowOpacity(self._inactive_opacity)
+
+    def _set_focusable(self, focusable: bool) -> None:
+        if self._focusable == focusable:
+            return
+        self._focusable = focusable
+        flag = getattr(QtCore.Qt, "WindowDoesNotAcceptFocus", None)
+        if flag is not None:
+            self.setWindowFlag(flag, not focusable)
+            if self.isVisible():
+                self.hide()
+                self.show()
+
+    def _capture_previous_focus(self) -> None:
+        if sys.platform != "win32":
+            self._previous_hwnd = None
+            return
+        try:
+            self._previous_hwnd = ctypes.windll.user32.GetForegroundWindow()
+        except Exception:
+            self._previous_hwnd = None
+
+    def _restore_previous_focus(self) -> None:
+        if sys.platform != "win32":
+            return
+        if not self._previous_hwnd:
+            return
+        try:
+            ctypes.windll.user32.SetForegroundWindow(self._previous_hwnd)
+        except Exception:
+            return

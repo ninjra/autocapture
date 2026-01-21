@@ -212,9 +212,7 @@ class PolicyEnvelope:
                 "Cloud vision calls not permitted because privacy.cloud_enabled=false"
             )
         if not self._config.privacy.allow_cloud_images:
-            raise RuntimeError(
-                "Cloud vision calls not permitted because allow_cloud_images=false"
-            )
+            raise RuntimeError("Cloud vision calls not permitted because allow_cloud_images=false")
 
 
 def _infer_cloud(provider: LLMProvider, decision: object | None) -> bool:

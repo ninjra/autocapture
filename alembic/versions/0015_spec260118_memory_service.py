@@ -101,9 +101,7 @@ def upgrade() -> None:
         "ADD COLUMN content_tsv tsvector GENERATED ALWAYS AS "
         "(to_tsvector('english', coalesce(content_text, ''))) STORED"
     )
-    op.execute(
-        "CREATE INDEX ix_memory_items_tsv ON memory_items USING GIN (content_tsv)"
-    )
+    op.execute("CREATE INDEX ix_memory_items_tsv ON memory_items USING GIN (content_tsv)")
 
     op.create_table(
         "memory_embeddings",

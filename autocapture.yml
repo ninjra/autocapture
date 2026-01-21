@@ -9,6 +9,16 @@ mode:
   google_oauth_client_id: null
   google_oauth_client_secret: null
   google_allowed_emails: []
+paths:
+  # base_dir sets defaults for capture/worker/memory paths unless overridden below.
+  # base_dir: "D:/Autocapture"
+  base_dir: null
+  data_dir: null
+  staging_dir: null
+  worker_dir: null
+  memory_dir: null
+  tracking_db_path: null
+  database_path: null
 api:
   # Remote mode: bind_host is derived from mode.overlay_interface unless you
   # override it.
@@ -32,6 +42,13 @@ templates:
   log_provenance: true
 ui:
   overlay_citations_enabled: false
+  search_popup:
+    focus_steal_on_show: true
+    focus_return_on_submit: true
+    fade_when_inactive: true
+    active_opacity: 0.96
+    inactive_opacity: 0.7
+    pin_default: false
 overlay_tracker:
   enabled: false
   platforms: ["windows"]
@@ -508,6 +525,7 @@ capture:
 tracking:
   enabled: true
   db_path: "db/host_events.sqlite"
+  raw_event_stream_enabled: true
   queue_maxsize: 20000
   flush_interval_ms: 1000
   foreground_poll_ms: 250
@@ -516,6 +534,9 @@ tracking:
   mouse_move_sample_ms: 50
   enable_clipboard: false
   retention_days: null
+  raw_event_flush_interval_ms: 500
+  raw_event_batch_size: 500
+  raw_event_retention_days: 60
 ocr:
   queue_maxsize: 4000
   batch_size: 32
@@ -551,10 +572,10 @@ worker:
   embed_workers: 1
   embedding_max_attempts: 5
 retention:
-  video_days: 3
-  roi_days: 7
+  video_days: 60
+  roi_days: 60
   max_media_gb: 200
-  screenshot_ttl_days: 30
+  screenshot_ttl_days: 60
 storage:
   image_quota_gb: 250
   prune_grace_days: 90

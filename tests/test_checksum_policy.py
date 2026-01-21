@@ -44,9 +44,7 @@ def test_guarded_load_extension_allows_verified(tmp_path: Path, monkeypatch) -> 
     ext_path = tmp_path / "ext.bin"
     ext_path.write_bytes(b"example")
     digest = sha256_file(ext_path)
-    _write_checksums(
-        tmp_path / "CHECKSUMS.json", [{"path": ext_path.name, "sha256": digest}]
-    )
+    _write_checksums(tmp_path / "CHECKSUMS.json", [{"path": ext_path.name, "sha256": digest}])
     config = AppConfig()
     config.security.secure_mode = True
     conn = _DummyConn()

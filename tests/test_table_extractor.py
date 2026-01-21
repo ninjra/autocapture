@@ -102,9 +102,7 @@ def test_table_extractor_inserts_and_auto_embeds(tmp_path: Path) -> None:
     assert outcome.status == "ok"
     assert outcome.inserted == 1
     with db.engine.begin() as conn:
-        row = conn.execute(
-            text("SELECT id, note, note_embedding FROM extracted_table")
-        ).fetchone()
+        row = conn.execute(text("SELECT id, note, note_embedding FROM extracted_table")).fetchone()
     assert row is not None
     blob = row[2].tobytes() if isinstance(row[2], memoryview) else row[2]
     assert blob == vector_to_blob([5.0, 0.0, 1.0])

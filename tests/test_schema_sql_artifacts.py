@@ -17,9 +17,7 @@ def _execute_sql(path: Path) -> sqlite3.Connection:
     except sqlite3.OperationalError as exc:
         message = str(exc).lower()
         if "fts5" in message:
-            pytest.fail(
-                f"FTS5 required to execute {path.name}; sqlite3 build lacks fts5 support."
-            )
+            pytest.fail(f"FTS5 required to execute {path.name}; sqlite3 build lacks fts5 support.")
         raise
     return conn
 
@@ -49,6 +47,7 @@ def _execute_sql(path: Path) -> sqlite3.Connection:
             "autocapture_tracking_store.sql",
             {
                 "host_events",
+                "host_input_events",
             },
         ),
         (
@@ -62,15 +61,11 @@ def _execute_sql(path: Path) -> sqlite3.Connection:
         ),
     ],
 )
-def test_schema_sql_executes_and_objects_exist(
-    filename: str, expected_tables: set[str]
-) -> None:
+def test_schema_sql_executes_and_objects_exist(filename: str, expected_tables: set[str]) -> None:
     path = SCHEMA_DIR / filename
     assert path.exists(), f"Missing schema SQL artifact: {path}"
     conn = _execute_sql(path)
-    rows = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'"
-    ).fetchall()
+    rows = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     found = {row[0] for row in rows}
     missing = expected_tables - found
     assert not missing, f"Missing expected tables in {filename}: {sorted(missing)}"

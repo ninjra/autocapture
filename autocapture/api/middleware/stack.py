@@ -37,6 +37,7 @@ PROTECTED_PREFIXES = (
     "/api/events/ingest",
     "/api/storage",
     "/api/plugins",
+    "/api/tracking",
 )
 
 

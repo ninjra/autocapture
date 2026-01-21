@@ -22,6 +22,13 @@ When capture appears paused, check these common causes:
 If you need capture to continue during fullscreen apps, set
 `runtime.auto_pause.fullscreen_hard_pause_enabled=false` (or `runtime.auto_pause.mode=soft`).
 
+## WSL path and GPU checks
+
+- If `autocapture doctor` reports `windows_path_on_posix`, update paths to POSIX
+  (e.g. `/mnt/c/Autocapture`) or set `paths.base_dir` in `autocapture.yml`.
+- If GPU checks fail under WSL, verify `nvidia-smi` works in WSL2 and ensure the
+  CUDA-enabled packages are installed. Set `AUTOCAPTURE_GPU_MODE=off` to force CPU.
+
 ## PyCharm does not show new Git files
 
 When PyCharm is open while you add files on disk (for example by pulling from

@@ -12,7 +12,7 @@ from typing import Callable, Optional
 from ctypes import wintypes
 
 from ..logging_utils import get_logger
-from ..tracking.types import InputVectorEvent
+from ..tracking.types import InputVectorEvent, RawInputEvent
 
 if ctypes.sizeof(ctypes.c_void_p) == 8:
     ULONG_PTR = ctypes.c_ulonglong
@@ -39,6 +39,8 @@ PM_REMOVE = 0x0001
 
 RIM_TYPEMOUSE = 0
 RIM_TYPEKEYBOARD = 1
+
+RI_KEY_BREAK = 0x0001
 
 RI_MOUSE_LEFT_BUTTON_DOWN = 0x0001
 RI_MOUSE_RIGHT_BUTTON_DOWN = 0x0004
@@ -271,6 +273,7 @@ class RawInputListener:
         on_activity: Optional[Callable[[], None]] = None,
         on_hotkey: Optional[Callable[[], None]] = None,
         on_input_event: Optional[Callable[[InputVectorEvent], None]] = None,
+        on_raw_event: Optional[Callable[[RawInputEvent], None]] = None,
         track_mouse_movement: bool = True,
         mouse_move_sample_ms: int = 50,
         hotkey: HotkeyConfig | None = None,
@@ -283,6 +286,7 @@ class RawInputListener:
         self._on_activity = on_activity
         self._on_hotkey = on_hotkey
         self._on_input_event = on_input_event
+        self._on_raw_event = on_raw_event
         self._track_mouse_movement = track_mouse_movement
         self._mouse_move_sample_ms = mouse_move_sample_ms
         self._hotkey = hotkey or HotkeyConfig()
@@ -503,7 +507,8 @@ class RawInputListener:
     def _handle_wm_input(self, lparam: int) -> None:
         self._mark_activity()
         if not self._on_input_event:
-            return
+            if not self._on_raw_event:
+                return
         try:
             if not self._win32:
                 return
@@ -529,13 +534,32 @@ class RawInputListener:
                 return
             raw = RAWINPUT.from_buffer_copy(buffer)
             now_ms = self._now_wall_ms()
+            monotonic_ms = self._now_ms()
             if raw.header.dwType == RIM_TYPEKEYBOARD:
-                event = InputVectorEvent(
-                    ts_ms=now_ms,
-                    device="keyboard",
-                    mouse={"events": 1},
-                )
-                self._on_input_event(event)
+                if self._on_raw_event:
+                    kind = "key_up" if (raw.data.keyboard.Flags & RI_KEY_BREAK) else "key_down"
+                    payload = {
+                        "vkey": int(raw.data.keyboard.VKey),
+                        "scan_code": int(raw.data.keyboard.MakeCode),
+                        "flags": int(raw.data.keyboard.Flags),
+                        "message": int(raw.data.keyboard.Message),
+                    }
+                    self._on_raw_event(
+                        RawInputEvent(
+                            ts_ms=now_ms,
+                            monotonic_ms=monotonic_ms,
+                            device="keyboard",
+                            kind=kind,
+                            payload=payload,
+                        )
+                    )
+                if self._on_input_event:
+                    event = InputVectorEvent(
+                        ts_ms=now_ms,
+                        device="keyboard",
+                        mouse={"events": 1},
+                    )
+                    self._on_input_event(event)
             elif raw.header.dwType == RIM_TYPEMOUSE:
                 mouse = raw.data.mouse
                 payload: dict[str, int] = {
@@ -562,7 +586,7 @@ class RawInputListener:
                         self._mouse_move_dy = 0
                         self._last_mouse_emit_ts = now_ms
                         emitted_move = True
-                if (
+                if self._on_input_event and (
                     payload["left_clicks"]
                     or payload["right_clicks"]
                     or payload["middle_clicks"]
@@ -571,6 +595,51 @@ class RawInputListener:
                 ):
                     event = InputVectorEvent(ts_ms=now_ms, device="mouse", mouse=payload)
                     self._on_input_event(event)
+                if self._on_raw_event:
+                    if payload["wheel_events"]:
+                        wheel_payload = {"delta": payload["wheel_delta"]}
+                        self._on_raw_event(
+                            RawInputEvent(
+                                ts_ms=now_ms,
+                                monotonic_ms=monotonic_ms,
+                                device="mouse",
+                                kind="mouse_wheel",
+                                payload=wheel_payload,
+                            )
+                        )
+                    if (
+                        payload["left_clicks"]
+                        or payload["right_clicks"]
+                        or payload["middle_clicks"]
+                    ):
+                        button_payload = {
+                            "left": payload["left_clicks"],
+                            "right": payload["right_clicks"],
+                            "middle": payload["middle_clicks"],
+                        }
+                        self._on_raw_event(
+                            RawInputEvent(
+                                ts_ms=now_ms,
+                                monotonic_ms=monotonic_ms,
+                                device="mouse",
+                                kind="mouse_button",
+                                payload=button_payload,
+                            )
+                        )
+                    if emitted_move:
+                        move_payload = {
+                            "dx": payload.get("move_dx", 0),
+                            "dy": payload.get("move_dy", 0),
+                        }
+                        self._on_raw_event(
+                            RawInputEvent(
+                                ts_ms=now_ms,
+                                monotonic_ms=monotonic_ms,
+                                device="mouse",
+                                kind="mouse_move",
+                                payload=move_payload,
+                            )
+                        )
         except Exception as exc:  # pragma: no cover - Windows-only parsing
             self._log.debug("Raw input parse failed: {}", exc)
 

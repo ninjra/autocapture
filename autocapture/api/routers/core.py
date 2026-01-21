@@ -34,8 +34,13 @@ from ...logging_utils import get_logger
 from ...observability.metrics import get_gpu_snapshot, get_metrics_port
 from ...paths import resource_root
 from ...settings_store import read_settings, update_settings
+from ...tracking.store import SqliteHostEventStore, resolve_tracking_db_path
 from ...capture.privacy_filter import apply_exclude_region_masks, should_skip_capture
-from ...capture.frame_record import build_frame_record_v1, build_privacy_flags, capture_record_kwargs
+from ...capture.frame_record import (
+    build_frame_record_v1,
+    build_privacy_flags,
+    capture_record_kwargs,
+)
 from ...time_utils import elapsed_ms, monotonic_now, utc_now
 from ...memory.compression import extractive_answer
 from ...memory.context_pack import (
@@ -117,6 +122,23 @@ class StorageResponse(BaseModel):
     media_path: str
     media_usage_bytes: int
     screenshot_ttl_days: int
+
+
+class TrackingEvent(BaseModel):
+    id: str
+    ts_ms: int
+    monotonic_ms: int
+    device: str
+    kind: str
+    session_id: str | None = None
+    app_name: str | None = None
+    window_title: str | None = None
+    payload: dict[str, Any]
+
+
+class TrackingEventsResponse(BaseModel):
+    events: list[TrackingEvent]
+    next_offset: int | None = None
 
 
 class ContextPackRequest(BaseModel):
@@ -908,6 +930,58 @@ def build_router(
             screenshot_ttl_days=config.retention.screenshot_ttl_days,
         )
 
+    @router.get("/api/tracking/events")
+    def tracking_events(
+        start_ms: int | None = None,
+        end_ms: int | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+        device: str | None = None,
+        kind: str | None = None,
+        app_name: str | None = None,
+        window_title: str | None = None,
+    ) -> TrackingEventsResponse:
+        if offset < 0:
+            raise HTTPException(status_code=422, detail="offset must be >= 0")
+        page_limit = limit or config.api.default_page_size
+        page_limit = min(max(page_limit, 1), config.api.max_page_size)
+        db_path = resolve_tracking_db_path(config.tracking, Path(config.capture.data_dir))
+        store = SqliteHostEventStore(db_path, config=config.tracking)
+        store.init_schema()
+        rows = store.query_raw_events(
+            start_ms=start_ms,
+            end_ms=end_ms,
+            limit=page_limit,
+            offset=offset,
+            device=device,
+            kind=kind,
+            app_name=app_name,
+            window_title=window_title,
+        )
+        store.close()
+        events: list[TrackingEvent] = []
+        for row in rows:
+            payload = {}
+            try:
+                payload = json.loads(row["payload_json"])
+            except Exception:
+                payload = {}
+            events.append(
+                TrackingEvent(
+                    id=row["id"],
+                    ts_ms=int(row["ts_ms"]),
+                    monotonic_ms=int(row["monotonic_ms"]),
+                    device=row["device"],
+                    kind=row["kind"],
+                    session_id=row["session_id"],
+                    app_name=row["app_name"],
+                    window_title=row["window_title"],
+                    payload=payload,
+                )
+            )
+        next_offset = offset + len(events) if len(events) == page_limit else None
+        return TrackingEventsResponse(events=events, next_offset=next_offset)
+
     @router.post("/api/events/ingest")
     async def ingest_event(
         request: Request,
@@ -1036,6 +1110,8 @@ def build_router(
                 focus_path=None,
                 foreground_process=app_name,
                 foreground_window=window_title,
+                url=parsed.url,
+                domain=parsed.domain,
                 monitor_id=monitor_id,
                 is_fullscreen=parsed.is_fullscreen,
                 ocr_status="pending",
@@ -1048,6 +1124,8 @@ def build_router(
                 "focus_path": None,
                 "foreground_process": app_name,
                 "foreground_window": window_title,
+                "url": parsed.url,
+                "domain": parsed.domain,
                 "monitor_id": monitor_id,
                 "is_fullscreen": parsed.is_fullscreen,
                 "ocr_status": "pending",

@@ -78,11 +78,15 @@ class SqliteVectorBackend:
                     ")"
                 )
             )
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_vec_spans_capture ON vec_spans(capture_id)"))
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_vec_spans_capture ON vec_spans(capture_id)")
+            )
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_vec_spans_model ON vec_spans(embedding_model)")
             )
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_vec_spans_bucket ON vec_spans(bucket)"))
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_vec_spans_bucket ON vec_spans(bucket)")
+            )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_vec_spans_app ON vec_spans(app_name)"))
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_vec_spans_domain ON vec_spans(domain)")
@@ -104,7 +108,9 @@ class SqliteVectorBackend:
             vector = list(item.vector or [])
             blob = vector_to_blob(vector)
             norm = vector_norm(vector)
-            signature = vector_signature(vector, seed=self._signature_seed, bits=self._signature_bits)
+            signature = vector_signature(
+                vector, seed=self._signature_seed, bits=self._signature_bits
+            )
             bucket = signature_bucket(signature, bits=self._bucket_bits)
             payload = dict(item.payload or {})
             payload.update(
@@ -245,7 +251,9 @@ class SqliteVectorBackend:
         hits: list[VectorHit] = []
         for item in candidates:
             stored_vector = vector_from_blob(item["vector"])
-            score = cosine_similarity(vector, stored_vector, left_norm=query_norm, right_norm=item["norm"])
+            score = cosine_similarity(
+                vector, stored_vector, left_norm=query_norm, right_norm=item["norm"]
+            )
             hits.append(
                 VectorHit(
                     event_id=str(item["capture_id"]),
@@ -422,7 +430,9 @@ class SqliteSpansV2Backend:
                     "ts": payload.get("ts"),
                     "bbox_norm_json": json.dumps(payload.get("bbox_norm"), separators=(",", ":")),
                     "text": payload.get("text"),
-                    "tags_json": json.dumps(payload.get("tags") or {}, separators=(",", ":"), sort_keys=True),
+                    "tags_json": json.dumps(
+                        payload.get("tags") or {}, separators=(",", ":"), sort_keys=True
+                    ),
                 }
                 conn.execute(
                     text(
@@ -607,7 +617,9 @@ class SqliteSpansV2Backend:
         hits: list[VectorHit] = []
         for item in candidates:
             stored_vector = vector_from_blob(item["vector"])
-            score = cosine_similarity(vector, stored_vector, left_norm=query_norm, right_norm=item["norm"])
+            score = cosine_similarity(
+                vector, stored_vector, left_norm=query_norm, right_norm=item["norm"]
+            )
             hits.append(
                 VectorHit(
                     event_id=str(item["capture_id"]),
@@ -625,18 +637,12 @@ class SqliteSpansV2Backend:
         if not vector.indices or not vector.values:
             return []
         pairs = list(zip(vector.indices, vector.values))
-        values_clause = ", ".join(
-            f"(:token_{idx}, :weight_{idx})" for idx in range(len(pairs))
-        )
+        values_clause = ", ".join(f"(:token_{idx}, :weight_{idx})" for idx in range(len(pairs)))
         params: dict[str, object] = {
-            f"token_{idx}": int(token_id)
-            for idx, (token_id, _weight) in enumerate(pairs)
+            f"token_{idx}": int(token_id) for idx, (token_id, _weight) in enumerate(pairs)
         }
         params.update(
-            {
-                f"weight_{idx}": float(weight)
-                for idx, (_token_id, weight) in enumerate(pairs)
-            }
+            {f"weight_{idx}": float(weight) for idx, (_token_id, weight) in enumerate(pairs)}
         )
         where = []
         if filters:
@@ -695,7 +701,9 @@ class SqliteSpansV2Backend:
         candidate_cap = self._candidate_cap(k)
         self._last_candidate_cap = candidate_cap
         query_mean = mean_vector(vectors)
-        signature = vector_signature(query_mean, seed=self._signature_seed, bits=self._signature_bits)
+        signature = vector_signature(
+            query_mean, seed=self._signature_seed, bits=self._signature_bits
+        )
         candidates = self._fetch_dense_candidates(
             signature=signature,
             embedding_model=self._config.embed.text_model,

@@ -10,6 +10,7 @@ import httpx
 
 from ..config import GraphAdapterConfig, GraphAdaptersConfig
 from ..logging_utils import get_logger
+
 if TYPE_CHECKING:  # pragma: no cover - typing-only import to avoid circular deps
     from ..plugins import PluginManager
 from ..resilience import RetryPolicy, retry_sync, is_retryable_exception

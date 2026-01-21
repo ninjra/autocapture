@@ -258,6 +258,7 @@ class AppRuntime:
             on_activity=None,
             on_hotkey=None,
             on_input_event=self._tracker.ingest_input_event if self._tracker else None,
+            on_raw_event=self._tracker.ingest_raw_event if self._tracker else None,
             track_mouse_movement=config.tracking.track_mouse_movement,
             mouse_move_sample_ms=config.tracking.mouse_move_sample_ms,
         )

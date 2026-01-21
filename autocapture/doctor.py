@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import ctypes
-import os
+import importlib.util
 import json
+import os
+import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -24,7 +27,13 @@ from .encryption import EncryptionManager
 from .logging_utils import get_logger
 from .memory.entities import SecretStore
 from .observability.metrics import get_metrics_port
-from .paths import resolve_ffmpeg_path, resolve_qdrant_path, resource_root
+from .paths import (
+    is_wsl,
+    resolve_ffmpeg_path,
+    resolve_qdrant_path,
+    resource_root,
+    windows_to_wsl_path,
+)
 from .storage.database import DatabaseManager
 
 
@@ -54,6 +63,7 @@ def run_doctor(
             _check_encryption,
             _check_qdrant,
             _check_ffmpeg,
+            _check_gpu,
             _check_capture_backends,
             _check_ocr,
             _check_embeddings,
@@ -64,7 +74,14 @@ def run_doctor(
         ]
 
     log.info("Doctor config summary:\n{}", _redact_config(config))
-    results = [check(config) for check in checks]
+    results: list[DoctorCheckResult] = []
+    for check in checks:
+        try:
+            results.append(check(config))
+        except Exception as exc:
+            name = getattr(check, "__name__", "check").replace("_check_", "")
+            log.warning("Doctor check %s failed: %s", name, exc)
+            results.append(DoctorCheckResult(name=name, ok=False, detail=f"check error: {exc}"))
     ok = all(result.ok for result in results)
     _print_table(results)
     return (0 if ok else 2), DoctorReport(ok=ok, results=results)
@@ -114,6 +131,15 @@ def _check_paths(config: AppConfig) -> DoctorCheckResult:
     ]
     for name, path in paths:
         try:
+            raw = str(path)
+            if sys.platform != "win32" and _looks_like_windows_path(raw):
+                if is_wsl():
+                    mapped = windows_to_wsl_path(raw)
+                    path = Path(mapped)
+                else:
+                    detail = f"path={raw} error=windows_path_on_posix"
+                    detail += "; use a POSIX path or enable WSL path mapping"
+                    return DoctorCheckResult(name, False, detail)
             Path(path).mkdir(parents=True, exist_ok=True)
             probe = Path(path) / ".doctor_probe"
             probe.write_text("ok", encoding="utf-8")
@@ -138,8 +164,68 @@ def _check_paths(config: AppConfig) -> DoctorCheckResult:
                     "; set LOCALAPPDATA (recommended) or override capture.data_dir/"
                     "capture.staging_dir in config"
                 )
+            if is_wsl():
+                detail += "; WSL detected: prefer paths under /mnt/<drive>/ or ~/.autocapture"
             return DoctorCheckResult(name, False, detail)
     return DoctorCheckResult("paths", True, "Writable")
+
+
+def _check_gpu(config: AppConfig) -> DoctorCheckResult:
+    if not config.observability.enable_gpu_stats:
+        return DoctorCheckResult("gpu", True, "GPU stats disabled")
+    expected_cuda = (
+        str(config.ocr.device).strip().lower() == "cuda"
+        or str(config.reranker.device).strip().lower() == "cuda"
+    )
+    details: list[str] = []
+    available = False
+    torch_cuda = False
+    if importlib.util.find_spec("torch") is not None:
+        try:
+            import torch  # type: ignore
+
+            torch_cuda = bool(torch.cuda.is_available())
+            if torch_cuda:
+                name = torch.cuda.get_device_name(0)
+                details.append(f"torch_cuda={name}")
+                available = True
+            else:
+                details.append("torch_cuda_unavailable")
+        except Exception as exc:
+            details.append(f"torch_error={exc}")
+    else:
+        details.append("torch_missing")
+    nvidia = shutil.which("nvidia-smi")
+    if nvidia:
+        try:
+            result = subprocess.run(
+                [nvidia, "--query-gpu=name,driver_version,cuda_version", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                line = result.stdout.splitlines()[0].strip()
+                details.append(f"nvidia-smi={line}")
+                available = True
+            else:
+                err = (result.stderr or "").strip()
+                if err:
+                    details.append(f"nvidia-smi_error={err}")
+        except Exception as exc:
+            details.append(f"nvidia-smi_error={exc}")
+    else:
+        details.append("nvidia-smi_missing")
+    if not available and is_wsl():
+        details.append("wsl_gpu_missing")
+    detail = "; ".join(details) if details else "GPU not detected"
+    if expected_cuda and not available:
+        return DoctorCheckResult("gpu", False, detail)
+    return DoctorCheckResult("gpu", True, detail)
+
+
+def _looks_like_windows_path(raw: str) -> bool:
+    return bool(re.match(r"^[A-Za-z]:[\\\\/]", raw))
 
 
 def _check_database(config: AppConfig) -> DoctorCheckResult:

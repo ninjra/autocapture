@@ -176,24 +176,24 @@ class StateService:
     def _load_queue_status(self) -> tuple[QueueStatus, int]:
         with self._db.session() as session:
             ocr_pending = session.execute(
-                select(func.count()).select_from(CaptureRecord).where(
-                    CaptureRecord.ocr_status == "pending"
-                )
+                select(func.count())
+                .select_from(CaptureRecord)
+                .where(CaptureRecord.ocr_status == "pending")
             ).scalar_one()
             ocr_processing = session.execute(
-                select(func.count()).select_from(CaptureRecord).where(
-                    CaptureRecord.ocr_status == "processing"
-                )
+                select(func.count())
+                .select_from(CaptureRecord)
+                .where(CaptureRecord.ocr_status == "processing")
             ).scalar_one()
             span_embed_pending = session.execute(
-                select(func.count()).select_from(EmbeddingRecord).where(
-                    EmbeddingRecord.status == "pending"
-                )
+                select(func.count())
+                .select_from(EmbeddingRecord)
+                .where(EmbeddingRecord.status == "pending")
             ).scalar_one()
             event_embed_pending = session.execute(
-                select(func.count()).select_from(EventRecord).where(
-                    EventRecord.embedding_status == "pending"
-                )
+                select(func.count())
+                .select_from(EventRecord)
+                .where(EventRecord.embedding_status == "pending")
             ).scalar_one()
         return (
             QueueStatus(

@@ -7,7 +7,9 @@ from typing import Any, Iterable
 from .models import AnswerBanner, BannerAction, EvidenceSummary
 
 
-def build_evidence_summary(evidence: Iterable[Any], time_range: tuple | None = None) -> EvidenceSummary:
+def build_evidence_summary(
+    evidence: Iterable[Any], time_range: tuple | None = None
+) -> EvidenceSummary:
     total = 0
     citable = 0
     redacted = 0
