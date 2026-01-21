@@ -22,6 +22,27 @@ from ..security.sqlcipher import load_sqlcipher_key
 T = TypeVar("T")
 
 
+def _ensure_create_function_compat(dbapi_connection) -> None:
+    """Patch DBAPIs that don't accept the 'deterministic' kwarg (pysqlcipher3)."""
+
+    create_fn = getattr(dbapi_connection, "create_function", None)
+    if create_fn is None:
+        return
+    try:
+        create_fn("_autocapture_probe", 1, lambda x: x, deterministic=True)
+    except TypeError as exc:
+        if "at most 3 arguments" not in str(exc):
+            return
+
+        def _compat(name, num_params, func, deterministic=None):  # noqa: ANN001
+            _ = deterministic
+            return create_fn(name, num_params, func)
+
+        setattr(dbapi_connection, "create_function", _compat)
+    except Exception:
+        return
+
+
 def init_schema(engine) -> None:
     """Create all SQLAlchemy tables. Safe to call multiple times."""
     log = get_logger("db")
@@ -174,6 +195,7 @@ class DatabaseManager:
 
         @event.listens_for(self._engine, "connect")
         def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+            _ensure_create_function_compat(dbapi_connection)
             cursor = dbapi_connection.cursor()
             try:
                 if key:
