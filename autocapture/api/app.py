@@ -9,6 +9,7 @@ from .container import AppContainer
 from .lifespan import build_lifespan
 from .middleware.stack import install_middleware
 from .routers.core import build_router
+from .routers.ux import build_ux_router
 from .security_helpers import build_security_manager
 from ..paths import resource_root
 
@@ -39,4 +40,5 @@ def create_app(container: AppContainer) -> FastAPI:
     if ui_dir.exists():
         app.mount("/static", StaticFiles(directory=ui_dir), name="static")
     app.include_router(build_router(container, security_manager=security_manager))
+    app.include_router(build_ux_router(container))
     return app

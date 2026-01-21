@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from dataclasses import dataclass
+from typing import Any
 
 from ..config import AppConfig, RuntimeQosProfile, is_dev_mode
 from ..logging_utils import get_logger
@@ -16,6 +18,7 @@ from ..runtime_qos import apply_cpu_priority
 from .agent_worker import AgentJobWorker
 from .embedding_worker import EmbeddingWorker
 from .event_worker import EventIngestWorker
+from ..ux.state_store import HeartbeatWriter
 
 
 @dataclass
@@ -130,6 +133,13 @@ class WorkerSupervisor:
             )
             for idx, worker in enumerate(self._agent_workers)
         ]
+        state_dir = Path(config.capture.data_dir) / "state"
+        self._heartbeat = HeartbeatWriter(
+            state_dir / "workers.json",
+            component="workers",
+            interval_s=2.0,
+            build_payload=self._heartbeat_payload,
+        )
 
     def _ocr_enabled(self) -> bool:
         engine = (self._config.vision_extract.engine or "").lower()
@@ -167,6 +177,7 @@ class WorkerSupervisor:
             daemon=True,
         )
         self._watchdog_thread.start()
+        self._heartbeat.start()
         self._log.info("Worker supervisor started")
 
     def stop(self) -> None:
@@ -181,6 +192,7 @@ class WorkerSupervisor:
                 slot.thread.join(timeout=2.0)
         if self._watchdog_thread:
             self._watchdog_thread.join(timeout=2.0)
+        self._heartbeat.stop()
         self._log.info("Worker supervisor stopped")
 
     def flush(self) -> None:
@@ -199,6 +211,11 @@ class WorkerSupervisor:
             "watchdog_alive": watchdog_alive,
             "workers_alive": workers_alive,
         }
+
+    def _heartbeat_payload(self) -> tuple[str, dict[str, Any], list[str]]:
+        health = self.health_snapshot()
+        status = "ok" if all(health.values()) else "degraded"
+        return status, {"health": health}, []
 
     def _build_thread(
         self, worker: object, name: str, stop_event: threading.Event

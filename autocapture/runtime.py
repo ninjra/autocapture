@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import datetime as dt
 
@@ -47,6 +47,7 @@ from .runtime_env import (
 )
 from .runtime_governor import RuntimeGovernor, RuntimeMode
 from .gpu_lease import get_global_gpu_lease
+from .ux.state_store import HeartbeatWriter
 
 
 class RetentionScheduler:
@@ -302,6 +303,13 @@ class AppRuntime:
         self._promptops_scheduler: PromptOpsScheduler | None = None
         self._highlights_scheduler: HighlightsScheduler | None = None
         self._fullscreen_paused = False
+        state_dir = Path(config.capture.data_dir) / "state"
+        self._heartbeat = HeartbeatWriter(
+            state_dir / "runtime.json",
+            component="runtime",
+            interval_s=2.0,
+            build_payload=self._heartbeat_payload,
+        )
         self._provider_router = ProviderRouter(
             config.routing,
             config.llm,
@@ -343,6 +351,7 @@ class AppRuntime:
         if self._enrichment_scheduler:
             self._enrichment_scheduler.start()
         self._metrics.start()
+        self._heartbeat.start()
         if self._promptops_scheduler:
             self._promptops_scheduler.start()
         if self._highlights_scheduler:
@@ -382,6 +391,7 @@ class AppRuntime:
             if self._highlights_scheduler:
                 self._highlights_scheduler.stop()
             self._cancel_snooze_timer()
+            self._heartbeat.stop()
         finally:
             self._qdrant_sidecar.stop()
         self._log.info("Runtime stopped")
@@ -410,6 +420,23 @@ class AppRuntime:
         self._persist_privacy()
         self._orchestrator.pause()
         self._schedule_snooze_resume(until)
+
+    def _heartbeat_payload(self) -> tuple[str, dict[str, Any], list[str]]:
+        status = "ok"
+        signals: dict[str, Any] = {
+            "paused": self._config.privacy.paused,
+            "offline": self._config.offline,
+        }
+        try:
+            worker_health = self._workers.health_snapshot()
+            signals["workers"] = worker_health
+            if not all(worker_health.values()):
+                status = "degraded"
+        except Exception:
+            status = "degraded"
+        if self._config.privacy.paused:
+            status = "degraded"
+        return status, signals, []
 
     def add_excluded_process(self, process_name: str) -> bool:
         normalized = normalize_process_name(process_name)

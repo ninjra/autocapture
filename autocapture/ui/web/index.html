@@ -8,162 +8,185 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <header>
-      <h1>Personal Activity Memory Engine</h1>
-      <nav>
-        <button data-tab="chat" class="active">Chat</button>
-        <button data-tab="search">Search</button>
-        <button data-tab="highlights">Highlights</button>
-        <button data-tab="settings">Settings</button>
-        <button data-tab="plugins">Plugins</button>
-      </nav>
-    </header>
-    <main>
-      <section id="chat" class="tab active">
-        <div class="panel">
-          <div class="controls">
-            <label>Model
-              <select id="modelSelect">
-                <option value="ollama">Ollama (local)</option>
-              </select>
-            </label>
-            <label><input type="checkbox" id="sanitizeToggle" checked /> Sanitize</label>
-            <label><input type="checkbox" id="extractiveToggle" checked /> Extractive-only</label>
-            <label>Time range
-              <select id="timeRange">
-                <option value="24h">Last 24h</option>
-                <option value="7d">Last 7 days</option>
-                <option value="30d">Last 30 days</option>
-              </select>
-            </label>
-            <div class="prompt-status">
-              <span>Safe mode</span>
-              <span id="safeModeIndicator" class="pill">--</span>
-            </div>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark"></div>
+          <div>
+            <h1>Autocapture</h1>
+            <p class="brand-subtitle">Personal Memory Engine</p>
           </div>
-          <div id="thread" class="thread"></div>
-          <form id="chatForm">
-            <input id="chatInput" placeholder="Ask about your day..." />
-            <button type="submit">Send</button>
-          </form>
         </div>
-      </section>
-      <section id="search" class="tab">
-        <div class="panel">
-          <form id="searchForm">
-            <input id="searchInput" placeholder="Search events" />
-            <button type="submit">Search</button>
-          </form>
-          <div id="searchResults" class="results"></div>
-        </div>
-      </section>
-      <section id="settings" class="tab">
-        <div class="panel">
-          <h2>Routing Defaults</h2>
-          <label class="toggle">
-            <input type="checkbox" id="privacyPresetToggle" checked />
-            Privacy-first (recommended)
-          </label>
-          <div class="grid">
-            <label>OCR
-              <select id="routingOcr">
-                <option>local</option>
-              </select>
-            </label>
-            <label>Embeddings
-              <select id="routingEmbedding">
-                <option>local</option>
-              </select>
-            </label>
-            <label>Retrieval
-              <select id="routingRetrieval">
-                <option>local</option>
-              </select>
-            </label>
-            <label>Reranker
-              <select id="routingReranker">
-                <option>disabled</option>
-              </select>
-            </label>
-            <label>Compressor
-              <select id="routingCompressor">
-                <option>extractive</option>
-                <option>abstractive</option>
-              </select>
-            </label>
-            <label>Verifier
-              <select id="routingVerifier">
-                <option>rules</option>
-              </select>
-            </label>
-          </div>
-          <h2>Prompt Strategy</h2>
-          <div class="grid">
-            <label>Accuracy boost (repeat prompt)
-              <select id="promptRepeatSelect">
-                <option value="off">Off</option>
-                <option value="repeat_2x">2×</option>
-                <option value="repeat_3x">3×</option>
-              </select>
-            </label>
-            <label class="toggle">
-              <input type="checkbox" id="stepByStepToggle" />
-              Reasoning mode (step-by-step)
-            </label>
-            <label>Step-by-step phrase
-              <input id="stepByStepPhrase" placeholder="Let's think step by step." />
-            </label>
-          </div>
-          <p class="hint">Safe mode automatically reduces repetition when prompts exceed context limits.</p>
-          <button id="saveSettings">Save Settings</button>
-          <p class="hint">Remote mode status: <span id="remoteStatus">local-only</span></p>
-          <div class="storage-card">
-            <div class="storage-header">
-              <h3>Storage &amp; Retention</h3>
-              <button id="refreshStorage" type="button">Refresh</button>
+        <div id="statusBar" class="status-bar"></div>
+        <nav class="nav-tabs">
+          <button data-tab="chat" class="active">Ask</button>
+          <button data-tab="search">Search</button>
+          <button data-tab="highlights">Highlights</button>
+          <button data-tab="settings">Settings</button>
+          <button data-tab="maintenance">Maintenance</button>
+          <button data-tab="audit">Audit</button>
+          <button data-tab="plugins">Plugins</button>
+        </nav>
+      </header>
+      <main>
+        <section id="chat" class="tab active">
+          <div class="panel">
+            <div class="controls">
+              <label>Model
+                <select id="modelSelect"></select>
+              </label>
+              <label><input type="checkbox" id="sanitizeToggle" checked /> Sanitize</label>
+              <label><input type="checkbox" id="extractiveToggle" checked /> Extractive-only</label>
+              <label>Time range
+                <select id="timeRange">
+                  <option value="24h">Last 24h</option>
+                  <option value="7d">Last 7 days</option>
+                  <option value="30d">Last 30 days</option>
+                </select>
+              </label>
+              <div class="prompt-status">
+                <span>Safe mode</span>
+                <span id="safeModeIndicator" class="pill">--</span>
+              </div>
             </div>
-            <div class="storage-grid">
+            <div id="answerBanner" class="banner"></div>
+            <div id="thread" class="thread"></div>
+            <form id="chatForm">
+              <input id="chatInput" placeholder="Ask about your day..." />
+              <button type="submit">Send</button>
+            </form>
+          </div>
+        </section>
+        <section id="search" class="tab">
+          <div class="panel">
+            <form id="searchForm">
+              <input id="searchInput" placeholder="Search events" />
+              <button type="submit">Search</button>
+            </form>
+            <div id="searchResults" class="results"></div>
+          </div>
+        </section>
+        <section id="settings" class="tab">
+          <div class="panel">
+            <div class="panel-header">
               <div>
-                <span class="label">TTL (days)</span>
-                <span id="storageTtl">--</span>
+                <h2>Settings</h2>
+                <p class="hint">Schema-driven settings with preview/apply safety gates.</p>
+              </div>
+              <div class="tier-selector" id="tierSelector"></div>
+            </div>
+            <div id="settingsForm" class="settings-grid"></div>
+            <div class="settings-actions">
+              <button id="previewSettings" type="button">Preview changes</button>
+              <button id="applySettings" type="button" class="secondary">Apply changes</button>
+              <span id="settingsStatus" class="settings-status">No pending changes</span>
+            </div>
+            <div id="settingsPreview" class="preview-panel"></div>
+          </div>
+        </section>
+        <section id="maintenance" class="tab">
+          <div class="panel">
+            <div class="split-grid">
+              <div>
+                <div class="panel-header">
+                  <div>
+                    <h2>Doctor</h2>
+                    <p class="hint">Run diagnostics across storage, OCR, embeddings, and services.</p>
+                  </div>
+                  <button id="runDoctor" type="button">Run doctor</button>
+                </div>
+                <div id="doctorResults" class="diagnostics"></div>
               </div>
               <div>
-                <span class="label">Media usage</span>
-                <span id="storageUsage">--</span>
-              </div>
-              <div class="storage-path">
-                <span class="label">Media path</span>
-                <span id="storagePath">--</span>
+                <div class="panel-header">
+                  <div>
+                    <h2>Delete data</h2>
+                    <p class="hint">Preview and apply destructive deletes with preview tokens.</p>
+                  </div>
+                </div>
+                <div class="delete-form">
+                  <label>Kind
+                    <select id="deleteKind">
+                      <option value="range">Range</option>
+                      <option value="all">All</option>
+                    </select>
+                  </label>
+                  <label>Start UTC
+                    <input id="deleteStart" placeholder="2026-01-20T00:00:00Z" />
+                  </label>
+                  <label>End UTC
+                    <input id="deleteEnd" placeholder="2026-01-21T00:00:00Z" />
+                  </label>
+                  <label>Process (optional)
+                    <input id="deleteProcess" placeholder="chrome.exe" />
+                  </label>
+                  <label>Window title (optional)
+                    <input id="deleteWindowTitle" placeholder="Project X" />
+                  </label>
+                  <label>Confirm phrase
+                    <input id="deleteConfirmPhrase" placeholder="DELETE" />
+                  </label>
+                  <label class="confirm-check"><input type="checkbox" id="deleteConfirmCheck" /> I understand this will delete data</label>
+                  <div class="delete-actions">
+                    <button id="previewDelete" type="button">Preview delete</button>
+                    <button id="applyDelete" type="button" class="danger">Apply delete</button>
+                  </div>
+                  <div id="deletePreview" class="preview-panel"></div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </section>
-      <section id="plugins" class="tab">
-        <div class="panel">
-          <h2>Plugins</h2>
-          <p class="hint">Plugins are discovered but must be explicitly enabled.</p>
-          <div class="plugin-banner">
-            <span class="label">Safe mode</span>
-            <span id="pluginSafeMode" class="pill">--</span>
+        </section>
+        <section id="audit" class="tab">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Audit</h2>
+                <p class="hint">Recent request runs, evidence counts, and answer citations.</p>
+              </div>
+              <button id="refreshAudit" type="button">Refresh</button>
+            </div>
+            <div class="split-grid">
+              <div>
+                <div id="auditList" class="audit-list"></div>
+              </div>
+              <div>
+                <div id="auditDetail" class="audit-detail">Select a request to inspect.</div>
+              </div>
+            </div>
           </div>
-          <div id="pluginWarnings" class="plugin-warnings"></div>
-          <div id="pluginList" class="plugin-list"></div>
-        </div>
-      </section>
-      <section id="highlights" class="tab">
-        <div class="panel">
-          <h2>Nightly Highlights</h2>
-          <div class="highlights-controls">
-            <label>Day
-              <select id="highlightsDay"></select>
-            </label>
-            <button id="refreshHighlights">Refresh</button>
+        </section>
+        <section id="plugins" class="tab">
+          <div class="panel">
+            <h2>Plugins</h2>
+            <p class="hint">Plugins are discovered but must be explicitly enabled.</p>
+            <div class="plugin-banner">
+              <span class="label">Safe mode</span>
+              <span id="pluginSafeMode" class="pill">--</span>
+            </div>
+            <div id="pluginWarnings" class="plugin-warnings"></div>
+            <div id="pluginList" class="plugin-list"></div>
           </div>
-          <div id="highlightsContent" class="highlights-content"></div>
-        </div>
-      </section>
-    </main>
+        </section>
+        <section id="highlights" class="tab">
+          <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Nightly Highlights</h2>
+                <p class="hint">Daily summaries generated from your activity history.</p>
+              </div>
+              <div class="highlights-controls">
+                <label>Day
+                  <select id="highlightsDay"></select>
+                </label>
+                <button id="refreshHighlights">Refresh</button>
+              </div>
+            </div>
+            <div id="highlightsContent" class="highlights-content"></div>
+          </div>
+        </section>
+      </main>
+    </div>
     <script src="/static/app.js"></script>
   </body>
 </html>

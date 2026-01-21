@@ -12,6 +12,7 @@ A local-first desktop recall app for Windows 11 that runs as a single binary: tr
 - **Stage-routed LLM pipeline** with query refinement, draft generation, and final answer stages (local-first defaults).
 - **LLM gateway** (OpenAI-compatible proxy) with stage policy fallback and claim-level validation.
 - **Graph adapters** for graph-style retrieval workers (GraphRAG / HyperGraphRAG / Hyper-RAG).
+- **Operational UX facade**: `/api/state` snapshot, schema-driven settings preview/apply, doctor diagnostics, audit views, and safe delete flows.
 - **Optional DiffusionVL local server** (`tools/diffusionvl_server.py`) for OpenAI-compatible VLM hosting.
 - **Deterministic memory store CLI** (SQLite + FTS5) with snapshots and citations.
 
@@ -163,6 +164,19 @@ poetry run autocapture promptops list
 
 - `GET /healthz/deep` performs a deep dependency check (DB + optional Qdrant/embedding).
   It returns HTTP 503 when any non-skipped check fails.
+- `GET /api/state` returns the canonical state snapshot used by the web UI + CLI.
+- `GET /api/doctor` returns structured diagnostic checks (same payload as `autocapture doctor --json`).
+
+## UX CLI
+
+```powershell
+poetry run autocapture status --json
+poetry run autocapture settings schema --json
+poetry run autocapture settings preview --file settings.json --tier guided
+poetry run autocapture settings apply --file settings.json --preview-id <token> --confirm
+poetry run autocapture delete preview range --start-utc 2026-01-01T00:00:00Z --end-utc 2026-01-02T00:00:00Z
+poetry run autocapture audit list --json
+```
 
 ## Export / backup
 
