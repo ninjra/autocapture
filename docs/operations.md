@@ -65,6 +65,10 @@ If `autocapture doctor` reports a writable-path failure on Windows, confirm
 paths (e.g. `/mnt/c/Autocapture` or `~/.autocapture`) and use `paths.base_dir`
 to relocate capture, worker, and memory stores together.
 
+Video recording is enabled by default. Ensure FFmpeg is bundled (Windows release
+builds via `tools/vendor_windows_binaries.py`) or set `ffmpeg.explicit_path`
+so the doctor check passes.
+
 GPU checks use `nvidia-smi` plus `torch.cuda.is_available()` when installed. If
 the doctor reports missing GPU while running in WSL, ensure WSL2 GPU support is
 enabled or set `AUTOCAPTURE_GPU_MODE=off` for CPU-only operation.

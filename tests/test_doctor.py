@@ -46,3 +46,17 @@ def test_doctor_handles_check_exceptions() -> None:
     assert report.ok is False
     assert report.results[0].ok is False
     assert "boom" in report.results[0].detail
+
+
+def test_ffmpeg_required_when_video_enabled() -> None:
+    config = AppConfig(
+        database=DatabaseConfig(url="sqlite:///:memory:"),
+        tracking={"enabled": False},
+        embed={"text_model": "local-test"},
+        capture={"record_video": True},
+        ffmpeg={"enabled": False},
+    )
+
+    result = doctor._check_ffmpeg(config)
+    assert result.ok is False
+    assert "ffmpeg disabled" in result.detail.lower()

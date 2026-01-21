@@ -65,6 +65,8 @@ pyproject.toml        # Project dependencies and tooling configuration
    ```
    On first run, Autocapture writes a default config to `%LOCALAPPDATA%/Autocapture/autocapture.yml`
    on Windows and stores data under `%LOCALAPPDATA%/Autocapture/data` unless overridden.
+   Video recording is enabled by default, so ensure FFmpeg is available (bundle it
+   via `tools/vendor_windows_binaries.py` or set `ffmpeg.explicit_path`).
 
    For a full GPU + security run (recommended for representative testing):
    ```powershell

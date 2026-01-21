@@ -378,13 +378,15 @@ def _check_capture_backends(config: AppConfig) -> DoctorCheckResult:
 def _check_ffmpeg(config: AppConfig) -> DoctorCheckResult:
     if not config.capture.record_video:
         return DoctorCheckResult("ffmpeg", True, "Video recording disabled")
+    if not config.ffmpeg.enabled:
+        return DoctorCheckResult("ffmpeg", False, "ffmpeg disabled while record_video is enabled")
     try:
         path = resolve_ffmpeg_path(config.ffmpeg)
         if path is None:
             return DoctorCheckResult(
                 "ffmpeg",
-                True,
-                "FFmpeg missing; video disabled (allow_disable=true)",
+                False,
+                "FFmpeg missing; install/bundle ffmpeg or set ffmpeg.explicit_path",
             )
         try:
             creationflags = 0

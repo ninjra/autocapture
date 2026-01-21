@@ -262,7 +262,7 @@ memory_service:
 time:
   timezone: null
 presets:
-  active_preset: "privacy_first"
+  active_preset: "high_fidelity"
 routing:
   capture: "local"
   ocr: "local"
@@ -564,7 +564,7 @@ capture:
   # staging_dir: "%LOCALAPPDATA%/Autocapture/staging"  # optional override
   # data_dir: "%LOCALAPPDATA%/Autocapture/data"       # optional override
   encoder: "nvenc_webp"
-  record_video: false
+  record_video: true
   multi_monitor_enabled: true
   hdr_enabled: false
   layout_mode: "virtual_desktop"
@@ -783,7 +783,7 @@ ffmpeg:
   require_bundled: true
   explicit_path: null
   allow_system: true
-  allow_disable: true
+  allow_disable: false
   relative_path_candidates:
     - "ffmpeg/bin/ffmpeg.exe"
     - "ffmpeg/ffmpeg.exe"
