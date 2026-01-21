@@ -603,7 +603,7 @@ ocr:
   paddle_ppstructure_model_dir: null
   paddle_ppstructure_use_gpu: false
 vision_extract:
-  engine: "vlm"
+  engine: "rapidocr-onnxruntime"
   fallback_engine: "rapidocr-onnxruntime"
   tiles_x: 3
   tiles_y: 2
