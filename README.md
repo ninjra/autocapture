@@ -66,6 +66,13 @@ pyproject.toml        # Project dependencies and tooling configuration
    On first run, Autocapture writes a default config to `%LOCALAPPDATA%/Autocapture/autocapture.yml`
    on Windows and stores data under `%LOCALAPPDATA%/Autocapture/data` unless overridden.
 
+   For a full GPU + security run (recommended for representative testing):
+   ```powershell
+   poetry run autocapture setup --profile full --apply
+   poetry run autocapture doctor --verbose
+   poetry run autocapture app
+   ```
+
 ### Windows release bundling
 
 Windows release builds can bundle Qdrant + FFmpeg so local mode runs without Docker when Qdrant

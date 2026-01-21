@@ -40,6 +40,23 @@ Acceleration references:
 - NVIDIA RTX local acceleration: https://developer.nvidia.com/blog/open-source-ai-tool-upgrades-speed-up-llm-and-diffusion-models-on-nvidia-rtx-pcs/
 - Tiny diffusion experiments: https://github.com/nathan-barry/tiny-diffusion
 
+## Full GPU + security setup (recommended for representative runs)
+
+Use the setup helper to enable GPU defaults, at-rest encryption, and high-fidelity
+capture settings in your local config:
+
+```powershell
+poetry run autocapture setup --profile full --apply
+```
+
+Follow any warnings it prints (for example, installing SQLCipher or a CUDA-enabled
+PyTorch build). Then confirm:
+
+```powershell
+poetry run autocapture doctor --verbose
+poetry run autocapture app
+```
+
 ## Doctor + Windows paths
 
 If `autocapture doctor` reports a writable-path failure on Windows, confirm
