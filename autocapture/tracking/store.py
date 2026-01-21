@@ -243,7 +243,8 @@ class SqliteHostEventStore:
             import pysqlcipher3.dbapi2 as sqlcipher  # type: ignore
         except Exception as exc:  # pragma: no cover
             raise RuntimeError(
-                "SQLCipher support requires pysqlcipher3. Install via: poetry install --extras sqlcipher"
+                "SQLCipher support requires pysqlcipher3. Install via: poetry install --extras sqlcipher "
+                "(Windows uses rotki-pysqlcipher3 wheels)."
             ) from exc
         return sqlcipher.connect(self._db_path, **connect_args)
 

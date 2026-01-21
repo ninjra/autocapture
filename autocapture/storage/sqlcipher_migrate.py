@@ -50,7 +50,8 @@ def _write_encrypted(path: Path, dump_sql: str, key: bytes) -> None:
         import pysqlcipher3.dbapi2 as sqlcipher  # type: ignore
     except Exception as exc:  # pragma: no cover
         raise RuntimeError(
-            "SQLCipher support requires pysqlcipher3. Install via: poetry install --extras sqlcipher"
+            "SQLCipher support requires pysqlcipher3. Install via: poetry install --extras sqlcipher "
+            "(Windows uses rotki-pysqlcipher3 wheels)."
         ) from exc
     with sqlcipher.connect(path) as conn:  # type: ignore
         conn.execute("PRAGMA key = ?", (key,))
