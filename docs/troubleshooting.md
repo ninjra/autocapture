@@ -28,6 +28,8 @@ If you need capture to continue during fullscreen apps, set
   (e.g. `/mnt/c/Autocapture`) or set `paths.base_dir` in `autocapture.yml`.
 - If GPU checks fail under WSL, verify `nvidia-smi` works in WSL2 and ensure the
   CUDA-enabled packages are installed. Set `AUTOCAPTURE_GPU_MODE=off` to force CPU.
+- For a full Windows GPU + security configuration, run
+  `poetry run autocapture setup --profile full --apply` and re-run the doctor.
 
 ## PyCharm does not show new Git files
 

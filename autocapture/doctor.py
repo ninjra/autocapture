@@ -219,6 +219,12 @@ def _check_gpu(config: AppConfig) -> DoctorCheckResult:
     if not available and is_wsl():
         details.append("wsl_gpu_missing")
     detail = "; ".join(details) if details else "GPU not detected"
+    if any("torch_missing" in item for item in details):
+        detail += "; install CUDA-enabled PyTorch (see docs/operations.md)"
+    if any("torch_cuda_unavailable" in item for item in details):
+        detail += "; torch installed but CUDA unavailable"
+    if any("nvidia-smi_missing" in item for item in details):
+        detail += "; nvidia-smi missing (install NVIDIA drivers)"
     if expected_cuda and not available:
         return DoctorCheckResult("gpu", False, detail)
     return DoctorCheckResult("gpu", True, detail)
@@ -241,7 +247,10 @@ def _check_database(config: AppConfig) -> DoctorCheckResult:
             detail = f"Connected; migration check warning: {exc}"
         return DoctorCheckResult("database", True, detail)
     except Exception as exc:
-        return DoctorCheckResult("database", False, str(exc))
+        detail = str(exc)
+        if "Secure mode required" in detail:
+            detail += " (enable database.encryption_enabled + sqlcipher, or run autocapture setup)"
+        return DoctorCheckResult("database", False, detail)
 
 
 def _check_migrations(db: DatabaseManager) -> None:
@@ -456,6 +465,12 @@ def _build_ocr_fixture():
 def _check_embeddings(config: AppConfig) -> DoctorCheckResult:
     if config.routing.embedding == "disabled" or config.embed.text_model == "disabled":
         return DoctorCheckResult("embeddings", True, "Disabled")
+    if config.offline:
+        return DoctorCheckResult(
+            "embeddings",
+            False,
+            "Offline mode enabled; set offline:false to download models or pre-cache embeddings.",
+        )
     try:
         embedder = EmbeddingService(config.embed)
         vectors = embedder.embed_texts(["doctor probe"])

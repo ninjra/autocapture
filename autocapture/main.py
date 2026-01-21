@@ -58,6 +58,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     doctor = sub.add_parser("doctor", help="Run quick environment/self checks and exit.")
     doctor.add_argument("--json", action="store_true", help="Output JSON.")
     doctor.add_argument("--verbose", action="store_true", help="Include verbose details.")
+    setup = sub.add_parser("setup", help="Prepare config for a full GPU + security run.")
+    setup.add_argument("--profile", default="full", choices=["full"])
+    setup.add_argument("--apply", action="store_true", help="Apply changes to the config file.")
+    setup.add_argument("--json", action="store_true", help="Output JSON.")
     sub.add_parser("smoke", help="Run minimal smoke checks and exit.")
     status = sub.add_parser("status", help="Show current state snapshot.")
     status.add_argument("--json", action="store_true", help="Output JSON.")
@@ -263,6 +267,17 @@ def main(argv: list[str] | None = None) -> None:
     ensure_expected_interpreter()
 
     config_path = ensure_config_path(Path(args.config))
+    if cmd == "setup":
+        from .setup import run_setup
+
+        raise SystemExit(
+            run_setup(
+                config_path,
+                profile=getattr(args, "profile", "full"),
+                apply=bool(getattr(args, "apply", False)),
+                json_output=bool(getattr(args, "json", False)),
+            )
+        )
     config = load_config(config_path)
     configure_logging(args.log_dir or getattr(config, "logging", None))
     runtime_env = load_runtime_env()
