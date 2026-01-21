@@ -1,5 +1,7 @@
 mode:
-  mode: local
+  mode: "local"
+  # Remote mode: set this to your overlay adapter (e.g. tailscale0, wg0). When
+  # remote mode is enabled, api.bind_host is derived from this interface.
   overlay_interface: null
   https_enabled: false
   tls_cert_path: null
@@ -8,6 +10,8 @@ mode:
   google_oauth_client_secret: null
   google_allowed_emails: []
 paths:
+  # base_dir sets defaults for capture/worker/memory paths unless overridden below.
+  # base_dir: "D:/Autocapture"
   base_dir: null
   data_dir: null
   staging_dir: null
@@ -16,7 +20,9 @@ paths:
   tracking_db_path: null
   database_path: null
 api:
-  bind_host: 127.0.0.1
+  # Remote mode: bind_host is derived from mode.overlay_interface unless you
+  # override it.
+  bind_host: "127.0.0.1"
   port: 8008
   require_api_key: false
   api_key: null
@@ -30,7 +36,7 @@ security:
   local_unlock_enabled: true
   session_ttl_seconds: 300
   secure_mode: true
-  provider: windows_hello
+  provider: "windows_hello"
 templates:
   enabled: true
   log_provenance: true
@@ -45,8 +51,7 @@ ui:
     pin_default: false
 overlay_tracker:
   enabled: false
-  platforms:
-  - windows
+  platforms: ["windows"]
   stale_after_hours: 48
   hotness_half_life_minutes: 30
   collectors:
@@ -57,7 +62,7 @@ overlay_tracker:
     input_debounce_ms: 500
   ui:
     enabled: true
-    dock: right
+    dock: "right"
     width_px: 320
     click_through_default: true
     interactive_timeout_seconds: 10
@@ -65,39 +70,24 @@ overlay_tracker:
     auto_hide_fullscreen: true
   hotkeys:
     toggle_overlay:
-      modifiers:
-      - ctrl
-      - shift
-      key: O
+      modifiers: ["ctrl", "shift"]
+      key: "O"
     interactive_mode:
-      modifiers:
-      - ctrl
-      - shift
-      key: I
+      modifiers: ["ctrl", "shift"]
+      key: "I"
     project_cycle:
-      modifiers:
-      - ctrl
-      - shift
-      key: P
+      modifiers: ["ctrl", "shift"]
+      key: "P"
     toggle_running:
-      modifiers:
-      - ctrl
-      - shift
-      key: R
+      modifiers: ["ctrl", "shift"]
+      key: "R"
     rename:
-      modifiers:
-      - ctrl
-      - shift
-      key: N
+      modifiers: ["ctrl", "shift"]
+      key: "N"
     snooze:
-      modifiers:
-      - ctrl
-      - shift
-      key: S
-    snooze_minutes:
-    - 15
-    - 60
-    - 240
+      modifiers: ["ctrl", "shift"]
+      key: "S"
+    snooze_minutes: [15, 60, 240]
   policy:
     deny_processes: []
     max_window_title_length: 512
@@ -106,12 +96,10 @@ overlay_tracker:
     event_cap: 200000
   url_plugin:
     enabled: false
-    allow_browsers:
-    - chrome.exe
-    - msedge.exe
+    allow_browsers: ["chrome.exe", "msedge.exe"]
     allow_domains: []
     token_rules: []
-offline: false
+offline: true
 features:
   enable_otel: true
   enable_memory_service_write_hook: false
@@ -124,32 +112,32 @@ privacy:
   snooze_until_utc: null
   exclude_monitors: []
   exclude_processes:
-  - 1password.exe
-  - bitwarden.exe
-  - keepass.exe
-  - keepassxc.exe
-  - lastpass.exe
-  - dashlane.exe
-  - nordpass.exe
-  - keeper.exe
-  - roboform.exe
-  - authy.exe
+    - "1password.exe"
+    - "bitwarden.exe"
+    - "keepass.exe"
+    - "keepassxc.exe"
+    - "lastpass.exe"
+    - "dashlane.exe"
+    - "nordpass.exe"
+    - "keeper.exe"
+    - "roboform.exe"
+    - "authy.exe"
   exclude_window_title_regex:
-  - (?i)\b(inprivate|incognito)\b
-  - (?i)windows security
-  - (?i)user account control
-  - (?i)credential(s)?
+    - "(?i)\\b(inprivate|incognito)\\b"
+    - "(?i)windows security"
+    - "(?i)user account control"
+    - "(?i)credential(s)?"
   exclude_regions: []
 policy:
   enforce_prompt_injection: false
   prompt_injection_warn_threshold: 0.7
   prompt_injection_block_threshold: 0.9
-  structured_output_mode: none
+  structured_output_mode: "none"
   max_context_chars: null
   max_evidence_items: null
 output:
-  format: text
-  context_pack_format: json
+  format: "text"
+  context_pack_format: "json"
   allow_tron_compression: false
 cache:
   enabled: false
@@ -162,33 +150,34 @@ retrieval:
   graph_adapters:
     graphrag:
       enabled: true
-      base_url: http://127.0.0.1:8020
+      base_url: "http://127.0.0.1:8020"
       timeout_s: 10.0
       max_results: 20
     hypergraphrag:
       enabled: true
-      base_url: http://127.0.0.1:8020
+      base_url: "http://127.0.0.1:8020"
       timeout_s: 10.0
       max_results: 20
     hyperrag:
       enabled: true
-      base_url: http://127.0.0.1:8020
+      base_url: "http://127.0.0.1:8020"
       timeout_s: 10.0
       max_results: 20
 memory:
   enabled: true
   api_context_pack_enabled: true
   storage:
-    db_filename: memory.sqlite3
-    artifacts_dir: artifacts
-    snapshots_dir: snapshots
+    # root_dir uses the platform default unless AUTOCAPTURE_MEMORY_DIR is set.
+    db_filename: "memory.sqlite3"
+    artifacts_dir: "artifacts"
+    snapshots_dir: "snapshots"
     require_fts: true
     snapshot_retention_days: 90
   policy:
     blocked_labels: []
     exclude_patterns: []
     redact_patterns: []
-    redact_token: '[REDACTED]'
+    redact_token: "[REDACTED]"
   spans:
     max_chars: 800
     min_chars: 200
@@ -204,8 +193,8 @@ memory:
     max_memory_items: 32
   hotness:
     enabled: true
-    mode_default: 'off'
-    scope_default: default
+    mode_default: "off" # off|as_of|dynamic
+    scope_default: "default"
     half_lives:
       fast_seconds: 3600
       mid_seconds: 21600
@@ -233,24 +222,18 @@ memory:
       event_max_age_days: 30
       event_max_count: 50000
     allowed_signals:
-      manual_touch:
-      - cli
-      - api
-      pin_set:
-      - cli
-      - api
-      pin_unset:
-      - cli
-      - api
+      manual_touch: ["cli", "api"]
+      pin_set: ["cli", "api"]
+      pin_unset: ["cli", "api"]
 memory_service:
   enabled: false
-  bind_host: 127.0.0.1
+  bind_host: "127.0.0.1"
   port: 8030
   require_api_key: false
   api_key: null
   base_url: null
   database_url: null
-  default_namespace: default
+  default_namespace: "default"
   max_body_bytes: 1000000
   request_timeout_s: 10.0
   enable_ingest: true
@@ -260,11 +243,11 @@ memory_service:
   enable_query_embedding: true
   enable_rls: false
   embedder:
-    provider: stub
+    provider: "stub"
     dim: 256
-    model_id: hash-v1
+    model_id: "hash-v1"
   reranker:
-    provider: disabled
+    provider: "disabled"
     max_window: 50
   retrieval:
     topk_vector: 40
@@ -276,12 +259,7 @@ memory_service:
     max_cards: 8
     max_tokens: 1200
     max_per_type: 2
-    type_priority:
-    - decision
-    - procedure
-    - fact
-    - episodic
-    - glossary
+    type_priority: ["decision", "procedure", "fact", "episodic", "glossary"]
   ranking:
     weight_semantic: 0.45
     weight_keyword: 0.25
@@ -292,38 +270,35 @@ memory_service:
     weight_rerank: 0.2
     recency_half_life_days: 90
   policy:
-    allowed_audiences:
-    - internal
-    sensitivity_order:
-    - low
-    - medium
-    - high
+    allowed_audiences: ["internal"]
+    sensitivity_order: ["low", "medium", "high"]
     reject_person_entities: true
     reject_preferences: true
     pii_patterns: []
     secret_patterns: []
 presets:
-  active_preset: high_fidelity
+  active_preset: "privacy_first"
 routing:
-  capture: local
-  ocr: local
-  embedding: local
-  retrieval: local
-  vector_backend: local
-  spans_v2_backend: local
-  table_extractor: disabled
-  reranker: enabled
-  compressor: extractive
-  verifier: rules
-  llm: gateway
+  capture: "local"
+  ocr: "local"
+  embedding: "local"
+  retrieval: "local"
+  vector_backend: "local"
+  spans_v2_backend: "local"
+  table_extractor: "disabled"
+  reranker: "enabled"
+  compressor: "extractive"
+  verifier: "rules"
+  llm: "gateway"
 llm:
-  provider: gateway
-  ollama_url: http://127.0.0.1:11434
-  ollama_model: llama3
+  provider: "gateway"
+  ollama_url: "http://127.0.0.1:11434"
+  ollama_model: "llama3"
   openai_api_key: null
-  openai_model: gpt-4.1-mini
+  openai_model: "gpt-4.1-mini"
   timeout_s: 60.0
   retries: 3
+  # Repeat the user prompt once (higher input tokens; may improve non-reasoning tasks).
   prompt_repetition: false
 llm_governor:
   enabled: true
@@ -334,7 +309,7 @@ llm_governor:
   adjust_interval_s: 5.0
 gateway:
   enabled: true
-  bind_host: 127.0.0.1
+  bind_host: "127.0.0.1"
   port: 8010
   require_api_key: false
   api_key: null
@@ -346,108 +321,104 @@ gateway:
   startup_probe: true
 graph_service:
   enabled: true
-  bind_host: 127.0.0.1
+  bind_host: "127.0.0.1"
   port: 8020
   max_events: 50000
   max_results: 200
   require_workers: true
-  graphrag_cli: scripts/graphrag_worker.sh
-  hypergraphrag_cli: scripts/hypergraphrag_worker.sh
-  hyperrag_cli: scripts/hyperrag_worker.sh
+  graphrag_cli: "scripts/graphrag_worker.sh"
+  hypergraphrag_cli: "scripts/hypergraphrag_worker.sh"
+  hyperrag_cli: "scripts/hyperrag_worker.sh"
   worker_timeout_s: 60.0
 model_registry:
   enabled: true
   providers:
-  - id: vllm_gpu_a
-    type: openai_compatible
-    base_url: http://127.0.0.1:8001
-    timeout_s: 60.0
-    retries: 2
-    allow_cloud: false
-    max_concurrency: 2
-  - id: vllm_gpu_b
-    type: openai_compatible
-    base_url: http://127.0.0.1:8002
-    timeout_s: 60.0
-    retries: 2
-    allow_cloud: false
-    max_concurrency: 1
-  - id: vllm_cpu
-    type: openai_compatible
-    base_url: http://127.0.0.1:8003
-    timeout_s: 60.0
-    retries: 2
-    allow_cloud: false
-    max_concurrency: 2
+    - id: "vllm_gpu_a"
+      type: "openai_compatible"
+      base_url: "http://127.0.0.1:8001"
+      timeout_s: 60.0
+      retries: 2
+      allow_cloud: false
+      max_concurrency: 2
+    - id: "vllm_gpu_b"
+      type: "openai_compatible"
+      base_url: "http://127.0.0.1:8002"
+      timeout_s: 60.0
+      retries: 2
+      allow_cloud: false
+      max_concurrency: 1
+    - id: "vllm_cpu"
+      type: "openai_compatible"
+      base_url: "http://127.0.0.1:8003"
+      timeout_s: 60.0
+      retries: 2
+      allow_cloud: false
+      max_concurrency: 2
   models:
-  - id: base_fast
-    provider_id: vllm_gpu_a
-    upstream_model_name: MODEL_FAST
-    context_tokens: 8192
-    runtime:
-      device: cuda
-  - id: base_long
-    provider_id: vllm_gpu_b
-    upstream_model_name: MODEL_LONG
-    context_tokens: 16384
-    runtime:
-      device: cuda
-    lmcache_enabled: true
-  - id: base_cpu
-    provider_id: vllm_cpu
-    upstream_model_name: MODEL_CPU
-    context_tokens: 8192
-    runtime:
-      device: cpu
-  - id: verifier_small
-    provider_id: vllm_gpu_a
-    upstream_model_name: MODEL_VERIFIER
-    context_tokens: 4096
-    runtime:
-      device: cuda
+    - id: "base_fast"
+      provider_id: "vllm_gpu_a"
+      upstream_model_name: "MODEL_FAST"
+      context_tokens: 8192
+      runtime:
+        device: "cuda"
+    - id: "base_long"
+      provider_id: "vllm_gpu_b"
+      upstream_model_name: "MODEL_LONG"
+      context_tokens: 16384
+      runtime:
+        device: "cuda"
+      lmcache_enabled: true
+    - id: "base_cpu"
+      provider_id: "vllm_cpu"
+      upstream_model_name: "MODEL_CPU"
+      context_tokens: 8192
+      runtime:
+        device: "cpu"
+    - id: "verifier_small"
+      provider_id: "vllm_gpu_a"
+      upstream_model_name: "MODEL_VERIFIER"
+      context_tokens: 4096
+      runtime:
+        device: "cuda"
   stages:
-  - id: draft_generate
-    primary_model_id: base_fast
-    fallback_model_ids:
-    - base_cpu
-    sampling:
-      temperature: 0.2
-    requirements:
-      require_json: false
-      require_citations: true
-    decode:
-      strategy: standard
-    max_attempts: 2
-    allow_cloud: false
-    repair_on_failure: true
-  - id: final_answer
-    primary_model_id: base_long
-    fallback_model_ids:
-    - base_fast
-    - base_cpu
-    sampling:
-      temperature: 0.2
-    requirements:
-      require_json: true
-      claims_schema: claims_json_v1
-    decode:
-      strategy: standard
-    max_attempts: 2
-    allow_cloud: false
-    repair_on_failure: true
-  - id: entailment_judge
-    primary_model_id: verifier_small
-    fallback_model_ids:
-    - base_cpu
-    sampling:
-      temperature: 0.0
-    requirements:
-      require_json: true
-    decode:
-      strategy: standard
-    max_attempts: 2
-    allow_cloud: false
-    repair_on_failure: true
+    - id: "draft_generate"
+      primary_model_id: "base_fast"
+      fallback_model_ids: ["base_cpu"]
+      sampling:
+        temperature: 0.2
+      requirements:
+        require_json: false
+        require_citations: true
+      decode:
+        strategy: "standard"
+      max_attempts: 2
+      allow_cloud: false
+      repair_on_failure: true
+    - id: "final_answer"
+      primary_model_id: "base_long"
+      fallback_model_ids: ["base_fast", "base_cpu"]
+      sampling:
+        temperature: 0.2
+      requirements:
+        require_json: true
+        claims_schema: "claims_json_v1"
+      decode:
+        strategy: "standard"
+      max_attempts: 2
+      allow_cloud: false
+      repair_on_failure: true
+    - id: "entailment_judge"
+      primary_model_id: "verifier_small"
+      fallback_model_ids: ["base_cpu"]
+      sampling:
+        temperature: 0.0
+      requirements:
+        require_json: true
+      decode:
+        strategy: "standard"
+      max_attempts: 2
+      allow_cloud: false
+      repair_on_failure: true
 verification:
   claims_enabled: true
   citation_validator:
@@ -458,20 +429,21 @@ verification:
     max_line_span: 8
   entailment:
     enabled: true
-    judge_stage: entailment_judge
-    on_contradiction: block
-    on_nei: abstain
+    judge_stage: "entailment_judge"
+    on_contradiction: "block"
+    on_nei: "abstain"
     max_attempts: 2
 promptops:
   enabled: false
-  schedule_cron: 0 6 * * 1
+  schedule_cron: "0 6 * * 1"
   sources: []
   github_token: null
-  github_repo: https://github.com/ninjra/promptops
+  github_repo: "https://github.com/ninjra/promptops"
+  # Phase 1 settings (PromptOps)
   max_iterations: 3
   max_llm_attempts_per_prompt: 3
   eval_repeats: 3
-  eval_aggregation: worst_case
+  eval_aggregation: "worst_case"
   require_improvement: true
   min_delta_verifier_pass_rate: 0.02
   min_delta_citation_coverage: 0.02
@@ -481,9 +453,9 @@ promptops:
   tolerance_citation_coverage: 0.02
   tolerance_refusal_rate: 0.02
   tolerance_latency_ms: 250.0
-  min_verifier_pass_rate: 0.6
-  min_citation_coverage: 0.6
-  max_refusal_rate: 0.3
+  min_verifier_pass_rate: 0.60
+  min_citation_coverage: 0.60
+  max_refusal_rate: 0.30
   max_mean_latency_ms: 15000.0
   max_source_bytes: 1048576
   max_source_excerpt_chars: 2000
@@ -491,12 +463,12 @@ promptops:
 agents:
   enabled: true
   max_pending_jobs: 5000
-  nightly_cron: 0 3 * * *
+  nightly_cron: "0 3 * * *"
   answer_agent:
     enabled: true
   vision:
-    provider: ollama
-    model: llava
+    provider: "ollama"
+    model: "llava"
     base_url: null
     api_key: null
     max_jobs_per_hour: 20
@@ -535,22 +507,24 @@ capture:
   fullscreen_width: 3840
   focus_crop_enabled: true
   focus_crop_size: 512
-  focus_crop_reference: event
+  focus_crop_reference: "event"
   diff_epsilon: 0.04
   downscale_width: 256
   always_store_fullres: false
   thumbnail_width: 640
-  encoder: nvenc_webp
+  # staging_dir: "%LOCALAPPDATA%/Autocapture/staging"  # optional override
+  # data_dir: "%LOCALAPPDATA%/Autocapture/data"       # optional override
+  encoder: "nvenc_webp"
   record_video: false
   multi_monitor_enabled: true
   hdr_enabled: false
-  layout_mode: virtual_desktop
-  video_bitrate: 8M
-  video_preset: p4
+  layout_mode: "virtual_desktop"
+  video_bitrate: "8M"
+  video_preset: "p4"
   max_pending: 8000
 tracking:
   enabled: true
-  db_path: db/host_events.sqlite
+  db_path: "db/host_events.sqlite"
   raw_event_stream_enabled: true
   queue_maxsize: 20000
   flush_interval_ms: 1000
@@ -563,33 +537,31 @@ tracking:
   raw_event_flush_interval_ms: 500
   raw_event_batch_size: 500
   raw_event_retention_days: 60
-  encryption_enabled: true
 ocr:
   queue_maxsize: 4000
   batch_size: 32
   max_latency_s: 900
-  engine: rapidocr-onnxruntime
-  device: cuda
-  languages:
-  - en
-  output_format: json
+  engine: "rapidocr-onnxruntime"
+  device: "cuda"
+  languages: ["en"]
+  output_format: "json"
   layout_enabled: true
   paddle_ppstructure_enabled: false
   paddle_ppstructure_model_dir: null
   paddle_ppstructure_use_gpu: false
 embed:
-  text_model: BAAI/bge-base-en-v1.5
-  image_model: google/siglip2-so400m-patch14-384
+  text_model: "BAAI/bge-base-en-v1.5"
+  image_model: "google/siglip2-so400m-patch14-384"
   text_batch_size: 256
   image_batch_size: 32
-  schedule_cron: 0 */6 * * *
+  schedule_cron: "0 */6 * * *"
   use_half_precision: true
 reranker:
   enabled: true
-  model: BAAI/bge-reranker-v2-m3
+  model: "BAAI/bge-reranker-v2-m3"
   top_k: 100
-  device: cuda
 worker:
+  # data_dir: "%LOCALAPPDATA%/Autocapture/data"       # optional override
   lease_ms: 60000
   ocr_lease_ms: 60000
   embedding_lease_ms: 60000
@@ -609,20 +581,19 @@ storage:
   prune_grace_days: 90
   prune_batch: 3000
 database:
+  # url: "sqlite:///C:/Path/To/Autocapture/data/autocapture.db"  # optional override
   echo: false
   pool_size: 10
   max_overflow: 10
-  encryption_enabled: true
-  secure_mode_required: true
-  allow_insecure_dev: false
 qdrant:
   enabled: true
-  url: http://127.0.0.1:6333
-  text_collection: text_spans
-  image_collection: image_tiles
+  url: "http://127.0.0.1:6333"
+  # binary_path: "C:/Path/To/qdrant.exe"  # optional override
+  text_collection: "text_spans"
+  image_collection: "image_tiles"
   text_vector_size: 768
   image_vector_size: 768
-  distance: Cosine
+  distance: "Cosine"
   hnsw_ef_construct: 128
   hnsw_m: 16
   search_ef: 64
@@ -630,24 +601,24 @@ ffmpeg:
   enabled: true
   require_bundled: true
   relative_path_candidates:
-  - ffmpeg/bin/ffmpeg.exe
-  - ffmpeg/ffmpeg.exe
+    - "ffmpeg/bin/ffmpeg.exe"
+    - "ffmpeg/ffmpeg.exe"
 encryption:
   enabled: true
-  key_provider: windows-credential-manager
-  key_name: autocapture/nas-aes-key
+  key_provider: "windows-credential-manager"
+  key_name: "autocapture/nas-aes-key"
   chunk_size: 4194304
 observability:
-  prometheus_bind_host: 127.0.0.1
+  prometheus_bind_host: "127.0.0.1"
   prometheus_port: 9005
   prometheus_port_fallbacks: 10
   prometheus_fail_fast: false
-  grafana_url: http://localhost:3000
+  grafana_url: "http://localhost:3000"
   enable_gpu_stats: true
   telemetry:
-    capture_payloads: none
-    exporter: none
+    capture_payloads: "none"
+    exporter: "none"
     otlp_endpoint: null
-    otlp_protocol: http/protobuf
+    otlp_protocol: "http/protobuf"
     allow_cloud_export: false
     max_attr_len: 128
