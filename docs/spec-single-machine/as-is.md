@@ -1,10 +1,10 @@
-# SPEC-1 As-Is Inventory (2026-01-19)
+# SPEC-SINGLE-MACHINE As-Is Inventory (2026-01-19)
 
-This inventory captures the current implementation state aligned to SPEC-1 P0 requirements. It is
+This inventory captures the current implementation state aligned to SPEC-SINGLE-MACHINE P0 requirements. It is
 based on in-repo source inspection and local command snapshots.
 
 ## Snapshot
-- Branch created for discovery: `spec-1-single-machine-prod`
+- Branch created for discovery: `spec-single-machine-prod`
 - HEAD: `d8f92af Merge pull request #82 from ninjra/feat/runtime-watchdog-20260119`
 - Primary stack: Python (Poetry-managed), FastAPI services, SQLAlchemy + Alembic, Qdrant client,
   Prometheus + OpenTelemetry instrumentation. (`pyproject.toml:L1-L63`, `pyproject.toml:L57-L73`)
@@ -87,9 +87,9 @@ based on in-repo source inspection and local command snapshots.
   (`autocapture/storage/database.py:L25-L214`)
 - Alembic env defines migration context for SQLAlchemy models.
   (`alembic/env.py:L1-L52`)
-- Alembic versions include SPEC-1 gateway claims migration and run logging schema.
-  (`alembic/versions/0013_spec1_gateway_claims.py:L1-L119`,
-   `alembic/versions/0014_spec1_runs_and_citations.py:L1-L150`)
+- Alembic versions include SPEC-SINGLE-MACHINE gateway claims migration and run logging schema.
+  (`alembic/versions/0013_spec_single_machine_gateway_claims.py:L1-L119`,
+   `alembic/versions/0014_spec_single_machine_runs_and_citations.py:L1-L150`)
 
 ## Tests + CI Entry Points
 - Claim validation tests. (`tests/test_claim_validation.py:L1-L35`)

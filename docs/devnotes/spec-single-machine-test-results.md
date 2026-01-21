@@ -1,4 +1,4 @@
-# SPEC-1 test results (2026-01-19)
+# SPEC-SINGLE-MACHINE test results (2026-01-19)
 
 ## Environment
 - `poetry install --with dev` (no dependency changes)

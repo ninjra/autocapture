@@ -1,4 +1,4 @@
-# SPEC-1 implementation plan (2026-01-19)
+# SPEC-SINGLE-MACHINE implementation plan (2026-01-19)
 
 ## Scope
 - Priority >=2 production architecture upgrades (WSL2-first deployment, multi-instance vLLM, in-repo LLM gateway, Qdrant + graph adapters, claim-level citations + deterministic validation + entailment gate, OTel + Prometheus + optional Loki).
@@ -15,7 +15,7 @@
 - Qdrant sidecar + compose: `autocapture/qdrant/sidecar.py`, `docker-compose.yml`.
 - Config system: `autocapture/config.py`, `autocapture.yml`, `config/example.yml`.
 
-## Gaps vs SPEC-1 Priority >=2 (initial baseline)
+## Gaps vs SPEC-SINGLE-MACHINE Priority >=2 (initial baseline)
 - No dedicated LLM gateway or OpenAI-compatible proxy service.
 - No model registry or stage policy with fallback chains (StageRouter selects a single provider today).
 - No GraphRAG/HyperGraphRAG/Hyper-RAG adapters present.

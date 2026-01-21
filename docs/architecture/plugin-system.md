@@ -1,4 +1,4 @@
-# Plugin System Architecture (SPEC-1)
+# Plugin System Architecture (SPEC-SINGLE-MACHINE)
 
 ## Overview
 Autocapture uses a plugin-first module system to wrap providers and pipeline stages behind

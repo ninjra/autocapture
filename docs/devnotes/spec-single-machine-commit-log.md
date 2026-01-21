@@ -1,7 +1,7 @@
-# SPEC-1 commit log (2026-01-19)
+# SPEC-SINGLE-MACHINE commit log (2026-01-19)
 
 ```
-4833f21 (HEAD -> spec-1-plugin-system) SPEC-1: plugin system MVP
+4833f21 (HEAD -> spec-single-machine-plugin-system) SPEC-SINGLE-MACHINE: plugin system MVP
 1c94599 (origin/main, origin/HEAD, main) Merge pull request #79 from ninjra/spec-260117-next-10
 f691c9b (origin/spec-260117-next-10) chore: format
 ee2859f SPEC-260117: Next-10 trust + stability improvements

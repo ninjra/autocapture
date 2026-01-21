@@ -1,4 +1,4 @@
-# Single-Machine Runbook (SPEC-1)
+# Single-Machine Runbook (SPEC-SINGLE-MACHINE)
 
 This runbook brings up the full single-machine stack (WSL2-friendly) with mandatory services.
 
