@@ -18,6 +18,8 @@ jobs:
           cache-dependency-path: poetry.lock
       - name: Install Poetry
         run: pip install poetry==1.8.3
+      - name: Install SQLCipher (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
       - name: Install dependencies
         timeout-minutes: 15
         run: poetry install --with dev --extras "sqlcipher" --no-interaction --no-ansi --sync -vvv
@@ -43,6 +45,8 @@ jobs:
           cache-dependency-path: poetry.lock
       - name: Install Poetry
         run: pip install poetry==1.8.3
+      - name: Install SQLCipher (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
       - name: Show versions
         run: |
           python --version
