@@ -36,6 +36,7 @@ def _ensure_create_function_compat(dbapi_connection) -> None:
             return
     except Exception:
         return
+
     # pysqlcipher3 lacks deterministic kwarg; patch instance first, then class.
     def _compat(name, num_params, func, deterministic=None):  # noqa: ANN001
         _ = deterministic
