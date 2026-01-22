@@ -66,15 +66,20 @@ def _ensure_create_function_compat(dbapi_connection) -> None:
 def _apply_sqlcipher_key(cursor, key: bytes) -> None:
     """Apply SQLCipher key using param binding, falling back to hex literals if needed."""
 
+    hex_key = key.hex()
+    try:
+        # Use hex literal to avoid truncation issues with NULL bytes in raw keys.
+        cursor.execute(f"PRAGMA key = \"x'{hex_key}'\"")
+        return
+    except Exception:
+        pass
     try:
         cursor.execute("PRAGMA key = ?", (key,))
-        return
     except Exception as exc:
         message = str(exc).lower()
         if 'near "?"' not in message and "near '?'" not in message:
             raise
-    hex_key = key.hex()
-    cursor.execute(f"PRAGMA key = \"x'{hex_key}'\"")
+        cursor.execute(f"PRAGMA key = \"x'{hex_key}'\"")
 
 
 def init_schema(engine) -> None:
