@@ -35,7 +35,7 @@ templates:
   enabled: true
   log_provenance: true
 ui:
-  overlay_citations_enabled: false
+  overlay_citations_enabled: true
   search_popup:
     focus_steal_on_show: true
     focus_return_on_submit: true
@@ -44,7 +44,7 @@ ui:
     inactive_opacity: 0.7
     pin_default: false
 overlay_tracker:
-  enabled: false
+  enabled: true
   platforms:
   - windows
   stale_after_hours: 48
@@ -105,7 +105,7 @@ overlay_tracker:
     event_days: 14
     event_cap: 200000
   url_plugin:
-    enabled: false
+    enabled: true
     allow_browsers:
     - chrome.exe
     - msedge.exe
@@ -114,8 +114,9 @@ overlay_tracker:
 offline: false
 features:
   enable_otel: true
-  enable_memory_service_write_hook: false
-  enable_memory_service_read_hook: false
+  enable_memory_service_write_hook: true
+  enable_memory_service_read_hook: true
+  enable_retention_prune: true
 privacy:
   cloud_enabled: false
   sanitize_default: true
@@ -243,7 +244,7 @@ memory:
       - cli
       - api
 memory_service:
-  enabled: false
+  enabled: true
   bind_host: 127.0.0.1
   port: 8030
   require_api_key: false
@@ -256,15 +257,15 @@ memory_service:
   enable_ingest: true
   enable_query: true
   enable_feedback: true
-  enable_rerank: false
+  enable_rerank: true
   enable_query_embedding: true
   enable_rls: false
   embedder:
-    provider: stub
+    provider: local
     dim: 256
     model_id: hash-v1
   reranker:
-    provider: disabled
+    provider: stub
     max_window: 50
   retrieval:
     topk_vector: 40
@@ -311,7 +312,7 @@ routing:
   retrieval: local
   vector_backend: local
   spans_v2_backend: local
-  table_extractor: disabled
+  table_extractor: local
   reranker: enabled
   compressor: extractive
   verifier: rules
@@ -510,7 +511,7 @@ enrichment:
   window_days: null
   at_risk_hours: 24
 table_extractor:
-  enabled: false
+  enabled: true
   allow_cloud: false
 threads:
   enabled: true
@@ -538,7 +539,7 @@ capture:
   focus_crop_reference: event
   diff_epsilon: 0.04
   downscale_width: 256
-  always_store_fullres: false
+  always_store_fullres: true
   thumbnail_width: 640
   encoder: nvenc_webp
   record_video: true
@@ -558,7 +559,7 @@ tracking:
   clipboard_poll_ms: 250
   track_mouse_movement: true
   mouse_move_sample_ms: 50
-  enable_clipboard: false
+  enable_clipboard: true
   retention_days: null
   raw_event_flush_interval_ms: 500
   raw_event_batch_size: 500
@@ -568,7 +569,7 @@ ocr:
   queue_maxsize: 4000
   batch_size: 32
   max_latency_s: 900
-  engine: rapidocr-onnxruntime
+  engine: rapidocr
   device: cuda
   languages:
   - en
@@ -578,8 +579,8 @@ ocr:
   paddle_ppstructure_model_dir: null
   paddle_ppstructure_use_gpu: false
 vision_extract:
-  engine: rapidocr-onnxruntime
-  fallback_engine: rapidocr-onnxruntime
+  engine: rapidocr
+  fallback_engine: rapidocr
 embed:
   text_model: BAAI/bge-base-en-v1.5
   image_model: google/siglip2-so400m-patch14-384
@@ -592,6 +593,8 @@ reranker:
   model: BAAI/bge-reranker-v2-m3
   top_k: 100
   device: cuda
+  disable_in_fullscreen: false
+  force_cpu_in_active: false
 worker:
   lease_ms: 60000
   ocr_lease_ms: 60000

@@ -31,11 +31,11 @@
 - If a key provider is `env:*`, set the environment variable manually after import.
 
 ## Database encryption at rest
-- SQLite can be encrypted with SQLCipher by enabling `database.encryption_enabled`.
+- SQLite is encrypted with SQLCipher by default (`database.encryption_enabled=true`).
 - SQLCipher keys can be stored via DPAPI-protected files (`dpapi_file`), plain files, or env vars.
 - Use `autocapture db encrypt` to migrate a plaintext SQLite DB to encrypted form safely.
 - On Windows, the `sqlcipher` extra installs `rotki-pysqlcipher3` wheels (no local build needed).
-- Host tracking DB supports optional SQLCipher encryption via `tracking.encryption_enabled`.
+- Host tracking DB uses SQLCipher by default (`tracking.encryption_enabled=true`).
 - Raw input timelines (if enabled) are stored in the tracking DB and pruned via
   `tracking.raw_event_retention_days`.
 

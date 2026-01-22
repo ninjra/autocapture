@@ -30,15 +30,34 @@ def _ensure_create_function_compat(dbapi_connection) -> None:
         return
     try:
         create_fn("_autocapture_probe", 1, lambda x: x, deterministic=True)
+        return
     except TypeError as exc:
         if "at most 3 arguments" not in str(exc):
             return
+    except Exception:
+        return
+    # pysqlcipher3 lacks deterministic kwarg; patch instance first, then class.
+    def _compat(name, num_params, func, deterministic=None):  # noqa: ANN001
+        _ = deterministic
+        return create_fn(name, num_params, func)
 
-        def _compat(name, num_params, func, deterministic=None):  # noqa: ANN001
-            _ = deterministic
-            return create_fn(name, num_params, func)
-
+    try:
         setattr(dbapi_connection, "create_function", _compat)
+        return
+    except Exception:
+        pass
+    try:
+        cls = type(dbapi_connection)
+        original = cls.create_function
+    except Exception:
+        return
+
+    def _compat_class(self, name, num_params, func, deterministic=None):  # noqa: ANN001
+        _ = deterministic
+        return original(self, name, num_params, func)
+
+    try:
+        setattr(cls, "create_function", _compat_class)
     except Exception:
         return
 
@@ -193,7 +212,7 @@ class DatabaseManager:
         config = self._config
         key = self._sqlcipher_key
 
-        @event.listens_for(self._engine, "connect")
+        @event.listens_for(self._engine, "connect", insert=True)
         def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
             _ensure_create_function_compat(dbapi_connection)
             cursor = dbapi_connection.cursor()

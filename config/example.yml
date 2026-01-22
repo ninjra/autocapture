@@ -32,9 +32,9 @@ templates:
   enabled: true
   log_provenance: true
 ui:
-  overlay_citations_enabled: false
+  overlay_citations_enabled: true
 overlay_tracker:
-  enabled: false
+  enabled: true
   platforms: ["windows"]
   stale_after_hours: 48
   hotness_half_life_minutes: 30
@@ -79,12 +79,12 @@ overlay_tracker:
     event_days: 14
     event_cap: 200000
   url_plugin:
-    enabled: false
+    enabled: true
     allow_browsers: ["chrome.exe", "msedge.exe"]
     allow_domains: []
     token_rules: []
 # Hard offline mode: blocks outbound network (loopback allowed) and disables cloud calls.
-offline: true
+offline: false
 privacy:
   cloud_enabled: false
   sanitize_default: true
@@ -124,10 +124,10 @@ features:
   enable_frame_hash: true
   enable_normalized_indexing: true
   enable_thresholding: true
-  enable_retention_prune: false
+  enable_retention_prune: true
   enable_otel: true
-  enable_memory_service_write_hook: false
-  enable_memory_service_read_hook: false
+  enable_memory_service_write_hook: true
+  enable_memory_service_read_hook: true
 next10:
   enabled: true
   policy_defaults_path: "config/defaults/policy.json"
@@ -209,7 +209,7 @@ memory:
       pin_set: ["cli", "api"]
       pin_unset: ["cli", "api"]
 memory_service:
-  enabled: false
+  enabled: true
   bind_host: "127.0.0.1"
   port: 8030
   require_api_key: false
@@ -222,15 +222,15 @@ memory_service:
   enable_ingest: true
   enable_query: true
   enable_feedback: true
-  enable_rerank: false
+  enable_rerank: true
   enable_query_embedding: true
   enable_rls: false
   embedder:
-    provider: "stub"
+    provider: "local"
     dim: 256
     model_id: "hash-v1"
   reranker:
-    provider: "disabled"
+    provider: "stub"
     max_window: 50
   retrieval:
     topk_vector: 40
@@ -270,8 +270,8 @@ routing:
   retrieval: "local"
   vector_backend: "local"
   spans_v2_backend: "local"
-  table_extractor: "disabled"
-  reranker: "disabled"
+  table_extractor: "local"
+  reranker: "enabled"
   compressor: "extractive"
   verifier: "rules"
   llm: "gateway"
@@ -559,7 +559,7 @@ capture:
   focus_crop_reference: "event"
   diff_epsilon: 0.04
   downscale_width: 256
-  always_store_fullres: false
+  always_store_fullres: true
   thumbnail_width: 640
   # staging_dir: "%LOCALAPPDATA%/Autocapture/staging"  # optional override
   # data_dir: "%LOCALAPPDATA%/Autocapture/data"       # optional override
@@ -581,9 +581,9 @@ tracking:
   clipboard_poll_ms: 250
   track_mouse_movement: true
   mouse_move_sample_ms: 50
-  enable_clipboard: false
+  enable_clipboard: true
   retention_days: null
-  encryption_enabled: false
+  encryption_enabled: true
   encryption_key_provider: "dpapi_file"
   encryption_key_path: "secrets/host_events.key"
   encryption_env_var: "AUTOCAPTURE_HOST_EVENTS_KEY"
@@ -591,7 +591,7 @@ ocr:
   queue_maxsize: 4000
   batch_size: 32
   max_latency_s: 900
-  engine: "rapidocr-onnxruntime"
+  engine: "rapidocr"
   device: "cuda"
   onnx_providers:
     - "CUDAExecutionProvider"
@@ -603,8 +603,8 @@ ocr:
   paddle_ppstructure_model_dir: null
   paddle_ppstructure_use_gpu: false
 vision_extract:
-  engine: "rapidocr-onnxruntime"
-  fallback_engine: "rapidocr-onnxruntime"
+  engine: "rapidocr"
+  fallback_engine: "rapidocr"
   tiles_x: 3
   tiles_y: 2
   max_tile_px: 1280
@@ -640,13 +640,13 @@ embed:
 reranker:
   enabled: true
   model: "BAAI/bge-reranker-v2-m3"
-  device: "auto"
+  device: "cuda"
   top_k: 100
   batch_size_active: 8
   batch_size_idle: 32
   disable_in_active: false
-  disable_in_fullscreen: true
-  force_cpu_in_active: true
+  disable_in_fullscreen: false
+  force_cpu_in_active: false
 retrieval:
   v2_enabled: true
   use_spans_v2: true
@@ -720,11 +720,11 @@ runtime:
     enabled: true
     idle_grace_ms: 2000
     profile_active:
-      ocr_workers: 1
-      embed_workers: 0
-      agent_workers: 0
-      vision_extract: false
-      ui_grounding: false
+      ocr_workers: 4
+      embed_workers: 1
+      agent_workers: 1
+      vision_extract: true
+      ui_grounding: true
       cpu_priority: "below_normal"
       sleep_ms: null
       max_batch: null
@@ -755,7 +755,7 @@ database:
   echo: false
   pool_size: 10
   max_overflow: 10
-  encryption_enabled: false
+  encryption_enabled: true
   encryption_provider: "dpapi_file"
   encryption_key_name: "autocapture/sqlcipher-key"
   encryption_key_path: "secrets/sqlcipher.key"
@@ -835,7 +835,7 @@ enrichment:
   window_days: null
   at_risk_hours: 24
 table_extractor:
-  enabled: false
+  enabled: true
   allow_cloud: false
 threads:
   enabled: true

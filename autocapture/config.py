@@ -43,6 +43,16 @@ def _default_allow_insecure_dev() -> bool:
     return is_dev_mode()
 
 
+def _default_offline() -> bool:
+    return bool(os.environ.get("AUTOCAPTURE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def _default_sqlcipher_enabled() -> bool:
+    if os.environ.get("AUTOCAPTURE_TEST_MODE") or os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    return True
+
+
 class HIDConfig(BaseModel):
     min_interval_ms: int = Field(
         500,
@@ -198,7 +208,7 @@ class TrackingConfig(BaseModel):
     clipboard_poll_ms: int = Field(250, ge=50)
     track_mouse_movement: bool = True
     mouse_move_sample_ms: int = Field(50, ge=10)
-    enable_clipboard: bool = False
+    enable_clipboard: bool = True
     raw_event_flush_interval_ms: int = Field(
         500, ge=50, description="Flush cadence (ms) for raw input event batches."
     )
@@ -210,7 +220,8 @@ class TrackingConfig(BaseModel):
         60, ge=1, description="Days to retain raw input event data."
     )
     encryption_enabled: bool = Field(
-        False, description="Enable SQLCipher encryption for host events DB."
+        default_factory=_default_sqlcipher_enabled,
+        description="Enable SQLCipher encryption for host events DB.",
     )
     encryption_key_provider: str = Field(
         "dpapi_file",
@@ -227,7 +238,7 @@ class OCRConfig(BaseModel):
     queue_maxsize: int = Field(2000, ge=100)
     batch_size: int = Field(32, ge=1)
     max_latency_s: int = Field(900, ge=10)
-    engine: str = Field("rapidocr-onnxruntime")
+    engine: str = Field("rapidocr")
     device: str = Field("cuda", description="cuda|cpu; cuda preferred when available")
     onnx_providers: list[str] = Field(
         default_factory=lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"],
@@ -280,10 +291,10 @@ class UIGroundingConfig(BaseModel):
 
 class VisionExtractConfig(BaseModel):
     engine: str = Field(
-        "rapidocr-onnxruntime",
+        "rapidocr",
         description="rapidocr-onnxruntime|rapidocr|vlm|deepseek-ocr|disabled",
     )
-    fallback_engine: str = Field("rapidocr-onnxruntime")
+    fallback_engine: str = Field("rapidocr")
     tiles_x: int = Field(3, ge=1)
     tiles_y: int = Field(2, ge=1)
     max_tile_px: int = Field(1280, ge=256)
@@ -318,13 +329,13 @@ class EmbedConfig(BaseModel):
 class RerankerConfig(BaseModel):
     enabled: bool = True
     model: str = Field("BAAI/bge-reranker-v2-m3")
-    device: str = Field("auto", description="auto|cuda|cpu; auto prefers CUDA when available")
+    device: str = Field("cuda", description="auto|cuda|cpu; auto prefers CUDA when available")
     top_k: int = Field(100, ge=1)
     batch_size_active: int = Field(8, ge=1)
     batch_size_idle: int = Field(32, ge=1)
     disable_in_active: bool = Field(False)
-    disable_in_fullscreen: bool = Field(True)
-    force_cpu_in_active: bool = Field(True)
+    disable_in_fullscreen: bool = Field(False)
+    force_cpu_in_active: bool = Field(False)
 
 
 class WorkerConfig(BaseModel):
@@ -469,11 +480,11 @@ class RuntimeQosConfig(BaseModel):
     idle_grace_ms: int = Field(2000, ge=0)
     profile_active: RuntimeQosProfile = Field(
         default_factory=lambda: RuntimeQosProfile(
-            ocr_workers=1,
-            embed_workers=0,
-            agent_workers=0,
-            vision_extract=False,
-            ui_grounding=False,
+            ocr_workers=max(1, os.cpu_count() // 2 if os.cpu_count() else 1),
+            embed_workers=1,
+            agent_workers=1,
+            vision_extract=True,
+            ui_grounding=True,
             cpu_priority="below_normal",
         )
     )
@@ -524,7 +535,8 @@ class DatabaseConfig(BaseModel):
     sqlite_wal: bool = True
     sqlite_synchronous: str = Field("NORMAL")
     encryption_enabled: bool = Field(
-        False, description="Enable SQLCipher encryption for SQLite databases."
+        default_factory=_default_sqlcipher_enabled,
+        description="Enable SQLCipher encryption for SQLite databases.",
     )
     encryption_provider: str = Field(
         "dpapi_file",
@@ -683,14 +695,14 @@ class FeatureFlagsConfig(BaseModel):
         True, description="Apply retrieval thresholds and no-evidence responses."
     )
     enable_retention_prune: bool = Field(
-        False, description="Enable retention-aware index pruning and scans."
+        True, description="Enable retention-aware index pruning and scans."
     )
     enable_otel: bool = Field(True, description="Enable OpenTelemetry tracing/metrics.")
     enable_memory_service_write_hook: bool = Field(
-        False, description="Enable Memory Service write hook in capture pipeline."
+        True, description="Enable Memory Service write hook in capture pipeline."
     )
     enable_memory_service_read_hook: bool = Field(
-        False, description="Enable Memory Service read hook in context building."
+        True, description="Enable Memory Service read hook in context building."
     )
 
 
@@ -769,8 +781,8 @@ class ProviderRoutingConfig(BaseModel):
     retrieval: str = Field("local")
     vector_backend: str = Field("local", description="Vector backend plugin id.")
     spans_v2_backend: str = Field("local", description="Spans v2 backend plugin id.")
-    table_extractor: str = Field("disabled", description="Table extractor plugin id.")
-    reranker: str = Field("disabled")
+    table_extractor: str = Field("local", description="Table extractor plugin id.")
+    reranker: str = Field("enabled")
     compressor: str = Field("extractive")
     verifier: str = Field("rules")
     llm: str = Field("gateway")
@@ -1168,7 +1180,7 @@ class SearchPopupConfig(BaseModel):
 
 class UIConfig(BaseModel):
     overlay_citations_enabled: bool = Field(
-        False, description="Enable citation overlay rendering in the UI/API."
+        True, description="Enable citation overlay rendering in the UI/API."
     )
     search_popup: SearchPopupConfig = SearchPopupConfig()
 
@@ -1254,14 +1266,14 @@ class OverlayTrackerRetentionConfig(BaseModel):
 
 
 class OverlayTrackerUrlPluginConfig(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     allow_browsers: list[str] = Field(default_factory=lambda: ["chrome.exe", "msedge.exe"])
     allow_domains: list[str] = Field(default_factory=list)
     token_rules: list[dict] = Field(default_factory=list)
 
 
 class OverlayTrackerConfig(BaseModel):
-    enabled: bool = False
+    enabled: bool = True
     platforms: list[str] = Field(default_factory=lambda: ["windows"])
     stale_after_hours: float = Field(48.0, gt=0.0)
     hotness_half_life_minutes: float = Field(30.0, gt=0.0)
@@ -1574,13 +1586,13 @@ class GraphServiceConfig(BaseModel):
 
 
 class MemoryServiceEmbedderConfig(BaseModel):
-    provider: str = Field("stub", description="stub|local")
+    provider: str = Field("local", description="stub|local")
     dim: int = Field(256, ge=8, description="Embedding dimension for stub/local providers.")
     model_id: str = Field("hash-v1")
 
 
 class MemoryServiceRerankerConfig(BaseModel):
-    provider: str = Field("disabled", description="disabled|stub")
+    provider: str = Field("stub", description="disabled|stub")
     max_window: int = Field(50, ge=1)
 
 
@@ -1622,7 +1634,7 @@ class MemoryServicePolicyConfig(BaseModel):
 
 
 class MemoryServiceConfig(BaseModel):
-    enabled: bool = Field(False)
+    enabled: bool = Field(True)
     bind_host: str = Field("127.0.0.1")
     port: int = Field(8030, ge=1024, le=65535)
     require_api_key: bool = Field(False)
@@ -1639,7 +1651,7 @@ class MemoryServiceConfig(BaseModel):
     enable_ingest: bool = Field(True)
     enable_query: bool = Field(True)
     enable_feedback: bool = Field(True)
-    enable_rerank: bool = Field(False)
+    enable_rerank: bool = Field(True)
     enable_query_embedding: bool = Field(True)
     enable_rls: bool = Field(False)
     embedder: MemoryServiceEmbedderConfig = MemoryServiceEmbedderConfig()
@@ -1738,7 +1750,7 @@ class ThreadingConfig(BaseModel):
 
 
 class TableExtractorConfig(BaseModel):
-    enabled: bool = Field(False, description="Enable table extraction pipeline.")
+    enabled: bool = Field(True, description="Enable table extraction pipeline.")
     allow_cloud: bool = Field(
         False, description="Allow cloud-backed table extraction when enabled."
     )
@@ -1746,7 +1758,7 @@ class TableExtractorConfig(BaseModel):
 
 class AppConfig(BaseModel):
     offline: bool = Field(
-        True,
+        default_factory=_default_offline,
         description="Hard offline mode: blocks all network egress unless a cloud profile is active.",
     )
     paths: StoragePathsConfig = StoragePathsConfig()
@@ -2058,7 +2070,7 @@ def load_config(path: Path | str) -> AppConfig:
     logger = logging.getLogger(__name__)
 
     if "offline" not in data:
-        data["offline"] = True
+        data["offline"] = _default_offline()
 
     # Remote mode: derive api.bind_host from the configured overlay interface.
     mode = data.get("mode")
