@@ -2072,6 +2072,11 @@ def load_config(path: Path | str) -> AppConfig:
     if "offline" not in data:
         data["offline"] = _default_offline()
 
+    if os.environ.get("AUTOCAPTURE_TEST_MODE") == "1":
+        ffmpeg = data.setdefault("ffmpeg", {})
+        ffmpeg["require_bundled"] = False
+        ffmpeg.setdefault("allow_disable", True)
+
     # Remote mode: derive api.bind_host from the configured overlay interface.
     mode = data.get("mode")
     if isinstance(mode, dict) and mode.get("mode") == "remote":

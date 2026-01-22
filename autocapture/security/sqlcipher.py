@@ -78,8 +78,18 @@ def ensure_sqlcipher_create_function_compat(sqlcipher_module) -> None:
         _ = deterministic
         return original(self, name, num_params, func)
 
+    patched = False
     try:
         setattr(conn_cls, "create_function", _compat)
         setattr(conn_cls, "_autocapture_create_function_compat", True)
+        patched = True
     except Exception:
-        return
+        patched = False
+
+    if not patched:
+        # Fall back by downgrading reported SQLite version so SQLAlchemy skips deterministic kwarg.
+        try:
+            setattr(sqlcipher_module, "sqlite_version_info", (3, 7, 0))
+            setattr(sqlcipher_module, "sqlite_version", "3.7.0")
+        except Exception:
+            return
