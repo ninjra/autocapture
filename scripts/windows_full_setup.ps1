@@ -114,7 +114,27 @@ if ($baseDir) {
 
 poetry run autocapture setup --profile full --apply
 poetry run python tools/vendor_windows_binaries.py
-$doctorOutput = & poetry run autocapture doctor --verbose 2>&1
+
+function Invoke-Doctor {
+    $prevPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $prevNative = $null
+    if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
+        $prevNative = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+    }
+    $output = & poetry run autocapture doctor --verbose 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($null -ne $prevNative) {
+        $PSNativeCommandUseErrorActionPreference = $prevNative
+    }
+    $ErrorActionPreference = $prevPreference
+    return @($output, $exitCode)
+}
+
+$doctorResult = Invoke-Doctor
+$doctorOutput = $doctorResult[0]
+$doctorExit = $doctorResult[1]
 $doctorOutput | ForEach-Object { Write-Host $_ }
 
 function Confirm-ResetDb {
@@ -135,7 +155,9 @@ function Confirm-ResetDb {
 if ($doctorOutput -match "file is not a database|hmac check failed") {
     if (Confirm-ResetDb) {
         & (Join-Path $repoRoot "scripts\\windows_reset_db.ps1")
-        $doctorOutput = & poetry run autocapture doctor --verbose 2>&1
+        $doctorResult = Invoke-Doctor
+        $doctorOutput = $doctorResult[0]
+        $doctorExit = $doctorResult[1]
         $doctorOutput | ForEach-Object { Write-Host $_ }
     }
 }
@@ -155,7 +177,7 @@ function Confirm-StartApp {
     }
 }
 
-if ($doctorOutput -notmatch "\\bFAIL\\b") {
+if ($doctorOutput -notmatch "\\bFAIL\\b" -and $doctorExit -eq 0) {
     if (Confirm-StartApp) {
         poetry run autocapture app
     }
