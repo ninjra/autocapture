@@ -63,6 +63,20 @@ def _ensure_create_function_compat(dbapi_connection) -> None:
         return
 
 
+def _apply_sqlcipher_key(cursor, key: bytes) -> None:
+    """Apply SQLCipher key using param binding, falling back to hex literals if needed."""
+
+    try:
+        cursor.execute("PRAGMA key = ?", (key,))
+        return
+    except Exception as exc:
+        message = str(exc).lower()
+        if 'near "?"' not in message and "near '?'" not in message:
+            raise
+    hex_key = key.hex()
+    cursor.execute(f"PRAGMA key = \"x'{hex_key}'\"")
+
+
 def init_schema(engine) -> None:
     """Create all SQLAlchemy tables. Safe to call multiple times."""
     log = get_logger("db")
@@ -219,7 +233,7 @@ class DatabaseManager:
             cursor = dbapi_connection.cursor()
             try:
                 if key:
-                    cursor.execute("PRAGMA key = ?", (key,))
+                    _apply_sqlcipher_key(cursor, key)
                 cursor.execute("PRAGMA foreign_keys=ON")
                 cursor.execute(f"PRAGMA busy_timeout={config.sqlite_busy_timeout_ms}")
                 if not is_memory and config.sqlite_wal:
