@@ -183,7 +183,12 @@ class DatabaseManager:
         alembic_cfg = Config(str(config_path))
         alembic_cfg.set_main_option("sqlalchemy.url", self._config.url)
         alembic_cfg.set_main_option("script_location", str(script_location))
-        command.upgrade(alembic_cfg, "head")
+        if self._config.encryption_enabled and self._config.url.startswith("sqlite"):
+            with self._engine.connect() as connection:
+                alembic_cfg.attributes["connection"] = connection
+                command.upgrade(alembic_cfg, "head")
+        else:
+            command.upgrade(alembic_cfg, "head")
         self._ran_migrations = True
 
     @contextmanager
