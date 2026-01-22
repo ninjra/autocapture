@@ -139,3 +139,26 @@ if ($doctorOutput -match "file is not a database|hmac check failed") {
         $doctorOutput | ForEach-Object { Write-Host $_ }
     }
 }
+
+function Confirm-StartApp {
+    try {
+        $wshell = New-Object -ComObject WScript.Shell
+        $result = $wshell.Popup(
+            "Start Autocapture now?",
+            0,
+            "Autocapture",
+            0x4 + 0x40
+        )
+        return $result -eq 6
+    } catch {
+        return $false
+    }
+}
+
+if ($doctorOutput -notmatch "\\bFAIL\\b") {
+    if (Confirm-StartApp) {
+        poetry run autocapture app
+    }
+} else {
+    Write-Host "Doctor reported failures; fix them before starting capture."
+}
