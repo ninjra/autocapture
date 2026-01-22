@@ -65,7 +65,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub.add_parser("smoke", help="Run minimal smoke checks and exit.")
     status = sub.add_parser("status", help="Show current state snapshot.")
     status.add_argument("--json", action="store_true", help="Output JSON.")
-    sub.add_parser("print-config", help="Load config and print resolved values.")
+    print_config = sub.add_parser("print-config", help="Load config and print resolved values.")
+    print_config.add_argument("--json", action="store_true", help="Output JSON.")
     settings = sub.add_parser("settings", help="Settings schema, preview, and apply.")
     settings_sub = settings.add_subparsers(dest="settings_cmd", required=True)
     settings_schema = settings_sub.add_parser("schema", help="Show settings schema.")
@@ -279,10 +280,16 @@ def main(argv: list[str] | None = None) -> None:
             )
         )
     config = load_config(config_path)
-    configure_logging(args.log_dir or getattr(config, "logging", None))
     runtime_env = load_runtime_env()
     configure_cuda_visible_devices(runtime_env)
     apply_runtime_env_overrides(config, runtime_env)
+
+    if cmd == "print-config" and getattr(args, "json", False):
+        payload = config.model_dump(mode="json") if hasattr(config, "model_dump") else config.dict()
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    configure_logging(args.log_dir or getattr(config, "logging", None))
     require_cuda_available(runtime_env)
     logger = get_logger("cli")
     if config.offline and not config.privacy.cloud_enabled and config.mode.mode == "remote":
