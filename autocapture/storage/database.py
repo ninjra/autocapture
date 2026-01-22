@@ -263,6 +263,9 @@ class DatabaseManager:
                 "poetry install --extras sqlcipher (Windows uses rotki-pysqlcipher3 wheels)."
             )
         import pysqlcipher3.dbapi2 as sqlcipher  # type: ignore
+        from ..security.sqlcipher import ensure_sqlcipher_create_function_compat
+
+        ensure_sqlcipher_create_function_compat(sqlcipher)
 
         return sqlcipher
 

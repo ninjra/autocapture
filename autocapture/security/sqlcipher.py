@@ -60,3 +60,26 @@ def _write_key(path: Path, key: bytes, use_dpapi: bool, log) -> None:
         except Exception:
             log.warning("DPAPI unavailable; storing SQLCipher key on disk.")
     path.write_bytes(key)
+
+
+def ensure_sqlcipher_create_function_compat(sqlcipher_module) -> None:
+    """Ensure SQLCipher connections accept deterministic kwarg for create_function."""
+
+    conn_cls = getattr(sqlcipher_module, "Connection", None)
+    if conn_cls is None:
+        return
+    if getattr(conn_cls, "_autocapture_create_function_compat", False):
+        return
+    original = getattr(conn_cls, "create_function", None)
+    if original is None:
+        return
+
+    def _compat(self, name, num_params, func, deterministic=None):  # noqa: ANN001
+        _ = deterministic
+        return original(self, name, num_params, func)
+
+    try:
+        setattr(conn_cls, "create_function", _compat)
+        setattr(conn_cls, "_autocapture_create_function_compat", True)
+    except Exception:
+        return

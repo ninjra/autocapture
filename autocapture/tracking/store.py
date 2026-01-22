@@ -241,6 +241,9 @@ class SqliteHostEventStore:
     def _connect_sqlcipher(self, connect_args: dict) -> sqlite3.Connection:
         try:
             import pysqlcipher3.dbapi2 as sqlcipher  # type: ignore
+            from ..security.sqlcipher import ensure_sqlcipher_create_function_compat
+
+            ensure_sqlcipher_create_function_compat(sqlcipher)
         except Exception as exc:  # pragma: no cover
             raise RuntimeError(
                 "SQLCipher support requires pysqlcipher3. Install via: poetry install --extras sqlcipher "
