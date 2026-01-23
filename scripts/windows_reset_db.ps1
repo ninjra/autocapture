@@ -66,6 +66,14 @@ try:
     db_url = cfg.database.url or ""
     data_dir = str(cfg.capture.data_dir)
     key_path = str(cfg.database.encryption_key_path)
+    if not key_path and cfg.database.encryption_key_name:
+        try:
+            from autocapture.security.sqlcipher import load_sqlcipher_key
+
+            _ = load_sqlcipher_key(cfg.database, Path(data_dir))
+            key_path = str(cfg.database.encryption_key_path)
+        except Exception:
+            pass
 except Exception:
     try:
         import yaml

@@ -152,7 +152,7 @@ function Confirm-ResetDb {
     }
 }
 
-if ($doctorOutput -match "file is not a database|hmac check failed") {
+if ($doctorOutput -match "file is not a database|hmac check failed|sqlcipher") {
     if (Confirm-ResetDb) {
         & (Join-Path $repoRoot "scripts\\windows_reset_db.ps1")
         $doctorResult = Invoke-Doctor
