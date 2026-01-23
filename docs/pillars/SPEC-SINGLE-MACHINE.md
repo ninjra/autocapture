@@ -8,5 +8,6 @@ citations with validation and entailment gates, retrieval fusion (lexical + vect
 Key invariants:
 - Gateway enforces stage policies and deterministic JSON schema outputs.
 - Final answers require claim-level citations with line-range validation.
-- Retrieval integrates SQLite FTS, Qdrant, and graph adapters with RRF fusion.
+- Retrieval integrates SQLite FTS5 when available (fallback to LIKE on SQLCipher builds without FTS5),
+  Qdrant, and graph adapters with RRF fusion.
 - Observability emits spans and metrics for all major stages and gates.

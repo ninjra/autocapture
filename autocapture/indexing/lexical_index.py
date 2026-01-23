@@ -13,6 +13,7 @@ from sqlalchemy.exc import OperationalError
 from ..logging_utils import get_logger
 from ..text.normalize import normalize_text
 from ..storage.database import DatabaseManager
+from ..storage.sqlite_features import sqlite_fts5_available
 from ..storage.models import EventRecord
 
 
@@ -32,11 +33,14 @@ class LexicalIndex:
     def __init__(self, db: DatabaseManager) -> None:
         self._db = db
         self._log = get_logger("index.lexical")
+        self._fts_available = sqlite_fts5_available(self._db.engine)
+        if not self._fts_available:
+            self._log.warning("SQLite FTS5 unavailable; lexical search will use LIKE fallback.")
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
         engine = self._db.engine
-        if engine.dialect.name != "sqlite":
+        if engine.dialect.name != "sqlite" or not self._fts_available:
             return
         with engine.begin() as conn:
             conn.execute(
@@ -53,6 +57,8 @@ class LexicalIndex:
     def upsert_event(self, event: EventRecord) -> None:
         engine = self._db.engine
         if engine.dialect.name == "sqlite":
+            if not self._fts_available:
+                return
             with engine.begin() as conn:
                 existing_agent = conn.execute(
                     text("SELECT agent_text FROM event_fts WHERE event_id = :event_id"),
@@ -105,7 +111,7 @@ class LexicalIndex:
         if not ids:
             return 0
         engine = self._db.engine
-        if engine.dialect.name != "sqlite":
+        if engine.dialect.name != "sqlite" or not self._fts_available:
             return 0
         deleted = 0
         with engine.begin() as conn:
@@ -118,7 +124,7 @@ class LexicalIndex:
 
     def upsert_agent_text(self, event_id: str, agent_text: str) -> None:
         engine = self._db.engine
-        if engine.dialect.name != "sqlite":
+        if engine.dialect.name != "sqlite" or not self._fts_available:
             return
         with engine.begin() as conn:
             conn.execute(
@@ -131,6 +137,8 @@ class LexicalIndex:
         if not query.strip():
             return []
         if engine.dialect.name == "sqlite":
+            if not self._fts_available:
+                return _fallback_event_search(engine, query, limit)
             rows = []
             with engine.begin() as conn:
                 try:
@@ -184,11 +192,14 @@ class SpanLexicalIndex:
     def __init__(self, db: DatabaseManager) -> None:
         self._db = db
         self._log = get_logger("index.lexical.spans")
+        self._fts_available = sqlite_fts5_available(self._db.engine)
+        if not self._fts_available:
+            self._log.warning("SQLite FTS5 unavailable; span search will use LIKE fallback.")
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
         engine = self._db.engine
-        if engine.dialect.name != "sqlite":
+        if engine.dialect.name != "sqlite" or not self._fts_available:
             return
         with engine.begin() as conn:
             conn.execute(
@@ -208,7 +219,7 @@ class SpanLexicalIndex:
         if not span_id:
             return
         engine = self._db.engine
-        if engine.dialect.name != "sqlite":
+        if engine.dialect.name != "sqlite" or not self._fts_available:
             return
         with engine.begin() as conn:
             conn.execute(
@@ -257,6 +268,8 @@ class SpanLexicalIndex:
         if not query.strip():
             return []
         if engine.dialect.name == "sqlite":
+            if not self._fts_available:
+                return _fallback_span_search(engine, query, limit)
             rows = []
             with engine.begin() as conn:
                 try:
@@ -302,3 +315,44 @@ def _extract_layout_md(tags: object) -> str:
     if isinstance(value, str):
         return value.strip()
     return ""
+
+
+def _like_pattern(query: str) -> str:
+    normalized = normalize_text(query).strip() if query else ""
+    base = normalized or query.strip()
+    if not base:
+        return ""
+    escaped = base.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _fallback_event_search(engine, query: str, limit: int) -> list[LexicalHit]:
+    pattern = _like_pattern(query)
+    if not pattern:
+        return []
+    sql = (
+        "SELECT event_id FROM events WHERE "
+        "lower(coalesce(ocr_text_normalized, ocr_text, '')) LIKE lower(:pattern) ESCAPE '\\' "
+        "OR lower(coalesce(window_title, '')) LIKE lower(:pattern) ESCAPE '\\' "
+        "OR lower(coalesce(app_name, '')) LIKE lower(:pattern) ESCAPE '\\' "
+        "OR lower(coalesce(domain, '')) LIKE lower(:pattern) ESCAPE '\\' "
+        "OR lower(coalesce(url, '')) LIKE lower(:pattern) ESCAPE '\\' "
+        "LIMIT :limit"
+    )
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"pattern": pattern, "limit": limit}).fetchall()
+    return [LexicalHit(event_id=row[0], score=1.0) for row in rows]
+
+
+def _fallback_span_search(engine, query: str, limit: int) -> list[SpanLexicalHit]:
+    pattern = _like_pattern(query)
+    if not pattern:
+        return []
+    sql = (
+        "SELECT span_id FROM citable_spans "
+        "WHERE lower(coalesce(text, '')) LIKE lower(:pattern) ESCAPE '\\' "
+        "LIMIT :limit"
+    )
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"pattern": pattern, "limit": limit}).fetchall()
+    return [SpanLexicalHit(span_id=row[0], score=1.0) for row in rows]
