@@ -39,10 +39,12 @@ src/**/bin/
 .runtime/
 artifacts/bench/
 artifacts/logs/
+artifacts/*_report.json
 bench/results/*
 !bench/results/.gitkeep
 data/state/
 data/.preview_secret
+memory/
 
 # OS files
 .DS_Store
