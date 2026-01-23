@@ -18,6 +18,7 @@ from .. import configure_logging, load_config
 from ..config import AppConfig
 from ..logging_utils import get_logger
 from ..runtime import AppRuntime
+from ..runtime_env import ProfileName
 from ..tracking.win_foreground import get_foreground_context
 from ..win32.startup import (
     build_startup_command,
@@ -59,6 +60,12 @@ class TrayApp(QtCore.QObject):
         self._snooze_15_action = QtGui.QAction("15 minutes", self._menu)
         self._snooze_60_action = QtGui.QAction("60 minutes", self._menu)
         self._snooze_resume_action = QtGui.QAction("Resume now", self._menu)
+        self._perf_menu = QtWidgets.QMenu("Performance mode", self._menu)
+        self._perf_auto_action = QtGui.QAction("Auto (balanced)", self._menu)
+        self._perf_max_action = QtGui.QAction("Max capture", self._menu)
+        self._perf_low_action = QtGui.QAction("Low impact", self._menu)
+        self._perf_group = QtGui.QActionGroup(self._menu)
+        self._perf_group.setExclusive(True)
         self._exclude_app_action = QtGui.QAction("Exclude Current App", self._menu)
         self._startup_action = QtGui.QAction("Start on login", self._menu)
         self._delete_15_action = QtGui.QAction("Delete last 15 minutes", self._menu)
@@ -72,6 +79,7 @@ class TrayApp(QtCore.QObject):
         self._menu.addSeparator()
         self._menu.addAction(self._pause_action)
         self._menu.addMenu(self._snooze_menu)
+        self._menu.addMenu(self._perf_menu)
         self._menu.addAction(self._exclude_app_action)
         self._menu.addSeparator()
         self._menu.addAction(self._startup_action)
@@ -92,6 +100,13 @@ class TrayApp(QtCore.QObject):
         self._snooze_15_action.triggered.connect(lambda: self._snooze_for(15))
         self._snooze_60_action.triggered.connect(lambda: self._snooze_for(60))
         self._snooze_resume_action.triggered.connect(self.resume_capture)
+        self._perf_auto_action.triggered.connect(lambda: self._set_perf_profile(None))
+        self._perf_max_action.triggered.connect(
+            lambda: self._set_perf_profile(ProfileName.FOREGROUND)
+        )
+        self._perf_low_action.triggered.connect(
+            lambda: self._set_perf_profile(ProfileName.IDLE)
+        )
         self._exclude_app_action.triggered.connect(self.exclude_current_app)
         self._startup_action.triggered.connect(self.toggle_startup)
         self._delete_15_action.triggered.connect(lambda: self.delete_range(minutes=15))
@@ -106,6 +121,11 @@ class TrayApp(QtCore.QObject):
         self._snooze_menu.addSeparator()
         self._snooze_menu.addAction(self._snooze_resume_action)
 
+        for action in (self._perf_auto_action, self._perf_max_action, self._perf_low_action):
+            action.setCheckable(True)
+            self._perf_group.addAction(action)
+            self._perf_menu.addAction(action)
+
         self._startup_action.setCheckable(True)
         self._startup_action.setChecked(is_startup_enabled())
 
@@ -117,6 +137,7 @@ class TrayApp(QtCore.QObject):
         self._health_timer.timeout.connect(self._tick_supervisor)
         self._supervisor = ApiSupervisor(self._api_is_healthy, self._restart_api)
         self._sync_pause_state()
+        self._sync_profile_state()
 
     def start(self) -> None:
         self._tray.show()
@@ -237,6 +258,7 @@ class TrayApp(QtCore.QObject):
 
     def _tick_supervisor(self) -> None:
         self._sync_pause_state()
+        self._sync_profile_state()
         if self._api_process and self._api_process.poll() is not None:
             self._notify("Autocapture", "API process stopped; restarting.")
             self._restart_api()
@@ -344,6 +366,27 @@ class TrayApp(QtCore.QObject):
         paused = bool(self._config.privacy.paused)
         self._paused = paused
         self._pause_action.setText("Resume Capture" if paused else "Pause now")
+
+    def _sync_profile_state(self) -> None:
+        state = self._runtime.profile_state()
+        override = state.get("override")
+        if override == ProfileName.FOREGROUND.value:
+            self._perf_max_action.setChecked(True)
+        elif override == ProfileName.IDLE.value:
+            self._perf_low_action.setChecked(True)
+        else:
+            self._perf_auto_action.setChecked(True)
+
+    def _set_perf_profile(self, profile: ProfileName | None) -> None:
+        self._runtime.set_performance_profile(profile)
+        if profile == ProfileName.FOREGROUND:
+            label = "Max capture"
+        elif profile == ProfileName.IDLE:
+            label = "Low impact"
+        else:
+            label = "Auto (balanced)"
+        self._notify("Performance mode", f"{label} enabled.")
+        self._sync_profile_state()
 
     def _build_status_tooltip(self, api_status: str) -> str:
         now = dt.datetime.now(dt.timezone.utc)

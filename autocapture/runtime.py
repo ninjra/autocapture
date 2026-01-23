@@ -25,6 +25,8 @@ from .indexing.vector_index import VectorIndex
 from .logging_utils import get_logger
 from .media.store import MediaStore
 from .observability.metrics import MetricsServer
+from .observability.perf_logger import PerfLogger
+from .observability.perf_snapshot import PerfSnapshotBuilder
 from .observability.otel import init_otel
 from .promptops import PromptOpsRunner
 from .settings_store import update_settings
@@ -40,12 +42,14 @@ from .qdrant.sidecar import QdrantSidecar
 from .runtime_context import RuntimeContext, build_runtime_context
 from .runtime_device import require_cuda_available
 from .runtime_env import (
+    ProfileName,
     RuntimeEnvConfig,
     apply_runtime_env_overrides,
     configure_cuda_visible_devices,
     load_runtime_env,
 )
 from .runtime_governor import RuntimeGovernor, RuntimeMode
+from .runtime_profile_override import read_profile_override, write_profile_override
 from .gpu_lease import get_global_gpu_lease
 from .ux.state_store import HeartbeatWriter
 
@@ -318,7 +322,21 @@ class AppRuntime:
             plugin_manager=self._plugins,
         )
         self._metrics = MetricsServer(config.observability, Path(config.capture.data_dir))
+        self._perf_builder = PerfSnapshotBuilder(
+            component="runtime",
+            include_metrics=True,
+            include_gpu=config.observability.enable_gpu_stats,
+        )
+        self._perf_logger = PerfLogger(
+            Path(config.capture.data_dir),
+            "runtime",
+            self._perf_builder.snapshot,
+        )
         self._settings_path = Path(config.capture.data_dir) / "settings.json"
+        self._profile_override_path = (
+            Path(config.capture.data_dir) / "state" / "profile_override.json"
+        )
+        self._profile_override_mtime = 0.0
         self._snooze_timer: threading.Timer | None = None
         self._promptops_runner: PromptOpsRunner | None = None
         self._promptops_scheduler: PromptOpsScheduler | None = None
@@ -372,6 +390,7 @@ class AppRuntime:
         if self._enrichment_scheduler:
             self._enrichment_scheduler.start()
         self._metrics.start()
+        self._perf_logger.start()
         self._heartbeat.start()
         if self._promptops_scheduler:
             self._promptops_scheduler.start()
@@ -401,6 +420,7 @@ class AppRuntime:
             self._runtime_governor.unsubscribe(self._on_runtime_mode_change)
             self._runtime_governor.stop()
             self._metrics.stop()
+            self._perf_logger.stop()
             if self._tracker:
                 self._tracker.stop()
             self._module_host.stop()
@@ -443,11 +463,18 @@ class AppRuntime:
         self._schedule_snooze_resume(until)
 
     def _heartbeat_payload(self) -> tuple[str, dict[str, Any], list[str]]:
+        self._sync_profile_override()
         status = "ok"
         signals: dict[str, Any] = {
             "paused": self._config.privacy.paused,
             "offline": self._config.offline,
         }
+        try:
+            signals["perf"] = self._perf_builder.snapshot(
+                extra={"profile": self._runtime_governor.profile_state()}
+            )
+        except Exception:
+            pass
         try:
             worker_health = self._workers.health_snapshot()
             signals["workers"] = worker_health
@@ -458,6 +485,16 @@ class AppRuntime:
         if self._config.privacy.paused:
             status = "degraded"
         return status, signals, []
+
+    def set_performance_profile(self, profile: ProfileName | None) -> None:
+        self._runtime_governor.set_profile_override(profile)
+        try:
+            write_profile_override(self._profile_override_path, profile, source="runtime")
+        except Exception:
+            pass
+
+    def profile_state(self) -> dict[str, str | None]:
+        return self._runtime_governor.profile_state()
 
     def add_excluded_process(self, process_name: str) -> bool:
         normalized = normalize_process_name(process_name)
@@ -593,6 +630,21 @@ class AppRuntime:
         if self._snooze_timer:
             self._snooze_timer.cancel()
             self._snooze_timer = None
+
+    def _sync_profile_override(self) -> None:
+        path = self._profile_override_path
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return
+        if mtime <= self._profile_override_mtime:
+            return
+        self._profile_override_mtime = mtime
+        exists, profile = read_profile_override(path)
+        if not exists:
+            return
+        if profile != self._runtime_governor.profile_override:
+            self._runtime_governor.set_profile_override(profile)
 
     def _persist_privacy(self) -> None:
         def _update(settings: dict) -> dict:

@@ -2,6 +2,10 @@ const tabs = document.querySelectorAll('.nav-tabs button');
 const sections = document.querySelectorAll('.tab');
 const urlParams = new URLSearchParams(window.location.search);
 const unlockToken = urlParams.get('unlock');
+const perfProfileSelect = document.getElementById('perfProfileSelect');
+const applyPerfProfile = document.getElementById('applyPerfProfile');
+const perfLogComponent = document.getElementById('perfLogComponent');
+const refreshPerfLog = document.getElementById('refreshPerfLog');
 
 function apiHeaders() {
   const headers = { 'Content-Type': 'application/json' };
@@ -32,6 +36,27 @@ function formatBytes(bytes) {
     idx += 1;
   }
   return `${size.toFixed(1)} ${units[idx]}`;
+}
+
+function formatNumber(value, digits = 1) {
+  if (!Number.isFinite(value)) return 'n/a';
+  return value.toFixed(digits);
+}
+
+function formatRate(value) {
+  if (!Number.isFinite(value)) return 'n/a';
+  return `${value.toFixed(2)}/min`;
+}
+
+function formatMs(value) {
+  if (!Number.isFinite(value)) return 'n/a';
+  if (value >= 1000) return `${(value / 1000).toFixed(2)} s`;
+  return `${value.toFixed(0)} ms`;
+}
+
+function formatPercent(value) {
+  if (!Number.isFinite(value)) return 'n/a';
+  return `${value.toFixed(1)}%`;
 }
 
 function createStateStore(onUpdate, onError) {
@@ -140,6 +165,184 @@ function renderStatusBar(state) {
     comp.className = 'status-chip';
     comp.textContent = stale ? `Components stale: ${stale}` : 'Components healthy';
     container.appendChild(comp);
+  }
+}
+
+function renderPerfPanel(state) {
+  const panel = document.getElementById('perfPanel');
+  if (!panel) return;
+  panel.textContent = '';
+  if (!state || !Array.isArray(state.components)) {
+    panel.textContent = 'Performance data unavailable.';
+    return;
+  }
+  const runtime = state.components.find((c) => c.component === 'runtime');
+  const api = state.components.find((c) => c.component === 'api');
+  const runtimePerf = runtime && runtime.signals ? runtime.signals.perf : null;
+  const apiPerf = api && api.signals ? api.signals.perf : null;
+  if (!runtimePerf && !apiPerf) {
+    panel.textContent = 'Performance data unavailable.';
+    return;
+  }
+
+  const addCard = (title, rows) => {
+    const card = document.createElement('div');
+    card.className = 'perf-card';
+    const heading = document.createElement('h3');
+    heading.textContent = title;
+    card.appendChild(heading);
+    rows.forEach(([label, value]) => {
+      const row = document.createElement('div');
+      row.className = 'perf-metric';
+      const name = document.createElement('div');
+      name.textContent = label;
+      const val = document.createElement('span');
+      val.textContent = value;
+      row.appendChild(name);
+      row.appendChild(val);
+      card.appendChild(row);
+    });
+    panel.appendChild(card);
+  };
+
+  if (runtimePerf) {
+    const proc = runtimePerf.process || {};
+    const profile = runtimePerf.profile || {};
+    const profileLabel = profile.active
+      ? `${profile.active}${profile.override ? ' (override)' : ''}`
+      : 'n/a';
+    addCard('Runtime', [
+      ['CPU', formatPercent(proc.cpu_percent)],
+      ['Memory', proc.rss_mb ? `${formatNumber(proc.rss_mb)} MB` : 'n/a'],
+      ['Profile', profileLabel],
+      ['Mode', profile.mode || 'n/a'],
+    ]);
+  }
+
+  if (runtimePerf && runtimePerf.gpu && runtimePerf.gpu.available) {
+    const gpu = runtimePerf.gpu;
+    addCard('GPU', [
+      ['Utilization', formatPercent(gpu.utilization_percent)],
+      ['Memory', gpu.memory_used_mb ? `${formatNumber(gpu.memory_used_mb)} MB` : 'n/a'],
+    ]);
+  }
+
+  if (runtimePerf && runtimePerf.captures) {
+    const captures = runtimePerf.captures || {};
+    addCard('Captures', [
+      ['Rate', formatRate(captures.per_min)],
+      ['Total', formatNumber(captures.total, 0)],
+      ['Dropped', formatNumber(captures.dropped, 0)],
+      ['Backpressure', formatNumber(captures.skipped_backpressure, 0)],
+    ]);
+  }
+
+  if (runtimePerf && runtimePerf.queues) {
+    const queues = runtimePerf.queues || {};
+    addCard('Queues', [
+      ['OCR backlog', formatNumber(queues.ocr_backlog, 0)],
+      ['Embed backlog', formatNumber(queues.embedding_backlog, 0)],
+      ['ROI depth', formatNumber(queues.roi_queue_depth, 0)],
+      ['Enrich backlog', formatNumber(queues.enrichment_backlog, 0)],
+    ]);
+  }
+
+  if (runtimePerf && runtimePerf.latency_ms) {
+    const lat = runtimePerf.latency_ms || {};
+    const ocr = lat.ocr || {};
+    const embed = lat.embedding || {};
+    const retrieval = lat.retrieval || {};
+    addCard('Latency (p50/p95)', [
+      ['OCR', `${formatMs(ocr.p50)} / ${formatMs(ocr.p95)}`],
+      ['Embed', `${formatMs(embed.p50)} / ${formatMs(embed.p95)}`],
+      ['Retrieval', `${formatMs(retrieval.p50)} / ${formatMs(retrieval.p95)}`],
+    ]);
+  }
+
+  if (apiPerf) {
+    const proc = apiPerf.process || {};
+    addCard('API', [
+      ['CPU', formatPercent(proc.cpu_percent)],
+      ['Memory', proc.rss_mb ? `${formatNumber(proc.rss_mb)} MB` : 'n/a'],
+      ['Uptime', apiPerf.uptime_s ? `${formatNumber(apiPerf.uptime_s, 0)} s` : 'n/a'],
+    ]);
+  }
+
+  if (perfProfileSelect && runtimePerf && runtimePerf.profile) {
+    const override = runtimePerf.profile.override || 'auto';
+    perfProfileSelect.value = override;
+  }
+}
+
+async function loadPerfLog() {
+  const target = document.getElementById('perfLogEntries');
+  const status = document.getElementById('perfLogStatus');
+  if (!target) return;
+  target.textContent = '';
+  if (status) status.textContent = 'Loading...';
+  const component = perfLogComponent ? perfLogComponent.value : 'runtime';
+  try {
+    const response = await apiFetch(
+      `/api/perf/log?component=${encodeURIComponent(component)}`
+    );
+    if (!response.ok) {
+      const detail = await response.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Perf log fetch failed');
+    }
+    const data = await response.json();
+    const entries = Array.isArray(data.entries) ? data.entries : [];
+    if (status) {
+      status.textContent = entries.length
+        ? `Showing ${entries.length} entries.`
+        : 'No entries yet.';
+    }
+    entries.slice().reverse().forEach((entry) => {
+      const parsed = entry.parsed || {};
+      const time = parsed.time_utc || 'unknown time';
+      const card = document.createElement('div');
+      card.className = 'perf-log-entry';
+      const title = document.createElement('h4');
+      title.textContent = time;
+      card.appendChild(title);
+      const summary = document.createElement('div');
+      summary.className = 'perf-metric';
+      const captures = parsed.captures || {};
+      const proc = parsed.process || {};
+      summary.innerHTML = `<div>CPU</div><span>${formatPercent(
+        proc.cpu_percent
+      )}</span>`;
+      card.appendChild(summary);
+      const captureRow = document.createElement('div');
+      captureRow.className = 'perf-metric';
+      captureRow.innerHTML = `<div>Capture rate</div><span>${formatRate(
+        captures.per_min
+      )}</span>`;
+      card.appendChild(captureRow);
+      const queues = parsed.queues || {};
+      const queueRow = document.createElement('div');
+      queueRow.className = 'perf-metric';
+      queueRow.innerHTML = `<div>OCR backlog</div><span>${formatNumber(
+        queues.ocr_backlog,
+        0
+      )}</span>`;
+      card.appendChild(queueRow);
+      const latency = parsed.latency_ms || {};
+      const ocr = latency.ocr || {};
+      const latencyRow = document.createElement('div');
+      latencyRow.className = 'perf-metric';
+      latencyRow.innerHTML = `<div>OCR p95</div><span>${formatMs(
+        ocr.p95
+      )}</span>`;
+      card.appendChild(latencyRow);
+      if (!entry.parsed) {
+        const raw = document.createElement('pre');
+        raw.textContent = entry.raw || '';
+        card.appendChild(raw);
+      }
+      target.appendChild(card);
+    });
+  } catch (err) {
+    if (status) status.textContent = 'Perf log unavailable.';
   }
 }
 
@@ -1226,6 +1429,32 @@ tabs.forEach((btn) => {
   });
 });
 
+if (applyPerfProfile) {
+  applyPerfProfile.addEventListener('click', async () => {
+    const profile = perfProfileSelect ? perfProfileSelect.value : 'auto';
+    try {
+      const response = await apiFetch('/api/runtime/profile', {
+        method: 'POST',
+        body: JSON.stringify({ profile })
+      });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        alert(detail.detail || 'Profile update failed');
+      }
+    } catch (err) {
+      alert('Profile update failed');
+    }
+  });
+}
+
+if (refreshPerfLog) {
+  refreshPerfLog.addEventListener('click', loadPerfLog);
+}
+
+if (perfLogComponent) {
+  perfLogComponent.addEventListener('change', loadPerfLog);
+}
+
 async function init() {
   await loadRoutingOptions();
   await loadSettingsSchema();
@@ -1233,9 +1462,13 @@ async function init() {
   await loadHighlightsList();
   await loadPlugins();
   await loadAudit();
+  await loadPerfLog();
 }
 
-const stateStore = createStateStore(renderStatusBar, () => {});
+const stateStore = createStateStore((state) => {
+  renderStatusBar(state);
+  renderPerfPanel(state);
+}, () => {});
 stateStore.start();
 init();
 

@@ -37,6 +37,15 @@ When enabled, the following metrics are emitted:
 
 See `config/prometheus.yml` for a WSL2-friendly Prometheus scrape example.
 
+## Performance snapshots
+Autocapture writes lightweight performance snapshots to disk for tuning and refactors.
+
+- Runtime + API snapshots are written to `data/perf/runtime.jsonl` and `data/perf/api.jsonl`.
+- The local dashboard surfaces runtime perf (CPU, queues, p50/p95 latency) in Maintenance.
+- The Maintenance tab also includes a perf log viewer (recent JSONL entries).
+- Performance mode can be set to `auto`, `foreground` (max capture), or `idle` (low impact).
+  The override file lives at `data/state/profile_override.json` and is picked up automatically.
+
 ## Attribute Allowlist
 Only these attribute keys are permitted:
 - stage_name

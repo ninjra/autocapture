@@ -86,6 +86,42 @@
         </section>
         <section id="maintenance" class="tab">
           <div class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Performance</h2>
+                <p class="hint">Runtime latency, queues, and profile controls.</p>
+              </div>
+              <div class="perf-controls">
+                <label>Profile
+                  <select id="perfProfileSelect">
+                    <option value="auto">Auto (balanced)</option>
+                    <option value="foreground">Max capture</option>
+                    <option value="idle">Low impact</option>
+                  </select>
+                </label>
+                <button id="applyPerfProfile" type="button" class="secondary">Apply</button>
+              </div>
+            </div>
+            <div id="perfPanel" class="perf-grid"></div>
+            <div class="perf-log">
+              <div class="perf-log-header">
+                <div>
+                  <h3>Perf log</h3>
+                  <p class="hint">Recent runtime snapshots from local JSONL logs.</p>
+                </div>
+                <div class="perf-log-controls">
+                  <label>Component
+                    <select id="perfLogComponent">
+                      <option value="runtime">Runtime</option>
+                      <option value="api">API</option>
+                    </select>
+                  </label>
+                  <button id="refreshPerfLog" type="button" class="secondary">Refresh</button>
+                </div>
+              </div>
+              <div id="perfLogStatus" class="hint"></div>
+              <div id="perfLogEntries" class="perf-log-entries"></div>
+            </div>
             <div class="split-grid">
               <div>
                 <div class="panel-header">
