@@ -18,7 +18,7 @@ from ..store import OverlayTrackerStore
 
 
 class OverlayDataWorker(QtCore.QObject):
-    data_ready = QtCore.Signal(object, object, object, object)
+    data_ready = QtCore.Signal(object, object, object, object, object)
     evidence_ready = QtCore.Signal(int, object)
 
     def __init__(
@@ -56,7 +56,8 @@ class OverlayDataWorker(QtCore.QObject):
                 now,
                 stale_after_s=self._config.stale_after_hours * 3600,
             )
-            self.data_ready.emit(projects, active, stale, now)
+            health = self._store.capture_health()
+            self.data_ready.emit(projects, active, stale, now, health)
         except Exception as exc:  # pragma: no cover - defensive
             self._log.warning("Overlay UI refresh failed: {}", exc)
 
@@ -197,6 +198,10 @@ class OverlayWindow(QtWidgets.QWidget):
         title.setObjectName("overlay_title")
         layout.addWidget(title)
 
+        self._status_label = QtWidgets.QLabel("Status: starting…")
+        self._status_label.setObjectName("overlay_status")
+        layout.addWidget(self._status_label)
+
         self._projects_label = QtWidgets.QLabel("Projects")
         self._projects_label.setObjectName("overlay_section")
         layout.addWidget(self._projects_label)
@@ -225,6 +230,7 @@ class OverlayWindow(QtWidgets.QWidget):
             """
             #overlay_root { background: rgba(20, 20, 24, 0.65); border-radius: 12px; }
             #overlay_title { color: #f0f0f5; font-size: 14px; font-weight: 600; }
+            #overlay_status { color: #cfe6ff; font-size: 11px; }
             #overlay_section { color: #cfd2dc; font-size: 11px; text-transform: uppercase; }
             #overlay_item_title { color: #f5f6fa; font-size: 12px; }
             #overlay_item_meta { color: #a7adbd; font-size: 10px; }
@@ -281,9 +287,11 @@ class OverlayWindow(QtWidgets.QWidget):
         active: list[OverlayItemSummary],
         stale: list[OverlayItemSummary],
         now_utc: dt.datetime,
+        health: dict,
     ) -> None:
         active = sorted(active, key=lambda item: item.last_activity_at_utc, reverse=True)
         stale = sorted(stale, key=lambda item: item.last_activity_at_utc, reverse=True)
+        self._status_label.setText(_format_health(health, now_utc))
         _clear_layout(self._projects_container)
         for project in projects:
             label = QtWidgets.QLabel(_clean(project.name, self._sanitize))
@@ -407,6 +415,43 @@ def _format_age(now_utc: dt.datetime, ts: dt.datetime) -> str:
         return f"{hours}h"
     days = hours // 24
     return f"{days}d"
+
+
+def _parse_iso(value: str | None) -> dt.datetime | None:
+    if not value:
+        return None
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
+
+
+def _format_health(health: dict, now_utc: dt.datetime) -> str:
+    if not isinstance(health, dict):
+        return "Status: unknown"
+    if not health.get("db_ok", True):
+        return "Status: database error"
+    runtime_mode = str(health.get("runtime_mode") or "").upper()
+    pause_reason = health.get("pause_reason")
+    if runtime_mode == "FULLSCREEN_HARD_PAUSE":
+        status = "Paused (fullscreen)"
+    elif pause_reason:
+        status = "Paused"
+    elif runtime_mode == "IDLE_DRAIN":
+        status = "Idle"
+    else:
+        status = "Capturing"
+    last_capture_at = _parse_iso(health.get("last_capture_at"))
+    if last_capture_at:
+        age = _format_age(now_utc, last_capture_at)
+        return f"Status: {status} · last capture {age}"
+    return f"Status: {status} · no captures yet"
 
 
 def _clean(value: str, sanitize: bool, *, key: str | None = None) -> str:
