@@ -1,5 +1,3 @@
-import os
-
 from autocapture.config import FFmpegConfig
 from autocapture.paths import resolve_ffmpeg_path
 
