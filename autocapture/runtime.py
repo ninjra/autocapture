@@ -250,7 +250,7 @@ class AppRuntime:
         self._overlay_tracker = OverlayTrackerService(
             config.overlay_tracker,
             self._db,
-            sanitize=config.privacy.sanitize_default,
+            sanitize=bool(config.privacy.sanitize_default and config.privacy.cloud_enabled),
         )
         self._module_host = ModuleHost([self._overlay_tracker])
         self._raw_input = RawInputListener(

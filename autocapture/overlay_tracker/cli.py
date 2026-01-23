@@ -16,7 +16,7 @@ def overlay_status(config: AppConfig) -> int:
     service = OverlayTrackerService(
         config.overlay_tracker,
         db,
-        sanitize=config.privacy.sanitize_default,
+        sanitize=bool(config.privacy.sanitize_default and config.privacy.cloud_enabled),
     )
     store = OverlayTrackerStore(db, SystemClock())
     health = service.health()
