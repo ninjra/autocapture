@@ -97,7 +97,8 @@ For a CI-parity preflight on Windows (with an optional WSL/Linux pass), run:
 ```powershell
 .\scripts\preflight_ci.bat
 ```
-Set `AUTOCAPTURE_PREFLIGHT_WSL=0` to skip the WSL/Linux portion.
+Set `AUTOCAPTURE_PREFLIGHT_WSL=0` to skip the WSL/Linux portion, or
+`AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING=1` to skip PyInstaller/Inno packaging.
 
 Node.js is not required for the core workflows; the UI assets are bundled in the repo.
 

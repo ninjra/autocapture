@@ -38,6 +38,22 @@ poetry run python tools/conflict_gate.py
 poetry run python tools/integrity_gate.py
 poetry run pytest -q tests/test_overlay_tracker_windows.py
 
+$skipPackaging = $env:AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING
+if (-not $skipPackaging) {
+    $skipPackaging = "0"
+}
+
+if ($skipPackaging -eq "1") {
+    Write-Host "== Packaging preflight skipped (AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING=1) =="
+} else {
+    if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+        Write-Error "Inno Setup (iscc) not found. Install it or set AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING=1."
+        exit 1
+    }
+    poetry run pyinstaller pyinstaller.spec
+    iscc installer\\autocapture.iss
+}
+
 $skipWsl = $env:AUTOCAPTURE_PREFLIGHT_WSL
 if (-not $skipWsl) {
     $skipWsl = "1"
