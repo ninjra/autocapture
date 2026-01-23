@@ -66,15 +66,20 @@ def _ensure_create_function_compat(dbapi_connection) -> None:
 def _apply_sqlcipher_key(cursor, key: bytes) -> None:
     """Apply SQLCipher key using param binding, falling back to hex literals if needed."""
 
+    hex_key = key.hex()
+    try:
+        # Use hex literal to avoid truncation issues with NULL bytes in raw keys.
+        cursor.execute(f"PRAGMA key = \"x'{hex_key}'\"")
+        return
+    except Exception:
+        pass
     try:
         cursor.execute("PRAGMA key = ?", (key,))
-        return
     except Exception as exc:
         message = str(exc).lower()
         if 'near "?"' not in message and "near '?'" not in message:
             raise
-    hex_key = key.hex()
-    cursor.execute(f"PRAGMA key = \"x'{hex_key}'\"")
+        cursor.execute(f"PRAGMA key = \"x'{hex_key}'\"")
 
 
 def init_schema(engine) -> None:
@@ -97,6 +102,7 @@ class DatabaseManager:
         self._config = config
         self._log = get_logger("db")
         self._sqlcipher_key: bytes | None = None
+        self._sqlcipher_module = None
         self._ran_migrations = False
         engine_kwargs = {
             "echo": config.echo,
@@ -108,20 +114,26 @@ class DatabaseManager:
         self._is_memory = is_memory
         if is_sqlite and not is_memory:
             self._enforce_secure_mode()
+        connect_args = {}
+        if is_sqlite:
+            connect_args = {"check_same_thread": False}
+            if not is_memory:
+                connect_args["timeout"] = config.sqlite_busy_timeout_ms / 1000
         if is_sqlite and config.encryption_enabled and not is_memory:
             self._sqlcipher_key = self._load_sqlcipher_key()
-            engine_kwargs["module"] = self._load_sqlcipher_module()
-        if is_sqlite:
-            engine_kwargs["connect_args"] = {
-                "check_same_thread": False,
-                "timeout": config.sqlite_busy_timeout_ms / 1000,
-            }
+            self._sqlcipher_module = self._load_sqlcipher_module()
+            engine_kwargs["creator"] = self._make_sqlcipher_creator(connect_args)
+            engine_kwargs["module"] = self._sqlcipher_module
+        elif is_sqlite:
+            engine_kwargs["connect_args"] = connect_args
             if is_memory:
                 engine_kwargs["poolclass"] = StaticPool
         else:
             engine_kwargs["pool_size"] = config.pool_size
             engine_kwargs["max_overflow"] = config.max_overflow
         self._engine = create_engine(config.url, **engine_kwargs)
+        if is_sqlite and config.encryption_enabled and not is_memory:
+            self._apply_sqlcipher_dialect_compat()
         if is_sqlite:
             self._register_sqlite_pragmas(is_memory)
         if is_memory:
@@ -178,7 +190,12 @@ class DatabaseManager:
         alembic_cfg = Config(str(config_path))
         alembic_cfg.set_main_option("sqlalchemy.url", self._config.url)
         alembic_cfg.set_main_option("script_location", str(script_location))
-        command.upgrade(alembic_cfg, "head")
+        if self._config.encryption_enabled and self._config.url.startswith("sqlite"):
+            with self._engine.connect() as connection:
+                alembic_cfg.attributes["connection"] = connection
+                command.upgrade(alembic_cfg, "head")
+        else:
+            command.upgrade(alembic_cfg, "head")
         self._ran_migrations = True
 
     @contextmanager
@@ -253,12 +270,62 @@ class DatabaseManager:
                 "poetry install --extras sqlcipher (Windows uses rotki-pysqlcipher3 wheels)."
             )
         import pysqlcipher3.dbapi2 as sqlcipher  # type: ignore
+        from ..security.sqlcipher import ensure_sqlcipher_create_function_compat
+
+        ensure_sqlcipher_create_function_compat(sqlcipher)
 
         return sqlcipher
 
     def _load_sqlcipher_key(self) -> bytes:
         data_dir = Path(self._config.url.replace("sqlite:///", "")).parent
         return load_sqlcipher_key(self._config, data_dir)
+
+    def _apply_sqlcipher_dialect_compat(self) -> None:
+        """Force SQLAlchemy to avoid deterministic kwarg for SQLCipher DBAPI."""
+
+        dialect = getattr(self._engine, "dialect", None)
+        if dialect is None:
+            return
+        try:
+            setattr(dialect, "_sqlite_version_info", (3, 8, 2))
+        except Exception:
+            pass
+        try:
+            setattr(dialect, "_deterministic", False)
+        except Exception:
+            pass
+        if self._sqlcipher_module is not None:
+            try:
+                setattr(dialect, "dbapi", self._sqlcipher_module)
+            except Exception:
+                return
+
+    def _sqlite_path_from_url(self, url: str) -> str:
+        if url.startswith("sqlite:////"):
+            return url.replace("sqlite:////", "/")
+        if url.startswith("sqlite:///"):
+            return url.replace("sqlite:///", "")
+        if url.startswith("sqlite://"):
+            return url.replace("sqlite://", "")
+        return url
+
+    def _make_sqlcipher_creator(self, connect_args: dict) -> Callable[[], object]:
+        sqlcipher = self._sqlcipher_module
+        key = self._sqlcipher_key
+        db_path = self._sqlite_path_from_url(self._config.url)
+
+        def _creator():
+            conn = sqlcipher.connect(db_path, **connect_args)  # type: ignore[call-arg]
+            _ensure_create_function_compat(conn)
+            if key:
+                cursor = conn.cursor()
+                try:
+                    _apply_sqlcipher_key(cursor, key)
+                finally:
+                    cursor.close()
+            return conn
+
+        return _creator
 
     @staticmethod
     def _is_sqlite_memory(url: str) -> bool:

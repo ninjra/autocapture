@@ -15,6 +15,11 @@ def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+def _env_flag(name: str, default: str = "0") -> bool:
+    value = os.environ.get(name, default)
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _poetry_run(args: list[str]) -> None:
     _run(["poetry", "run", *args])
 
@@ -111,17 +116,34 @@ def main() -> int:
 
     if sys.platform == "win32":
         _poetry_run(["python", "tools/vendor_windows_binaries.py"])
-        _poetry_run(["pyinstaller", "pyinstaller.spec"])
-        if shutil.which("iscc") is None:
-            raise RuntimeError("Inno Setup (iscc) not found on PATH")
-        version = _read_version(repo_root / "pyproject.toml")
-        _run(
-            [
-                "iscc",
-                "installer/autocapture.iss",
-                f"/DMyAppVersion={version}",
-            ]
-        )
+        skip_packaging = _env_flag("AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING")
+        run_bundle = _env_flag("AUTOCAPTURE_PREFLIGHT_BUNDLE")
+        run_installer = _env_flag("AUTOCAPTURE_PREFLIGHT_INSTALLER")
+        if skip_packaging:
+            run_bundle = False
+            run_installer = False
+        if run_bundle:
+            _poetry_run(["pyinstaller", "pyinstaller.spec"])
+        else:
+            print("== PyInstaller bundle skipped (AUTOCAPTURE_PREFLIGHT_BUNDLE=1 to enable) ==")
+        if run_installer:
+            if not run_bundle:
+                raise RuntimeError("Installer requested but bundle disabled.")
+            if shutil.which("iscc") is None:
+                raise RuntimeError("Inno Setup (iscc) not found on PATH")
+            version = _read_version(repo_root / "pyproject.toml")
+            _run(
+                [
+                    "iscc",
+                    "installer/autocapture.iss",
+                    f"/DMyAppVersion={version}",
+                ]
+            )
+        else:
+            print(
+                "== Inno Setup installer skipped "
+                "(AUTOCAPTURE_PREFLIGHT_INSTALLER=1 to enable) =="
+            )
 
     return 0
 

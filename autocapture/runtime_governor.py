@@ -146,6 +146,35 @@ class RuntimeGovernor:
         with self._lock:
             return self._pause_reason
 
+    @property
+    def profile_override(self) -> ProfileName | None:
+        with self._lock:
+            return self._profile_override
+
+    def set_profile_override(self, profile: ProfileName | None) -> None:
+        notify = False
+        with self._lock:
+            if profile == self._profile_override:
+                return
+            self._profile_override = profile
+            notify = True
+        if notify:
+            label = profile.value if profile else "auto"
+            self._log.info("Runtime profile override set to {}", label)
+            self._notify_callbacks(self._current_mode)
+
+    def profile_state(self) -> dict[str, str | None]:
+        snapshot = self.snapshot()
+        override = self.profile_override
+        active = self._active_profile_name(snapshot.mode)
+        return {
+            "override": override.value if override else None,
+            "active": active.value if active else None,
+            "mode": snapshot.mode.value,
+            "pause_reason": snapshot.reason,
+            "since_utc": snapshot.since_ts.isoformat(),
+        }
+
     def snapshot(self) -> RuntimeSnapshot:
         with self._lock:
             return RuntimeSnapshot(
@@ -193,6 +222,14 @@ class RuntimeGovernor:
         if mode == RuntimeMode.IDLE_DRAIN:
             return self._config.qos.profile_idle
         return self._config.qos.profile_active
+
+    def _active_profile_name(self, mode: RuntimeMode | None = None) -> ProfileName:
+        mode = mode or self.current_mode
+        if self._profile_override in (ProfileName.FOREGROUND, ProfileName.IDLE):
+            return self._profile_override
+        if mode == RuntimeMode.IDLE_DRAIN:
+            return ProfileName.IDLE
+        return ProfileName.FOREGROUND
 
     def poll_interval_s(self, default: float) -> float:
         if not self._profile_scheduler:

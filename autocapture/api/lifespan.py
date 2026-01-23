@@ -10,6 +10,8 @@ import time
 from fastapi import FastAPI
 
 from ..logging_utils import get_logger
+from ..observability.perf_logger import PerfLogger
+from ..observability.perf_snapshot import PerfSnapshotBuilder
 from ..ux.state_store import HeartbeatWriter
 from .container import AppContainer
 
@@ -22,6 +24,16 @@ def build_lifespan(container: AppContainer):
     state_dir = Path(container.config.capture.data_dir) / "state"
     heartbeat_path = state_dir / "api.json"
     start_time = time.monotonic()
+    perf_builder = PerfSnapshotBuilder(
+        component="api",
+        include_metrics=False,
+        include_gpu=False,
+    )
+    perf_logger = PerfLogger(
+        Path(container.config.capture.data_dir),
+        "api",
+        perf_builder.snapshot,
+    )
     heartbeat = HeartbeatWriter(
         heartbeat_path,
         component="api",
@@ -31,6 +43,9 @@ def build_lifespan(container: AppContainer):
             {
                 "mode": container.config.mode.mode,
                 "uptime_s": max(time.monotonic() - start_time, 0.0),
+                "perf": perf_builder.snapshot(
+                    extra={"uptime_s": max(time.monotonic() - start_time, 0.0)}
+                ),
             },
             [],
         ),
@@ -42,9 +57,11 @@ def build_lifespan(container: AppContainer):
             await asyncio.to_thread(retention.enforce_screenshot_ttl)
         except Exception as exc:
             log.warning("Retention enforcement failed: {}", exc)
+        perf_logger.start()
         heartbeat.start()
         yield
         heartbeat.stop()
+        perf_logger.stop()
         if db_owned:
             try:
                 db.engine.dispose()

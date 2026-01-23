@@ -42,7 +42,7 @@ class SqliteHostEventStore:
         cur = self._conn.cursor()
         if self._config and self._config.encryption_enabled:
             key = self._load_key()
-            cur.execute("PRAGMA key = ?", (key,))
+            _apply_sqlcipher_key(cur, key)
         cur.execute("PRAGMA journal_mode=WAL;")
         cur.execute("PRAGMA synchronous=NORMAL;")
         cur.execute("PRAGMA temp_store=MEMORY;")
@@ -241,6 +241,9 @@ class SqliteHostEventStore:
     def _connect_sqlcipher(self, connect_args: dict) -> sqlite3.Connection:
         try:
             import pysqlcipher3.dbapi2 as sqlcipher  # type: ignore
+            from ..security.sqlcipher import ensure_sqlcipher_create_function_compat
+
+            ensure_sqlcipher_create_function_compat(sqlcipher)
         except Exception as exc:  # pragma: no cover
             raise RuntimeError(
                 "SQLCipher support requires pysqlcipher3. Install via: poetry install --extras sqlcipher "
@@ -296,6 +299,22 @@ def _ensure_private_permissions(path: Path) -> None:
         os.chmod(path, 0o600)
     except Exception:
         return
+
+
+def _apply_sqlcipher_key(cursor, key: bytes) -> None:
+    hex_key = key.hex()
+    try:
+        cursor.execute(f"PRAGMA key = \"x'{hex_key}'\"")
+        return
+    except Exception:
+        pass
+    try:
+        cursor.execute("PRAGMA key = ?", (key,))
+    except Exception as exc:
+        message = str(exc).lower()
+        if 'near "?"' not in message and "near '?'" not in message:
+            raise
+        cursor.execute(f"PRAGMA key = \"x'{hex_key}'\"")
 
 
 def safe_payload(payload: dict) -> str:

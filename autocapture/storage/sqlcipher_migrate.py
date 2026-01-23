@@ -70,12 +70,16 @@ def _verify_encrypted(path: Path, key: bytes) -> None:
 
 
 def _apply_sqlcipher_key(conn, key: bytes) -> None:
+    hex_key = key.hex()
+    try:
+        conn.execute(f"PRAGMA key = \"x'{hex_key}'\"")
+        return
+    except Exception:
+        pass
     try:
         conn.execute("PRAGMA key = ?", (key,))
-        return
     except Exception as exc:
         message = str(exc).lower()
         if 'near "?"' not in message and "near '?'" not in message:
             raise
-    hex_key = key.hex()
-    conn.execute(f"PRAGMA key = \"x'{hex_key}'\"")
+        conn.execute(f"PRAGMA key = \"x'{hex_key}'\"")

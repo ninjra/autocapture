@@ -10,11 +10,13 @@ from sqlalchemy import func, select
 from ..logging_utils import get_logger
 from ..storage.database import DatabaseManager
 from ..storage.models import (
+    CaptureRecord,
     OverlayEventRecord,
     OverlayItemIdentityRecord,
     OverlayItemRecord,
     OverlayKvRecord,
     OverlayProjectRecord,
+    RuntimeStateRecord,
 )
 from .clock import Clock
 from .schemas import (
@@ -135,6 +137,28 @@ class OverlayTrackerStore:
             ]
 
         return self._db.transaction(_load)
+
+    def capture_health(self) -> dict[str, object]:
+        def _load(session) -> dict[str, object]:
+            last_capture = session.execute(select(func.max(CaptureRecord.captured_at))).scalar()
+            runtime = session.get(RuntimeStateRecord, 1)
+            return {
+                "db_ok": True,
+                "last_capture_at": _ensure_aware(last_capture).isoformat()
+                if last_capture
+                else None,
+                "runtime_mode": getattr(runtime, "current_mode", None),
+                "pause_reason": getattr(runtime, "pause_reason", None),
+                "mode_since_utc": _ensure_aware(getattr(runtime, "since_ts", None)).isoformat()
+                if getattr(runtime, "since_ts", None)
+                else None,
+            }
+
+        try:
+            return self._db.transaction(_load)
+        except Exception as exc:  # pragma: no cover - defensive
+            self._log.warning("Overlay health query failed: {}", exc)
+            return {"db_ok": False, "error": str(exc)}
 
     def get_kv(self, key: str) -> dict | None:
         def _load(session) -> dict | None:

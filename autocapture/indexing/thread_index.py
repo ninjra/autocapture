@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 
 from ..logging_utils import get_logger
 from ..storage.database import DatabaseManager
+from ..storage.sqlite_features import sqlite_fts5_available
 
 
 @dataclass(frozen=True)
@@ -22,11 +23,14 @@ class ThreadLexicalIndex:
     def __init__(self, db: DatabaseManager) -> None:
         self._db = db
         self._log = get_logger("index.thread.lexical")
+        self._fts_available = sqlite_fts5_available(self._db.engine)
+        if not self._fts_available:
+            self._log.warning("SQLite FTS5 unavailable; thread search will use LIKE fallback.")
         self._ensure_schema()
 
     def _ensure_schema(self) -> None:
         engine = self._db.engine
-        if engine.dialect.name != "sqlite":
+        if engine.dialect.name != "sqlite" or not self._fts_available:
             return
         with engine.begin() as conn:
             conn.execute(
@@ -46,7 +50,7 @@ class ThreadLexicalIndex:
         tasks: Iterable[str],
     ) -> None:
         engine = self._db.engine
-        if engine.dialect.name != "sqlite":
+        if engine.dialect.name != "sqlite" or not self._fts_available:
             return
         with engine.begin() as conn:
             conn.execute(
@@ -73,6 +77,8 @@ class ThreadLexicalIndex:
             return []
         if engine.dialect.name != "sqlite":
             return []
+        if not self._fts_available:
+            return _fallback_thread_search(engine, query, limit)
         with engine.begin() as conn:
             try:
                 rows = conn.execute(
@@ -104,3 +110,26 @@ def _sanitize_fts_query(query: str) -> str:
         return ""
     quoted = ['"' + token.replace('"', '""') + '"' for token in tokens]
     return " AND ".join(quoted)
+
+
+def _like_pattern(query: str) -> str:
+    base = query.strip()
+    if not base:
+        return ""
+    escaped = base.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _fallback_thread_search(engine, query: str, limit: int) -> list[ThreadLexicalHit]:
+    pattern = _like_pattern(query)
+    if not pattern:
+        return []
+    sql = (
+        "SELECT thread_id FROM threads "
+        "WHERE lower(coalesce(app_name, '')) LIKE lower(:pattern) ESCAPE '\\' "
+        "OR lower(coalesce(window_title, '')) LIKE lower(:pattern) ESCAPE '\\' "
+        "LIMIT :limit"
+    )
+    with engine.begin() as conn:
+        rows = conn.execute(text(sql), {"pattern": pattern, "limit": limit}).fetchall()
+    return [ThreadLexicalHit(thread_id=row[0], score=1.0) for row in rows]

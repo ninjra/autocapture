@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -26,6 +27,9 @@ from ...ux.models import (
 )
 from ...ux.settings_service import SettingsService
 from ...ux.state_service import StateService
+from ...ux.perf_log import read_perf_log
+from ...runtime_env import ProfileName
+from ...runtime_profile_override import write_profile_override
 from ..container import AppContainer
 
 
@@ -42,6 +46,10 @@ class DeleteApplyBody(DeleteCriteriaBody):
     confirm: bool = False
     confirm_phrase: Optional[str] = None
     expected_counts: Optional[dict[str, int]] = None
+
+
+class RuntimeProfileBody(BaseModel):
+    profile: Optional[str] = None
 
 
 def build_ux_router(container: AppContainer) -> APIRouter:
@@ -137,5 +145,30 @@ def build_ux_router(container: AppContainer) -> APIRouter:
             return audit_service.answer_detail(answer_id, verbose=verbose)
         except Exception as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/api/perf/log")
+    def perf_log(
+        component: str = Query("runtime"),
+        limit: int = Query(200, ge=1, le=2000),
+    ):
+        try:
+            return read_perf_log(Path(config.capture.data_dir), component=component, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/runtime/profile")
+    def runtime_profile(body: RuntimeProfileBody):
+        raw = (body.profile or "").strip().lower()
+        if raw in {"", "auto", "balanced", "default"}:
+            profile = None
+        elif raw in {"max", "max_capture", "foreground"}:
+            profile = ProfileName.FOREGROUND
+        elif raw in {"low", "low_impact", "idle"}:
+            profile = ProfileName.IDLE
+        else:
+            raise HTTPException(status_code=400, detail="Unknown profile value")
+        override_path = Path(config.capture.data_dir) / "state" / "profile_override.json"
+        write_profile_override(override_path, profile, source="api")
+        return {"status": "ok", "profile": profile.value if profile else None}
 
     return router

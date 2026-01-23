@@ -746,13 +746,13 @@ def main(argv: list[str] | None = None) -> None:
             return
 
     if cmd == "db":
-        db = DatabaseManager(config.database)
         if args.db_cmd == "encrypt":
             from .storage.sqlcipher_migrate import encrypt_sqlite_database
 
             encrypt_sqlite_database(config.database)
             logger.info("Database encryption complete.")
             return
+        db = DatabaseManager(config.database)
         if args.db_cmd == "backfill":
             from .storage.backfill import BackfillRunner
 

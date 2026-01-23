@@ -8,6 +8,9 @@ from pathlib import Path
 from ..config import DatabaseConfig
 from ..logging_utils import get_logger
 
+_SQLCIPHER_SQLALCHEMY_VERSION_INFO = (3, 8, 2)
+_SQLCIPHER_SQLALCHEMY_VERSION = "3.8.2"
+
 
 def _ensure_private_permissions(path: Path) -> None:
     if os.name == "nt":
@@ -60,3 +63,42 @@ def _write_key(path: Path, key: bytes, use_dpapi: bool, log) -> None:
         except Exception:
             log.warning("DPAPI unavailable; storing SQLCipher key on disk.")
     path.write_bytes(key)
+
+
+def ensure_sqlcipher_create_function_compat(sqlcipher_module) -> None:
+    """Ensure SQLCipher connections accept deterministic kwarg for create_function."""
+
+    _force_sqlcipher_sqlalchemy_compat(sqlcipher_module)
+    conn_cls = getattr(sqlcipher_module, "Connection", None)
+    if conn_cls is None:
+        return
+    if getattr(conn_cls, "_autocapture_create_function_compat", False):
+        return
+    original = getattr(conn_cls, "create_function", None)
+    if original is None:
+        return
+
+    def _compat(self, name, num_params, func, deterministic=None):  # noqa: ANN001
+        _ = deterministic
+        return original(self, name, num_params, func)
+
+    patched = False
+    try:
+        setattr(conn_cls, "create_function", _compat)
+        setattr(conn_cls, "_autocapture_create_function_compat", True)
+        patched = True
+    except Exception:
+        patched = False
+
+    if not patched:
+        _force_sqlcipher_sqlalchemy_compat(sqlcipher_module)
+
+
+def _force_sqlcipher_sqlalchemy_compat(sqlcipher_module) -> None:
+    """Force SQLAlchemy to avoid deterministic kwarg for SQLCipher DBAPI."""
+
+    try:
+        setattr(sqlcipher_module, "sqlite_version_info", _SQLCIPHER_SQLALCHEMY_VERSION_INFO)
+        setattr(sqlcipher_module, "sqlite_version", _SQLCIPHER_SQLALCHEMY_VERSION)
+    except Exception:
+        return

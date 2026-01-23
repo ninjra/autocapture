@@ -148,10 +148,11 @@ def upgrade() -> None:
     )
     op.create_index("ix_claim_citations_claim", "claim_citations", ["claim_id"])
 
-    op.execute(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts "
-        "USING fts5(chunk_id UNINDEXED, event_id UNINDEXED, text)"
-    )
+    if _fts5_available():
+        op.execute(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts "
+            "USING fts5(chunk_id UNINDEXED, event_id UNINDEXED, text)"
+        )
 
 
 def downgrade() -> None:
@@ -171,3 +172,21 @@ def downgrade() -> None:
     op.drop_column("answer_claim_citations", "confidence")
     op.drop_column("answer_claim_citations", "line_end")
     op.drop_column("answer_claim_citations", "line_start")
+
+
+def _fts5_available() -> bool:
+    bind = op.get_bind()
+    if bind is None or bind.dialect.name != "sqlite":
+        return False
+    try:
+        enabled = bind.execute(sa.text("SELECT sqlite_compileoption_used('ENABLE_FTS5')")).scalar()
+        if int(enabled or 0) == 1:
+            return True
+    except Exception:
+        pass
+    try:
+        bind.execute(sa.text("CREATE VIRTUAL TABLE IF NOT EXISTS _fts5_probe USING fts5(content)"))
+        bind.execute(sa.text("DROP TABLE IF EXISTS _fts5_probe"))
+        return True
+    except Exception:
+        return False

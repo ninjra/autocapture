@@ -60,6 +60,9 @@ def build_test_config(*, db_path: Path, data_dir: Path, enable_rerank: bool = Tr
     config.model_stages.tool_transform.enabled = False
     config.next10.enabled = True
     config.features.enable_thresholding = True
+    config.memory_service.enabled = False
+    config.features.enable_memory_service_read_hook = False
+    config.features.enable_memory_service_write_hook = False
     return config
 
 
