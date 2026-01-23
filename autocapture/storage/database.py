@@ -123,6 +123,7 @@ class DatabaseManager:
             self._sqlcipher_key = self._load_sqlcipher_key()
             self._sqlcipher_module = self._load_sqlcipher_module()
             engine_kwargs["creator"] = self._make_sqlcipher_creator(connect_args)
+            engine_kwargs["module"] = self._sqlcipher_module
         elif is_sqlite:
             engine_kwargs["connect_args"] = connect_args
             if is_memory:
