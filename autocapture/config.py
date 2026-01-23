@@ -480,7 +480,7 @@ class RuntimeQosConfig(BaseModel):
     idle_grace_ms: int = Field(2000, ge=0)
     profile_active: RuntimeQosProfile = Field(
         default_factory=lambda: RuntimeQosProfile(
-            ocr_workers=1,
+            ocr_workers=0,
             embed_workers=0,
             agent_workers=0,
             vision_extract=False,

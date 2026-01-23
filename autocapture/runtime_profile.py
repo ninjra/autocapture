@@ -175,12 +175,12 @@ def _fallback_tuning(name: ProfileName) -> ProfileTuning:
             batch_size=8,
             poll_interval_ms=100,
             max_queue_depth=1000,
-            max_cpu_pct_hint=70,
+            max_cpu_pct_hint=15,
         )
     return ProfileTuning(
         max_workers=max(1, cpu_count),
         batch_size=32,
         poll_interval_ms=500,
         max_queue_depth=5000,
-        max_cpu_pct_hint=30,
+        max_cpu_pct_hint=80,
     )

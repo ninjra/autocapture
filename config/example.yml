@@ -720,7 +720,7 @@ runtime:
     enabled: true
     idle_grace_ms: 2000
     profile_active:
-      ocr_workers: 1
+      ocr_workers: 0
       embed_workers: 0
       agent_workers: 0
       vision_extract: false
