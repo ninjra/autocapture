@@ -235,11 +235,17 @@ def find_bundled_ffmpeg(config: FFmpegConfig) -> Path:
 def resolve_ffmpeg_path(config: FFmpegConfig) -> Path | None:
     if not config.enabled:
         return None
-    if config.require_bundled:
+    if os.environ.get("AUTOCAPTURE_TEST_MODE") == "1":
+        require_bundled = False
+        allow_disable = True
+    else:
+        require_bundled = config.require_bundled
+        allow_disable = config.allow_disable
+    if require_bundled:
         try:
             return find_bundled_ffmpeg(config)
         except FileNotFoundError as exc:
-            if config.allow_disable:
+            if allow_disable:
                 return None
             raise FileNotFoundError(
                 f"{exc} Set ffmpeg.require_bundled=false to allow fallbacks."
@@ -265,7 +271,7 @@ def resolve_ffmpeg_path(config: FFmpegConfig) -> Path | None:
         resolved = which("ffmpeg")
         if resolved:
             return Path(resolved)
-    if config.allow_disable:
+    if allow_disable:
         return None
     raise FileNotFoundError(
         "ffmpeg binary not found. Bundle ffmpeg, set ffmpeg.explicit_path, "

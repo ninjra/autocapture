@@ -102,6 +102,7 @@ class DatabaseManager:
         self._config = config
         self._log = get_logger("db")
         self._sqlcipher_key: bytes | None = None
+        self._sqlcipher_module = None
         self._ran_migrations = False
         engine_kwargs = {
             "echo": config.echo,
@@ -113,14 +114,18 @@ class DatabaseManager:
         self._is_memory = is_memory
         if is_sqlite and not is_memory:
             self._enforce_secure_mode()
-        if is_sqlite and config.encryption_enabled and not is_memory:
-            self._sqlcipher_key = self._load_sqlcipher_key()
-            engine_kwargs["module"] = self._load_sqlcipher_module()
-        if is_sqlite:
-            engine_kwargs["connect_args"] = {
+        connect_args = {}
+        if is_sqlite and not is_memory:
+            connect_args = {
                 "check_same_thread": False,
                 "timeout": config.sqlite_busy_timeout_ms / 1000,
             }
+        if is_sqlite and config.encryption_enabled and not is_memory:
+            self._sqlcipher_key = self._load_sqlcipher_key()
+            self._sqlcipher_module = self._load_sqlcipher_module()
+            engine_kwargs["creator"] = self._make_sqlcipher_creator(connect_args)
+        elif is_sqlite:
+            engine_kwargs["connect_args"] = connect_args
             if is_memory:
                 engine_kwargs["poolclass"] = StaticPool
         else:
@@ -272,6 +277,33 @@ class DatabaseManager:
     def _load_sqlcipher_key(self) -> bytes:
         data_dir = Path(self._config.url.replace("sqlite:///", "")).parent
         return load_sqlcipher_key(self._config, data_dir)
+
+    def _sqlite_path_from_url(self, url: str) -> str:
+        if url.startswith("sqlite:////"):
+            return url.replace("sqlite:////", "/")
+        if url.startswith("sqlite:///"):
+            return url.replace("sqlite:///", "")
+        if url.startswith("sqlite://"):
+            return url.replace("sqlite://", "")
+        return url
+
+    def _make_sqlcipher_creator(self, connect_args: dict) -> Callable[[], object]:
+        sqlcipher = self._sqlcipher_module
+        key = self._sqlcipher_key
+        db_path = self._sqlite_path_from_url(self._config.url)
+
+        def _creator():
+            conn = sqlcipher.connect(db_path, **connect_args)  # type: ignore[call-arg]
+            _ensure_create_function_compat(conn)
+            if key:
+                cursor = conn.cursor()
+                try:
+                    _apply_sqlcipher_key(cursor, key)
+                finally:
+                    cursor.close()
+            return conn
+
+        return _creator
 
     @staticmethod
     def _is_sqlite_memory(url: str) -> bool:
