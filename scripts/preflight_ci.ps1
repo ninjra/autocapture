@@ -38,6 +38,20 @@ poetry run python tools/conflict_gate.py
 poetry run python tools/integrity_gate.py
 poetry run pytest -q tests/test_overlay_tracker_windows.py
 
+function Ensure-InnoSetup {
+    if (Get-Command iscc -ErrorAction SilentlyContinue) {
+        return $true
+    }
+    Write-Host "Inno Setup not found; attempting installation..."
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        & winget install --id JRSoftware.InnoSetup -e --accept-source-agreements --accept-package-agreements
+    }
+    if (-not (Get-Command iscc -ErrorAction SilentlyContinue) -and (Get-Command choco -ErrorAction SilentlyContinue)) {
+        & choco install innosetup -y
+    }
+    return (Get-Command iscc -ErrorAction SilentlyContinue) -ne $null
+}
+
 $skipPackaging = $env:AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING
 if (-not $skipPackaging) {
     $skipPackaging = "0"
@@ -46,8 +60,8 @@ if (-not $skipPackaging) {
 if ($skipPackaging -eq "1") {
     Write-Host "== Packaging preflight skipped (AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING=1) =="
 } else {
-    if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
-        Write-Error "Inno Setup (iscc) not found. Install it or set AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING=1."
+    if (-not (Ensure-InnoSetup)) {
+        Write-Error "Inno Setup (iscc) not found and auto-install failed. Run this script in an elevated PowerShell or set AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING=1."
         exit 1
     }
     poetry run pyinstaller pyinstaller.spec
