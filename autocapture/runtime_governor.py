@@ -223,6 +223,12 @@ class RuntimeGovernor:
             return self._config.qos.profile_idle
         return self._config.qos.profile_active
 
+    def max_cpu_pct_hint(self) -> int | None:
+        if not self._profile_scheduler:
+            return None
+        name = self._active_profile_name(self.current_mode)
+        return self._profile_scheduler.max_cpu_pct_hint(name)
+
     def _active_profile_name(self, mode: RuntimeMode | None = None) -> ProfileName:
         mode = mode or self.current_mode
         if self._profile_override in (ProfileName.FOREGROUND, ProfileName.IDLE):

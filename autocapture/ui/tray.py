@@ -8,6 +8,7 @@ import sys
 import time
 import webbrowser
 import datetime as dt
+from collections import deque
 from pathlib import Path
 from typing import IO, Optional
 
@@ -28,6 +29,7 @@ from ..win32.startup import (
 )
 from .api_supervisor import ApiSupervisor
 from .popup import SearchPopup
+from .restart_limiter import RestartLimiter
 
 
 class TrayApp(QtCore.QObject):
@@ -49,6 +51,10 @@ class TrayApp(QtCore.QObject):
         self._api_log = api_log
         self._log = get_logger("tray")
         self._paused = False
+        self._api_restart_limiter = RestartLimiter(
+            window_s=60.0, max_attempts=3, cooldown_s=120.0
+        )
+        self._api_restart_notice_at = 0.0
 
         self._tray = QtWidgets.QSystemTrayIcon(self._default_icon())
         self._menu = QtWidgets.QMenu()
@@ -260,12 +266,33 @@ class TrayApp(QtCore.QObject):
         self._sync_pause_state()
         self._sync_profile_state()
         if self._api_process and self._api_process.poll() is not None:
-            self._notify("Autocapture", "API process stopped; restarting.")
-            self._restart_api()
+            exit_code = self._api_process.returncode
+            self._log.warning("API process exited (code={}); awaiting supervisor restart.", exit_code)
+            self._stop_api_process()
         state = self._supervisor.tick()
         self._tray.setToolTip(self._build_status_tooltip(state.status))
 
     def _restart_api(self) -> None:
+        decision = self._api_restart_limiter.attempt()
+        if not decision.allowed:
+            now = time.monotonic()
+            if decision.reason == "loop":
+                self._log.error(
+                    "API restart loop detected; pausing restarts for {}s.",
+                    int(decision.cooldown_remaining_s),
+                )
+                self._log_api_tail()
+                self._notify(
+                    "Autocapture",
+                    "API keeps crashing. Restarts paused to prevent loops. Check logs.",
+                )
+            elif now - self._api_restart_notice_at > 5.0:
+                self._api_restart_notice_at = now
+                self._log.warning(
+                    "API restart paused (cooldown {}s remaining).",
+                    int(decision.cooldown_remaining_s),
+                )
+            return
         self._log.warning("Restarting API process")
         self._stop_api_process()
         self._api_process, self._api_log = _start_api_process(self._config_path, self._log_dir)
@@ -331,14 +358,15 @@ class TrayApp(QtCore.QObject):
         if not proc:
             return
         self._log.info("Stopping API server process")
-        if sys.platform == "win32":
-            ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
-            if ctrl_break is not None:
-                proc.send_signal(ctrl_break)
+        if proc.poll() is None:
+            if sys.platform == "win32":
+                ctrl_break = getattr(signal, "CTRL_BREAK_EVENT", None)
+                if ctrl_break is not None:
+                    proc.send_signal(ctrl_break)
+                else:
+                    proc.terminate()
             else:
                 proc.terminate()
-        else:
-            proc.terminate()
         try:
             proc.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
@@ -349,11 +377,8 @@ class TrayApp(QtCore.QObject):
             self._api_log = None
 
     def _ensure_api_ready(self, action_label: str) -> bool:
-        if self._api_process and self._api_process.poll() is not None:
-            self._log.warning("API process exited; restarting before %s", action_label)
-            self._restart_api()
-        elif not self._api_process:
-            self._restart_api()
+        if self._api_process is None or self._api_process.poll() is not None:
+            self._supervisor.tick()
         if not self._wait_for_api_ready():
             self._notify(
                 action_label,
@@ -411,6 +436,16 @@ class TrayApp(QtCore.QObject):
         if self._tray.supportsMessages():
             self._tray.showMessage(title, message)
 
+    def _log_api_tail(self, lines: int = 120) -> None:
+        for name in ("api.log", "autocapture.log"):
+            path = self._log_dir / name
+            if not path.exists():
+                continue
+            tail = _tail_text(path, lines=lines)
+            if not tail.strip():
+                continue
+            self._log.error("===== {} (tail) =====\n{}", name, tail)
+
     def _quit(self) -> None:
         try:
             self._runtime.stop()
@@ -446,6 +481,15 @@ def _start_api_process(config_path: Path, log_dir: Path) -> tuple[subprocess.Pop
         creationflags=creationflags,
     )
     return proc, api_log
+
+
+def _tail_text(path: Path, *, lines: int = 120) -> str:
+    try:
+        with path.open("r", encoding="utf-8", errors="ignore") as handle:
+            tail = deque(handle, maxlen=lines)
+    except Exception as exc:  # pragma: no cover - best-effort logging
+        return f"(failed to read {path.name}: {exc})"
+    return "".join(tail)
 
 
 def run_tray(config_path: Path, log_dir: Path) -> None:

@@ -46,6 +46,7 @@ from ..storage.database import DatabaseManager
 from ..storage.ledger import LedgerWriter
 from ..storage.models import CaptureRecord, FrameRecord, ObservationRecord, SegmentRecord
 from ..tracking.win_foreground import get_foreground_context, is_fullscreen_window
+from ..runtime_cpu import CpuUsageSampler
 from .backends import DxCamBackend, MssBackend, MonitorInfo
 from .duplicate import DuplicateDetector
 from .ffmpeg_recorder import SegmentRecorder
@@ -177,6 +178,8 @@ class CaptureOrchestrator:
         self._runtime = runtime_governor
         self._runtime_auto_pause = bool(runtime_auto_pause)
         self._pause = pause_controller
+        self._cpu_sampler = CpuUsageSampler(sample_interval_s=1.0)
+        self._cpu_throttle_log_at = 0.0
 
     def start(self) -> None:
         with self._state_lock:
@@ -295,6 +298,8 @@ class CaptureOrchestrator:
                     and self._runtime.current_mode == RuntimeMode.FULLSCREEN_HARD_PAUSE
                 ):
                     time.sleep(min(1.0, interval))
+                    continue
+                if self._should_throttle_cpu(interval):
                     continue
                 now_ms = int(loop_start * 1000)
                 active = (
@@ -513,6 +518,24 @@ class CaptureOrchestrator:
             else:
                 if self._video_sampling_divisor > 1 and now - self._video_last_drop > 5.0:
                     self._video_sampling_divisor = max(1, self._video_sampling_divisor - 1)
+
+    def _should_throttle_cpu(self, interval: float) -> bool:
+        if not self._runtime:
+            return False
+        limit = self._runtime.max_cpu_pct_hint()
+        if not limit:
+            return False
+        cpu_pct = self._cpu_sampler.sample()
+        if cpu_pct is None:
+            return False
+        if cpu_pct < limit:
+            return False
+        now = time.monotonic()
+        if now - self._cpu_throttle_log_at > 5.0:
+            self._cpu_throttle_log_at = now
+            self._log.warning("CPU usage {:.1f}% >= {}%; throttling capture.", cpu_pct, limit)
+        time.sleep(min(1.0, interval))
+        return True
 
     def _run_roi_saver(self) -> None:
         while self._running.is_set() or not self._roi_queue.empty():

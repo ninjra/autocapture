@@ -13,6 +13,7 @@ from ..observability.metrics import worker_restarts_total
 from ..storage.database import DatabaseManager
 from ..indexing.vector_index import VectorIndex
 from ..runtime_governor import RuntimeGovernor, RuntimeMode
+from ..runtime_cpu import CpuUsageSampler, reduce_worker_counts
 from ..runtime_pause import PauseController
 from ..runtime_qos import apply_cpu_priority
 from .agent_worker import AgentJobWorker
@@ -57,6 +58,12 @@ class WorkerSupervisor:
         self._desired_counts = {"ocr": 0, "embed": 0, "agents": 0}
         self._runtime = runtime_governor
         self._pause = pause_controller
+        self._base_profile: RuntimeQosProfile | None = None
+        self._cpu_sampler = CpuUsageSampler(
+            sample_interval_s=max(1.0, float(config.worker.watchdog_interval_s) / 2)
+        )
+        self._cpu_throttled = False
+        self._cpu_throttle_log_at = 0.0
         if ocr_workers is None:
             if self._ocr_enabled():
                 self._ocr_workers = [
@@ -244,6 +251,7 @@ class WorkerSupervisor:
                 worker_restarts_total.labels(slot.worker_type).inc()
                 slot.thread = self._build_thread(slot.worker, slot.name, slot.stop_event)
                 slot.thread.start()
+            self._cpu_throttle_tick()
 
     def _slot_should_run(self, slot: _WorkerSlot, idx: int, desired: dict[str, int]) -> bool:
         if slot.worker_type == "ocr":
@@ -272,6 +280,7 @@ class WorkerSupervisor:
         self._apply_profile(profile)
 
     def _apply_profile(self, profile: RuntimeQosProfile | None) -> None:
+        self._base_profile = profile
         if profile is None:
             desired = {"ocr": 0, "embed": 0, "agents": 0}
         else:
@@ -281,6 +290,8 @@ class WorkerSupervisor:
                 "agents": max(0, int(profile.agent_workers)),
             }
             apply_cpu_priority(profile.cpu_priority)
+        if self._cpu_throttled:
+            desired = reduce_worker_counts(desired)
         with self._slots_lock:
             self._desired_counts = desired
             self._apply_worker_counts(self._ocr_slots, desired["ocr"])
@@ -300,3 +311,32 @@ class WorkerSupervisor:
                     slot.stop_event.set()
                     slot.thread.join(timeout=2.0)
                 slot.thread = None
+
+    def _max_cpu_pct_hint(self) -> int | None:
+        if not self._runtime:
+            return None
+        return self._runtime.max_cpu_pct_hint()
+
+    def _cpu_throttle_tick(self) -> None:
+        limit = self._max_cpu_pct_hint()
+        if not limit:
+            return
+        cpu_pct = self._cpu_sampler.sample()
+        if cpu_pct is None:
+            return
+        if not self._cpu_throttled and cpu_pct >= limit:
+            self._cpu_throttled = True
+            self._log.warning(
+                "CPU usage {:.1f}% >= {}%; throttling worker concurrency.", cpu_pct, limit
+            )
+            self._apply_profile(self._base_profile)
+            return
+        low_watermark = limit * 0.7
+        if self._cpu_throttled and cpu_pct <= low_watermark:
+            self._cpu_throttled = False
+            self._log.info(
+                "CPU usage {:.1f}% below {:.0f}%; restoring worker concurrency.",
+                cpu_pct,
+                low_watermark,
+            )
+            self._apply_profile(self._base_profile)
