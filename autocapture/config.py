@@ -480,17 +480,17 @@ class RuntimeQosConfig(BaseModel):
     idle_grace_ms: int = Field(2000, ge=0)
     profile_active: RuntimeQosProfile = Field(
         default_factory=lambda: RuntimeQosProfile(
-            ocr_workers=max(1, os.cpu_count() // 2 if os.cpu_count() else 1),
-            embed_workers=1,
-            agent_workers=1,
-            vision_extract=True,
-            ui_grounding=True,
+            ocr_workers=1,
+            embed_workers=0,
+            agent_workers=0,
+            vision_extract=False,
+            ui_grounding=False,
             cpu_priority="below_normal",
         )
     )
     profile_idle: RuntimeQosProfile = Field(
         default_factory=lambda: RuntimeQosProfile(
-            ocr_workers=4,
+            ocr_workers=max(1, os.cpu_count() // 2 if os.cpu_count() else 1),
             embed_workers=2,
             agent_workers=1,
             vision_extract=True,

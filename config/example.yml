@@ -720,11 +720,11 @@ runtime:
     enabled: true
     idle_grace_ms: 2000
     profile_active:
-      ocr_workers: 4
-      embed_workers: 1
-      agent_workers: 1
-      vision_extract: true
-      ui_grounding: true
+      ocr_workers: 1
+      embed_workers: 0
+      agent_workers: 0
+      vision_extract: false
+      ui_grounding: false
       cpu_priority: "below_normal"
       sleep_ms: null
       max_batch: null

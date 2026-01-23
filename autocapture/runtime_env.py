@@ -367,14 +367,14 @@ def _default_tuning(name: str) -> ProfileTuning:
             batch_size=8,
             poll_interval_ms=100,
             max_queue_depth=1000,
-            max_cpu_pct_hint=40,
+            max_cpu_pct_hint=20,
         )
     return ProfileTuning(
         max_workers=max(1, cpu_count),
         batch_size=32,
         poll_interval_ms=500,
         max_queue_depth=5000,
-        max_cpu_pct_hint=20,
+        max_cpu_pct_hint=70,
     )
 
 
