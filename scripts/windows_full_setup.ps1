@@ -132,24 +132,48 @@ function Invoke-Doctor {
     return @($output, $exitCode)
 }
 
+$script:PromptTypeLoaded = $false
+function Show-TopmostPrompt {
+    param(
+        [string]$Text,
+        [string]$Title,
+        [uint32]$Buttons = 0x4,
+        [uint32]$Icon = 0x20
+    )
+    if (-not $script:PromptTypeLoaded) {
+        try {
+            Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class NativeMethods {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
+}
+'@
+            $script:PromptTypeLoaded = $true
+        } catch {
+            $script:PromptTypeLoaded = $false
+        }
+    }
+    if (-not $script:PromptTypeLoaded) {
+        return 0
+    }
+    $flags = $Buttons -bor $Icon -bor 0x40000 -bor 0x10000
+    return [Win32.NativeMethods]::MessageBoxW([IntPtr]::Zero, $Text, $Title, $flags)
+}
+
 $doctorResult = Invoke-Doctor
 $doctorOutput = $doctorResult[0]
 $doctorExit = $doctorResult[1]
 $doctorOutput | ForEach-Object { Write-Host $_ }
 
 function Confirm-ResetDb {
-    try {
-        $wshell = New-Object -ComObject WScript.Shell
-        $result = $wshell.Popup(
-            "Encrypted DB appears invalid. Reset now? This deletes the local DB and key.",
-            0,
-            "Autocapture",
-            0x4 + 0x30
-        )
-        return $result -eq 6
-    } catch {
-        return $false
-    }
+    $result = Show-TopmostPrompt `
+        -Text "Encrypted DB appears invalid. Reset now? This deletes the local DB and key." `
+        -Title "Autocapture" `
+        -Buttons 0x4 `
+        -Icon 0x30
+    return $result -eq 6
 }
 
 if ($doctorOutput -match "file is not a database|hmac check failed|sqlcipher") {
@@ -163,18 +187,12 @@ if ($doctorOutput -match "file is not a database|hmac check failed|sqlcipher") {
 }
 
 function Confirm-StartApp {
-    try {
-        $wshell = New-Object -ComObject WScript.Shell
-        $result = $wshell.Popup(
-            "Start Autocapture now?",
-            0,
-            "Autocapture",
-            0x4 + 0x40
-        )
-        return $result -eq 6
-    } catch {
-        return $false
-    }
+    $result = Show-TopmostPrompt `
+        -Text "Start Autocapture now?" `
+        -Title "Autocapture" `
+        -Buttons 0x4 `
+        -Icon 0x40
+    return $result -eq 6
 }
 
 if ($doctorOutput -notmatch "\\bFAIL\\b" -and $doctorExit -eq 0) {
