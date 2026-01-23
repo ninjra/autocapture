@@ -6,7 +6,6 @@ import asyncio
 import datetime as dt
 import io
 import json
-import tempfile
 import time
 from uuid import uuid4
 
@@ -79,6 +78,18 @@ from ...storage.models import (
 )
 from ...storage.retention import RetentionManager
 from ...ux.banners import BannerPolicy, build_evidence_summary
+from ...ux.events_service import EventsService
+from ...ux.media_service import MediaNotFoundError, MediaService, MediaValidationError
+from ...ux.plugins_models import (
+    PluginConfigApplyRequest,
+    PluginConfigApplyResponse,
+    PluginConfigPreviewRequest,
+    PluginConfigPreviewResponse,
+    PluginDetailResponse,
+    PluginsSchemaResponse,
+    PluginSchemaResponse,
+)
+from ...ux.plugins_service import PluginsService
 from ...ux.models import AnswerBanner, EvidenceSummary
 from ..container import AppContainer
 from ..security_helpers import _bridge_token_valid, _require_api_key
@@ -388,7 +399,10 @@ def build_router(
     embedder_obj = container.embedder
     retrieval = container.retrieval
     thread_retrieval = container.thread_retrieval
+    events_service = EventsService(config, db)
     encryption_mgr = container.encryption_mgr
+    media_service = MediaService(config, db, encryption_mgr)
+    plugins_service = PluginsService(config, plugins)
     token_vault = container.token_vault
     entities = container.entities
     agent_jobs = container.agent_jobs
@@ -915,6 +929,44 @@ def build_router(
         plugins.refresh()
         return plugins.run_healthchecks()
 
+    @router.get("/api/plugins/schema", response_model=PluginsSchemaResponse)
+    def plugins_schema() -> PluginsSchemaResponse:
+        return plugins_service.schemas()
+
+    @router.get("/api/plugins/{plugin_id}/schema", response_model=PluginSchemaResponse)
+    def plugin_schema(plugin_id: str) -> PluginSchemaResponse:
+        try:
+            return plugins_service.schema(plugin_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.get("/api/plugins/{plugin_id}", response_model=PluginDetailResponse)
+    def plugin_detail(plugin_id: str) -> PluginDetailResponse:
+        try:
+            return plugins_service.detail(plugin_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @router.post("/api/plugins/{plugin_id}/preview", response_model=PluginConfigPreviewResponse)
+    def plugin_preview(
+        plugin_id: str,
+        request: PluginConfigPreviewRequest,
+    ) -> PluginConfigPreviewResponse:
+        try:
+            return plugins_service.preview_config(plugin_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.post("/api/plugins/{plugin_id}/apply", response_model=PluginConfigApplyResponse)
+    def plugin_apply(
+        plugin_id: str,
+        request: PluginConfigApplyRequest,
+    ) -> PluginConfigApplyResponse:
+        try:
+            return plugins_service.apply_config(plugin_id, request)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     def _storage_usage_bytes() -> int:
         now = time.monotonic()
         if now - storage_cache["ts"] > storage_cache_ttl_s:
@@ -1194,47 +1246,33 @@ def build_router(
             )
         return PromptOpsRunsResponse(runs=[_promptops_summary(run) for run in runs])
 
+    def _serve_media(*, event_id: str, kind: str, variant: str) -> Response:
+        try:
+            result = media_service.fetch(event_id=event_id, kind=kind, variant=variant)
+        except MediaValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except MediaNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if result.body is not None:
+            return Response(
+                content=result.body,
+                media_type=result.media_type,
+                headers=result.headers,
+            )
+        if result.path is None:
+            raise HTTPException(status_code=404, detail="Media not found")
+        return FileResponse(result.path, media_type=result.media_type, headers=result.headers)
+
     @router.get("/api/screenshot/{event_id}")
     def screenshot(event_id: str, variant: str = "full") -> Response:
-        with db.session() as session:
-            event = session.get(EventRecord, event_id)
-            if variant not in {"full", "focus"}:
-                raise HTTPException(status_code=422, detail="variant must be full or focus")
-            path_value = event.screenshot_path if variant == "full" else event.focus_path
-            if not event or not path_value:
-                raise HTTPException(status_code=404, detail="Screenshot not found")
-            path = Path(path_value)
+        normalized = (variant or "").strip().lower()
+        if normalized == "focus":
+            return _serve_media(event_id=event_id, kind="focus", variant="full")
+        return _serve_media(event_id=event_id, kind="screenshot", variant=normalized)
 
-        if not path.is_absolute():
-            path = config.capture.data_dir / path
-
-        try:
-            root = config.capture.data_dir.resolve()
-            resolved = path.resolve()
-            if root not in resolved.parents and resolved != root:
-                raise HTTPException(status_code=403, detail="Invalid screenshot path")
-            path = resolved
-        except FileNotFoundError:
-            pass
-
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="Screenshot file missing")
-
-        headers = {"Cache-Control": "private, max-age=60"}
-
-        if path.suffix == ".acenc":
-            with tempfile.NamedTemporaryFile(suffix=".webp", delete=False) as tmp:
-                tmp_path = Path(tmp.name)
-            try:
-                encryption_mgr.decrypt_file(path, tmp_path)
-                data = tmp_path.read_bytes()
-            finally:
-                try:
-                    tmp_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            return Response(content=data, media_type="image/webp", headers=headers)
-        return FileResponse(path, headers=headers)
+    @router.get("/api/focus/{event_id}")
+    def focus(event_id: str, variant: str = "full") -> Response:
+        return _serve_media(event_id=event_id, kind="focus", variant=variant)
 
     @router.post("/api/citations/overlay")
     def citation_overlay(request: CitationOverlayRequest) -> Response:
@@ -1840,26 +1878,10 @@ def build_router(
 
     @router.get("/api/event/{event_id}")
     def event_detail(event_id: str) -> EventResponse:
-        with db.session() as session:
-            event = session.get(EventRecord, event_id)
-        if not event:
+        detail = events_service.get_event_detail(event_id)
+        if not detail:
             raise HTTPException(status_code=404, detail="Event not found")
-        spans = _fetch_spans(db, event.event_id)
-        return EventResponse(
-            event_id=event.event_id,
-            ts_start=event.ts_start,
-            ts_end=event.ts_end,
-            app_name=event.app_name,
-            window_title=event.window_title,
-            url=event.url,
-            domain=event.domain,
-            screenshot_path=event.screenshot_path,
-            focus_path=event.focus_path,
-            screenshot_hash=event.screenshot_hash,
-            ocr_text=event.ocr_text,
-            ocr_spans=spans,
-            tags=event.tags,
-        )
+        return EventResponse(**detail.model_dump())
 
     @router.post("/api/delete_range")
     def delete_range_endpoint(request: DeleteRangeRequest) -> DeleteRangeResponse:

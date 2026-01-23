@@ -84,8 +84,9 @@ The local SQLite DB contains:
   for layout and UI-grounding evidence.
 
 ## UI
-- Local FastAPI server serves `/` from `autocapture/ui/web/`.
-- UI includes Chat, Search, Highlights, and Settings surfaces.
+- Local FastAPI server serves `/` from `autocapture/ui/web/` (built output).
+- Web console source lives in `autocapture/ui/console/` and builds into `autocapture/ui/web/`.
+- UI includes Dashboard, Ask, Search, Explorer, Highlights, Settings, Plugins, Maintenance, Audit, and Logs/Perf.
 
 ## API Composition
 - `autocapture/api/server.py` is a shim that exposes `create_app` only; route/middleware definitions live elsewhere (enforced by `tests/test_architecture_boundaries.py`).

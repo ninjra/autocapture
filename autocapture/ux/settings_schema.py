@@ -201,6 +201,7 @@ def build_settings_schema() -> SettingsSchema:
                     description="Allow cloud processing where supported.",
                     kind="bool",
                     tier="expert",
+                    danger_level="danger",
                 ),
                 SettingsField(
                     path="privacy.allow_cloud_images",
@@ -208,6 +209,7 @@ def build_settings_schema() -> SettingsSchema:
                     description="Allow sending images to cloud vision providers.",
                     kind="bool",
                     tier="expert",
+                    danger_level="danger",
                 ),
                 SettingsField(
                     path="privacy.allow_token_vault_decrypt",
@@ -215,6 +217,7 @@ def build_settings_schema() -> SettingsSchema:
                     description="Permit API decrypt of stored tokens.",
                     kind="bool",
                     tier="expert",
+                    danger_level="danger",
                 ),
             ],
         ),

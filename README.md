@@ -101,6 +101,8 @@ poetry run ruff check .
 poetry run black --check .
 poetry run pytest -q
 ```
+Required: Always run `poetry install --with dev` and ensure tests pass before moving on to
+the next task.
 
 For a CI-parity preflight on Windows (with an optional WSL/Linux pass), run:
 ```powershell
@@ -110,7 +112,18 @@ Set `AUTOCAPTURE_PREFLIGHT_WSL=0` to skip the WSL/Linux portion, or
 `AUTOCAPTURE_PREFLIGHT_BUNDLE=1` to build the PyInstaller bundle, and
 `AUTOCAPTURE_PREFLIGHT_INSTALLER=1` to build the Inno Setup installer.
 
-Node.js is not required for the core workflows; the UI assets are bundled in the repo.
+Node.js is not required at runtime; the web console is built from `autocapture/ui/console`
+into `autocapture/ui/web` and bundled in the repo. To rebuild the UI:
+```powershell
+cd autocapture/ui/console
+npm install
+npm run build
+```
+
+To start the local API server and open the UI:
+```powershell
+poetry run autocapture ui open
+```
 
 ### Spec and Schema Validation
 

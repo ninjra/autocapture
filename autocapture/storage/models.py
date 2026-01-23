@@ -34,6 +34,10 @@ class EventRecord(Base):
             "embedding_status",
             "embedding_heartbeat_at",
         ),
+        Index("ix_events_app_name", "app_name"),
+        Index("ix_events_domain", "domain"),
+        Index("ix_events_ts_start_app_name", "ts_start", "app_name"),
+        Index("ix_events_ts_start_domain", "ts_start", "domain"),
     )
 
     event_id: Mapped[str] = mapped_column(

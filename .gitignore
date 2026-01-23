@@ -31,6 +31,8 @@ node_modules/
 # .NET artifacts
 src/**/obj/
 src/**/bin/
+archive/**/obj/
+archive/**/bin/
 
 # Logs
 *.log

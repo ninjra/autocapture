@@ -24,9 +24,11 @@ from ...ux.models import (
     SettingsPreviewResponse,
     SettingsSchema,
     StateSnapshot,
+    StorageStatsResponse,
 )
 from ...ux.settings_service import SettingsService
 from ...ux.state_service import StateService
+from ...ux.storage_service import StorageService
 from ...ux.perf_log import read_perf_log
 from ...runtime_env import ProfileName
 from ...runtime_profile_override import write_profile_override
@@ -67,6 +69,7 @@ def build_ux_router(container: AppContainer) -> APIRouter:
     doctor_service = DoctorService(config)
     delete_service = DeleteService(config, db, index_pruner=container.index_pruner)
     audit_service = AuditService(db)
+    storage_service = StorageService(config)
 
     @router.get("/api/state", response_model=StateSnapshot)
     def state_snapshot() -> StateSnapshot:
@@ -150,11 +153,21 @@ def build_ux_router(container: AppContainer) -> APIRouter:
     def perf_log(
         component: str = Query("runtime"),
         limit: int = Query(200, ge=1, le=2000),
+        tail: int | None = Query(None, ge=1, le=2000),
     ):
         try:
-            return read_perf_log(Path(config.capture.data_dir), component=component, limit=limit)
+            resolved_limit = tail or limit
+            return read_perf_log(
+                Path(config.capture.data_dir),
+                component=component,
+                limit=resolved_limit,
+            )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @router.get("/api/storage/stats", response_model=StorageStatsResponse)
+    def storage_stats() -> StorageStatsResponse:
+        return storage_service.stats()
 
     @router.post("/api/runtime/profile")
     def runtime_profile(body: RuntimeProfileBody):

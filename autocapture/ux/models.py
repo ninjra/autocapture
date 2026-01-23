@@ -49,6 +49,23 @@ class StorageStatus(BaseModel):
     min_free_mb: Optional[int] = None
 
 
+class StorageStatsResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_dir: str
+    media_dir: str
+    staging_dir: str
+    db_path: Optional[str] = None
+    media_bytes: int = 0
+    staging_bytes: int = 0
+    db_bytes: int = 0
+    total_bytes: int = 0
+    free_bytes: Optional[int] = None
+    collected_at_utc: str
+    cache_hit: bool = False
+    cache_age_s: float = 0.0
+
+
 class PrivacySummary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -213,6 +230,7 @@ class SettingsField(BaseModel):
     multiline: bool = False
     requires_restart: bool = False
     sensitive: bool = False
+    danger_level: str = Field("info", description="info|warn|danger")
 
 
 class SettingsSection(BaseModel):

@@ -23,6 +23,13 @@ This repo enforces deterministic gates for pillars.
 - `artifacts/conflict_report.json`
 - `artifacts/integrity_report.json`
 
+## Required testing
+Always run this before moving on to the next task or running the gates:
+```bash
+poetry install --with dev
+poetry run pytest -q
+```
+
 ## Local run
 ```bash
 poetry run python tools/pillar_gate.py
@@ -35,4 +42,3 @@ poetry run python tools/no_evidence_gate.py
 poetry run python tools/conflict_gate.py
 poetry run python tools/integrity_gate.py
 ```
-

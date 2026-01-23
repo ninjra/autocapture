@@ -51,6 +51,9 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     sub.add_parser("app", help="Run the tray UI + full local pipeline.")
     sub.add_parser("tray", help="Alias for app.")
     sub.add_parser("api", help="Run the local API + UI server.")
+    ui = sub.add_parser("ui", help="Web console utilities.")
+    ui_sub = ui.add_subparsers(dest="ui_cmd", required=True)
+    ui_sub.add_parser("open", help="Open the web console in a browser.")
     sub.add_parser("gateway", help="Run the LLM gateway service.")
     sub.add_parser("graph-worker", help="Run the graph retrieval worker service.")
     sub.add_parser("memory-service", help="Run the organizational Memory Service.")
@@ -257,6 +260,71 @@ def _run_runtime(config: AppConfig, runtime_env: RuntimeEnvConfig) -> int:
     log.info("Autocapture running. Press Ctrl+C to stop.")
     runtime.wait_forever()
     runtime.stop()
+    return 0
+
+
+def _ui_url(config: AppConfig) -> str:
+    scheme = "https" if config.mode.https_enabled else "http"
+    host = config.api.bind_host or "127.0.0.1"
+    if host in {"0.0.0.0", "::", ""} or is_loopback_host(host):
+        host = "127.0.0.1"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    return f"{scheme}://{host}:{config.api.port}"
+
+
+def _ui_server_ready(url: str) -> bool:
+    try:
+        import httpx
+
+        resp = httpx.get(f"{url}/health", timeout=1.0, verify=False)
+        return resp.status_code < 500
+    except Exception:
+        return False
+
+
+def _ui_open(config: AppConfig) -> int:
+    import threading
+    import webbrowser
+
+    from .api.server import create_app
+    import uvicorn
+
+    url = _ui_url(config)
+    logger = get_logger("cli")
+    if _ui_server_ready(url):
+        logger.info("UI already running at {}", url)
+        print(url)
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+        return 0
+
+    _validate_remote_mode(config)
+    logger.info("Starting UI server at {}", url)
+    print(url)
+
+    def _open_browser() -> None:
+        try:
+            time.sleep(1.0)
+            webbrowser.open(url)
+        except Exception:
+            return
+
+    threading.Thread(target=_open_browser, daemon=True).start()
+    app = create_app(config)
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app,
+            host=config.api.bind_host,
+            port=config.api.port,
+            log_level="info",
+            ssl_certfile=(str(config.mode.tls_cert_path) if config.mode.https_enabled else None),
+            ssl_keyfile=(str(config.mode.tls_key_path) if config.mode.https_enabled else None),
+        )
+    )
+    server.run()
     return 0
 
 
@@ -825,6 +893,10 @@ def main(argv: list[str] | None = None) -> None:
             pruner.prune_event_ids(event_ids)
             logger.info("Pruned {} orphaned event ids from indexes.", len(event_ids))
             return
+
+    if cmd == "ui":
+        if args.ui_cmd == "open":
+            raise SystemExit(_ui_open(config))
 
     if cmd == "api":
         from .api.server import create_app

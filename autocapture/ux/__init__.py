@@ -38,6 +38,7 @@ from .models import (
     StateDiagnostics,
     StateSnapshot,
     StorageStatus,
+    StorageStatsResponse,
     AppInfo,
 )
 
@@ -79,5 +80,6 @@ __all__ = [
     "StateDiagnostics",
     "StateSnapshot",
     "StorageStatus",
+    "StorageStatsResponse",
     "AppInfo",
 ]
