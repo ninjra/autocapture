@@ -132,6 +132,8 @@ class DatabaseManager:
             engine_kwargs["pool_size"] = config.pool_size
             engine_kwargs["max_overflow"] = config.max_overflow
         self._engine = create_engine(config.url, **engine_kwargs)
+        if is_sqlite and config.encryption_enabled and not is_memory:
+            self._apply_sqlcipher_dialect_compat()
         if is_sqlite:
             self._register_sqlite_pragmas(is_memory)
         if is_memory:
@@ -277,6 +279,22 @@ class DatabaseManager:
     def _load_sqlcipher_key(self) -> bytes:
         data_dir = Path(self._config.url.replace("sqlite:///", "")).parent
         return load_sqlcipher_key(self._config, data_dir)
+
+    def _apply_sqlcipher_dialect_compat(self) -> None:
+        """Force SQLAlchemy to avoid deterministic kwarg for SQLCipher DBAPI."""
+
+        dialect = getattr(self._engine, "dialect", None)
+        if dialect is None:
+            return
+        try:
+            setattr(dialect, "_sqlite_version_info", (3, 8, 2))
+        except Exception:
+            pass
+        if self._sqlcipher_module is not None:
+            try:
+                setattr(dialect, "dbapi", self._sqlcipher_module)
+            except Exception:
+                return
 
     def _sqlite_path_from_url(self, url: str) -> str:
         if url.startswith("sqlite:////"):

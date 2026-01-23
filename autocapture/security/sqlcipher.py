@@ -8,6 +8,9 @@ from pathlib import Path
 from ..config import DatabaseConfig
 from ..logging_utils import get_logger
 
+_SQLCIPHER_SQLALCHEMY_VERSION_INFO = (3, 8, 2)
+_SQLCIPHER_SQLALCHEMY_VERSION = "3.8.2"
+
 
 def _ensure_private_permissions(path: Path) -> None:
     if os.name == "nt":
@@ -65,6 +68,7 @@ def _write_key(path: Path, key: bytes, use_dpapi: bool, log) -> None:
 def ensure_sqlcipher_create_function_compat(sqlcipher_module) -> None:
     """Ensure SQLCipher connections accept deterministic kwarg for create_function."""
 
+    _force_sqlcipher_sqlalchemy_compat(sqlcipher_module)
     conn_cls = getattr(sqlcipher_module, "Connection", None)
     if conn_cls is None:
         return
@@ -87,9 +91,14 @@ def ensure_sqlcipher_create_function_compat(sqlcipher_module) -> None:
         patched = False
 
     if not patched:
-        # Fall back by downgrading reported SQLite version so SQLAlchemy skips deterministic kwarg.
-        try:
-            setattr(sqlcipher_module, "sqlite_version_info", (3, 7, 0))
-            setattr(sqlcipher_module, "sqlite_version", "3.7.0")
-        except Exception:
-            return
+        _force_sqlcipher_sqlalchemy_compat(sqlcipher_module)
+
+
+def _force_sqlcipher_sqlalchemy_compat(sqlcipher_module) -> None:
+    """Force SQLAlchemy to avoid deterministic kwarg for SQLCipher DBAPI."""
+
+    try:
+        setattr(sqlcipher_module, "sqlite_version_info", _SQLCIPHER_SQLALCHEMY_VERSION_INFO)
+        setattr(sqlcipher_module, "sqlite_version", _SQLCIPHER_SQLALCHEMY_VERSION)
+    except Exception:
+        return
