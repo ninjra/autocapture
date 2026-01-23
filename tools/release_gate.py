@@ -140,7 +140,10 @@ def main() -> int:
                 ]
             )
         else:
-            print("== Inno Setup installer skipped (AUTOCAPTURE_PREFLIGHT_INSTALLER=1 to enable) ==")
+            print(
+                "== Inno Setup installer skipped "
+                "(AUTOCAPTURE_PREFLIGHT_INSTALLER=1 to enable) =="
+            )
 
     return 0
 

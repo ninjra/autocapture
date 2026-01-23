@@ -46,7 +46,8 @@ class LexicalIndex:
             conn.execute(
                 text(
                     "CREATE VIRTUAL TABLE IF NOT EXISTS event_fts "
-                    "USING fts5(event_id UNINDEXED, ocr_text, window_title, app_name, domain, url, agent_text)"
+                    "USING fts5(event_id UNINDEXED, ocr_text, window_title, app_name, domain, url, "
+                    "agent_text)"
                 )
             )
             try:
@@ -169,14 +170,15 @@ class LexicalIndex:
                 rows = conn.execute(
                     text(
                         "SELECT event_id, ts_rank_cd("
-                        "to_tsvector('english', coalesce(ocr_text_normalized, ocr_text,'') || ' ' || "
-                        "coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' || "
-                        "coalesce(domain,'') || ' ' || coalesce(url,'')), "
+                        "to_tsvector('english', coalesce(ocr_text_normalized, ocr_text,'') || ' ' "
+                        "|| coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' "
+                        "|| coalesce(domain,'') || ' ' || coalesce(url,'')), "
                         "plainto_tsquery('english', :query)) AS rank "
                         "FROM events "
-                        "WHERE to_tsvector('english', coalesce(ocr_text_normalized, ocr_text,'') || ' ' || "
-                        "coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' || "
-                        "coalesce(domain,'') || ' ' || coalesce(url,'')) @@ "
+                        "WHERE to_tsvector('english', "
+                        "coalesce(ocr_text_normalized, ocr_text,'') || ' ' "
+                        "|| coalesce(window_title,'') || ' ' || coalesce(app_name,'') || ' ' "
+                        "|| coalesce(domain,'') || ' ' || coalesce(url,'')) @@ "
                         "plainto_tsquery('english', :query) "
                         "ORDER BY rank DESC LIMIT :limit"
                     ),
