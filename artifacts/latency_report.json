@@ -1,0 +1,7 @@
+{
+  "total_ms": 1500.0,
+  "budget_total_ms": 1500,
+  "budget_multiplier": 3.0,
+  "budget_threshold_ms": 4500.0,
+  "mode": "NORMAL"
+}

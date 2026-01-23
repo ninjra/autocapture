@@ -9,6 +9,26 @@ try {
 
 Set-Location $repoRoot
 
+$cacheRoot = Join-Path $env:LOCALAPPDATA "Autocapture\\setup-cache"
+New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
+
+$env:POETRY_VIRTUALENVS_IN_PROJECT = "1"
+if (-not $env:HF_HOME) {
+    $env:HF_HOME = Join-Path $env:LOCALAPPDATA "Autocapture\\hf"
+}
+if (-not $env:HUGGINGFACE_HUB_CACHE) {
+    $env:HUGGINGFACE_HUB_CACHE = Join-Path $env:HF_HOME "hub"
+}
+if (-not $env:TRANSFORMERS_CACHE) {
+    $env:TRANSFORMERS_CACHE = Join-Path $env:HF_HOME "transformers"
+}
+if (-not $env:FASTEMBED_CACHE_PATH) {
+    $env:FASTEMBED_CACHE_PATH = Join-Path $env:LOCALAPPDATA "Autocapture\\fastembed"
+}
+if (-not $env:HF_HUB_DISABLE_SYMLINKS_WARNING) {
+    $env:HF_HUB_DISABLE_SYMLINKS_WARNING = "1"
+}
+
 $configPath = $env:AUTOCAPTURE_CONFIG
 if (-not $configPath) {
     $configPath = Join-Path $env:LOCALAPPDATA "Autocapture\\autocapture.yml"
@@ -183,6 +203,21 @@ function Ensure-Torch {
     }
 }
 
+function Get-PoetryInstallSignature {
+    param(
+        [string]$Extras,
+        [string]$Groups
+    )
+    $lockPath = Join-Path $repoRoot "poetry.lock"
+    if (-not (Test-Path $lockPath)) {
+        return ""
+    }
+    $lockHash = (Get-FileHash $lockPath -Algorithm SHA256).Hash
+    $pythonVersion = & poetry run python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    $pythonVersion = $pythonVersion.Trim()
+    return "$lockHash|$Extras|$Groups|$pythonVersion"
+}
+
 function Get-DesiredModels {
     $override = $env:AUTOCAPTURE_OLLAMA_MODELS
     if ($override) {
@@ -209,6 +244,45 @@ function Get-DesiredModels {
         Write-Error "Failed to parse Ollama model map."
         exit 1
     }
+}
+
+function Get-InstalledOllamaModels {
+    $models = @()
+    try {
+        $output = & ollama list 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $output) {
+            return $models
+        }
+        $lines = $output -split "`r?`n"
+        foreach ($line in $lines) {
+            $trimmed = $line.Trim()
+            if (-not $trimmed -or $trimmed -match '^NAME\\s+') {
+                continue
+            }
+            $parts = $trimmed -split "\\s+"
+            if ($parts.Length -gt 0) {
+                $models += $parts[0]
+            }
+        }
+    } catch {
+        return $models
+    }
+    return $models
+}
+
+function Test-OllamaModelPresent {
+    param([string]$Model, [string[]]$Installed)
+    if (-not $Model) {
+        return $false
+    }
+    if ($Installed -contains $Model) {
+        return $true
+    }
+    if ($Model -notmatch ":") {
+        $prefix = "$Model:"
+        return $Installed | Where-Object { $_.StartsWith($prefix) } | ForEach-Object { $true } | Select-Object -First 1
+    }
+    return $false
 }
 
 function Get-OllamaFallback {
@@ -266,6 +340,7 @@ config_path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 function Pull-Models {
     param([object[]]$ModelMap)
     $pullCache = @{}
+    $installed = Get-InstalledOllamaModels
     foreach ($entry in $ModelMap) {
         $model = $entry.model
         if (-not $model) {
@@ -275,10 +350,17 @@ function Pull-Models {
         if (-not $model) {
             continue
         }
+        if (Test-OllamaModelPresent -Model $model -Installed $installed) {
+            $pullCache[$model] = $true
+            continue
+        }
         if (-not $pullCache.ContainsKey($model)) {
             Write-Host "Ensuring Ollama model: $model"
             & ollama pull $model
             $pullCache[$model] = ($LASTEXITCODE -eq 0)
+            if ($pullCache[$model]) {
+                $installed += $model
+            }
         }
         if ($pullCache[$model]) {
             continue
@@ -292,10 +374,17 @@ function Pull-Models {
         if ($entry.path) {
             Patch-ConfigValue $entry.path $fallback
         }
+        if (Test-OllamaModelPresent -Model $fallback -Installed $installed) {
+            $pullCache[$fallback] = $true
+            continue
+        }
         if (-not $pullCache.ContainsKey($fallback)) {
             Write-Host "Ensuring Ollama model: $fallback"
             & ollama pull $fallback
             $pullCache[$fallback] = ($LASTEXITCODE -eq 0)
+            if ($pullCache[$fallback]) {
+                $installed += $fallback
+            }
         }
         if (-not $pullCache[$fallback]) {
             Write-Error "Failed to pull fallback Ollama model '$fallback'."
@@ -320,11 +409,40 @@ if (-not $groups) {
 }
 Ensure-Poetry
 $skipInstall = $env:AUTOCAPTURE_SKIP_POETRY_INSTALL
+$forceInstall = $env:AUTOCAPTURE_FORCE_POETRY_INSTALL
 if ($skipInstall -and $skipInstall.Trim().ToLower() -in @("1","true","yes","on")) {
     Write-Host "Skipping Poetry install (AUTOCAPTURE_SKIP_POETRY_INSTALL=1)."
 } else {
-    Write-Host "Installing Python deps (extras: $extras)..."
-    poetry install --with $groups --extras "$extras"
+    $sig = Get-PoetryInstallSignature -Extras $extras -Groups $groups
+    $sigPath = Join-Path $cacheRoot "poetry_install.sig"
+    $prevSig = ""
+    if (Test-Path $sigPath) {
+        $prevSig = (Get-Content $sigPath -Raw).Trim()
+    }
+    $venvPath = ""
+    try {
+        $venvPath = (& poetry env info -p 2>$null).Trim()
+    } catch {
+        $venvPath = ""
+    }
+    $venvOk = $false
+    if ($venvPath -and (Test-Path $venvPath)) {
+        $venvOk = $true
+    } elseif (Test-Path (Join-Path $repoRoot ".venv")) {
+        $venvOk = $true
+    }
+    if ($forceInstall -and $forceInstall.Trim().ToLower() -in @("1","true","yes","on")) {
+        $prevSig = ""
+    }
+    if ($sig -and $sig -eq $prevSig -and $venvOk) {
+        Write-Host "Poetry deps already installed; skipping."
+    } else {
+        Write-Host "Installing Python deps (extras: $extras)..."
+        poetry install --with $groups --extras "$extras"
+        if ($sig) {
+            Set-Content -Path $sigPath -Value $sig -Encoding UTF8
+        }
+    }
 }
 if (-not $cudaAvailable) {
     $cudaAvailable = Test-CudaAvailable
@@ -344,10 +462,29 @@ if ($models.Count -gt 0) {
 
 Write-Host "Warming local models..."
 $warmVlm = $env:AUTOCAPTURE_WARM_VLM
-if ($warmVlm -and $warmVlm.Trim().ToLower() -in @("0","false","no","off")) {
-    poetry run python tools/warm_models.py --skip-vlm
+$skipWarmCache = $env:AUTOCAPTURE_SKIP_WARM_IF_CACHED
+$warmSigPath = Join-Path $cacheRoot "warm_models.sig"
+$configHash = ""
+if (Test-Path $configPath) {
+    $configHash = (Get-FileHash $configPath -Algorithm SHA256).Hash
+}
+$warmSig = "$configHash|$warmVlm"
+$prevWarmSig = ""
+if (Test-Path $warmSigPath) {
+    $prevWarmSig = (Get-Content $warmSigPath -Raw).Trim()
+}
+$skipWarm = $skipWarmCache -and $skipWarmCache.Trim().ToLower() -in @("1","true","yes","on")
+if ($skipWarm -and $warmSig -and $warmSig -eq $prevWarmSig) {
+    Write-Host "Model warmup already completed; skipping."
 } else {
-    poetry run python tools/warm_models.py
+    if ($warmVlm -and $warmVlm.Trim().ToLower() -in @("0","false","no","off")) {
+        poetry run python tools/warm_models.py --skip-vlm
+    } else {
+        poetry run python tools/warm_models.py
+    }
+    if ($warmSig) {
+        Set-Content -Path $warmSigPath -Value $warmSig -Encoding UTF8
+    }
 }
 
 $skipDoctor = $env:AUTOCAPTURE_SKIP_DOCTOR

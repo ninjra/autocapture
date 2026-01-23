@@ -9,6 +9,26 @@ try {
 
 Set-Location $repoRoot
 
+$cacheRoot = Join-Path $env:LOCALAPPDATA "Autocapture\\setup-cache"
+New-Item -ItemType Directory -Force -Path $cacheRoot | Out-Null
+
+$env:POETRY_VIRTUALENVS_IN_PROJECT = "1"
+if (-not $env:HF_HOME) {
+    $env:HF_HOME = Join-Path $env:LOCALAPPDATA "Autocapture\\hf"
+}
+if (-not $env:HUGGINGFACE_HUB_CACHE) {
+    $env:HUGGINGFACE_HUB_CACHE = Join-Path $env:HF_HOME "hub"
+}
+if (-not $env:TRANSFORMERS_CACHE) {
+    $env:TRANSFORMERS_CACHE = Join-Path $env:HF_HOME "transformers"
+}
+if (-not $env:FASTEMBED_CACHE_PATH) {
+    $env:FASTEMBED_CACHE_PATH = Join-Path $env:LOCALAPPDATA "Autocapture\\fastembed"
+}
+if (-not $env:HF_HUB_DISABLE_SYMLINKS_WARNING) {
+    $env:HF_HUB_DISABLE_SYMLINKS_WARNING = "1"
+}
+
 function Resolve-PythonCommand {
     if (Get-Command python -ErrorAction SilentlyContinue) {
         return @("python")
@@ -148,7 +168,51 @@ $groups = $env:AUTOCAPTURE_POETRY_GROUPS
 if (-not $groups) {
     $groups = "dev"
 }
-poetry install --with $groups --extras $extras
+function Get-PoetryInstallSignature {
+    param(
+        [string]$Extras,
+        [string]$Groups
+    )
+    $lockPath = Join-Path $repoRoot "poetry.lock"
+    if (-not (Test-Path $lockPath)) {
+        return ""
+    }
+    $lockHash = (Get-FileHash $lockPath -Algorithm SHA256).Hash
+    $pythonVersion = & poetry run python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+    $pythonVersion = $pythonVersion.Trim()
+    return "$lockHash|$Extras|$Groups|$pythonVersion"
+}
+
+$sig = Get-PoetryInstallSignature -Extras $extras -Groups $groups
+$sigPath = Join-Path $cacheRoot "poetry_install.sig"
+$prevSig = ""
+if (Test-Path $sigPath) {
+    $prevSig = (Get-Content $sigPath -Raw).Trim()
+}
+$venvPath = ""
+try {
+    $venvPath = (& poetry env info -p 2>$null).Trim()
+} catch {
+    $venvPath = ""
+}
+$venvOk = $false
+if ($venvPath -and (Test-Path $venvPath)) {
+    $venvOk = $true
+} elseif (Test-Path (Join-Path $repoRoot ".venv")) {
+    $venvOk = $true
+}
+$forceInstall = $env:AUTOCAPTURE_FORCE_POETRY_INSTALL
+if ($forceInstall -and $forceInstall.Trim().ToLower() -in @("1","true","yes","on")) {
+    $prevSig = ""
+}
+if ($sig -and $sig -eq $prevSig -and $venvOk) {
+    Write-Host "Poetry deps already installed; skipping."
+} else {
+    poetry install --with $groups --extras $extras
+    if ($sig) {
+        Set-Content -Path $sigPath -Value $sig -Encoding UTF8
+    }
+}
 
 function Get-BaseDirFromConfig {
     $code = @'
