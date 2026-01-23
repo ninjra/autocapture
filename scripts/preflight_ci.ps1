@@ -52,20 +52,34 @@ function Ensure-InnoSetup {
     return (Get-Command iscc -ErrorAction SilentlyContinue) -ne $null
 }
 
-$skipPackaging = $env:AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING
-if (-not $skipPackaging) {
-    $skipPackaging = "0"
+$runBundle = $env:AUTOCAPTURE_PREFLIGHT_BUNDLE
+if (-not $runBundle) {
+    $runBundle = "0"
 }
 
-if ($skipPackaging -eq "1") {
-    Write-Host "== Packaging preflight skipped (AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING=1) =="
+$runInstaller = $env:AUTOCAPTURE_PREFLIGHT_INSTALLER
+if (-not $runInstaller) {
+    $runInstaller = "0"
+}
+
+if ($runBundle -eq "1") {
+    poetry run pyinstaller pyinstaller.spec
 } else {
-    if (-not (Ensure-InnoSetup)) {
-        Write-Error "Inno Setup (iscc) not found and auto-install failed. Run this script in an elevated PowerShell or set AUTOCAPTURE_PREFLIGHT_SKIP_PACKAGING=1."
+    Write-Host "== PyInstaller bundle skipped (AUTOCAPTURE_PREFLIGHT_BUNDLE=1 to enable) =="
+}
+
+if ($runInstaller -eq "1") {
+    if ($runBundle -ne "1") {
+        Write-Error "Installer requested but bundle disabled. Set AUTOCAPTURE_PREFLIGHT_BUNDLE=1."
         exit 1
     }
-    poetry run pyinstaller pyinstaller.spec
+    if (-not (Ensure-InnoSetup)) {
+        Write-Error "Inno Setup (iscc) not found and auto-install failed. Run this script in an elevated PowerShell."
+        exit 1
+    }
     iscc installer\\autocapture.iss
+} else {
+    Write-Host "== Inno Setup installer skipped (AUTOCAPTURE_PREFLIGHT_INSTALLER=1 to enable) =="
 }
 
 $skipWsl = $env:AUTOCAPTURE_PREFLIGHT_WSL
