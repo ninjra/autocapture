@@ -58,8 +58,23 @@ def composite_frames(frames: list[CaptureFrame], layout_mode: str) -> Optional[I
     return canvas
 
 
+def _ensure_even_dimensions(image: Image.Image) -> Image.Image:
+    """Pad frames to even dimensions for encoder compatibility (NVENC requires 2x2 alignment)."""
+    width, height = image.size
+    target_width = width + (width % 2)
+    target_height = height + (height % 2)
+    if target_width == width and target_height == height:
+        return image
+    padded = Image.new(image.mode, (target_width, target_height))
+    padded.paste(image, (0, 0))
+    return padded
+
+
 class SegmentRecorder:
     """Manage a single FFmpeg process per active activity segment."""
+
+    _NVENC_ENCODERS = ("av1_nvenc", "hevc_nvenc", "h264_nvenc")
+    _CPU_ENCODERS = (("libx264", "ultrafast"),)
 
     def __init__(self, capture_config: CaptureConfig, ffmpeg_config: FFmpegConfig) -> None:
         self._config = capture_config
@@ -92,6 +107,16 @@ class SegmentRecorder:
         self._drop_window: deque[float] = deque(maxlen=500)
         self._lock = threading.Lock()
         self._accepting_frames = False
+        self._pad_logged = False
+        self._blocked_encoders: set[str] = set()
+        self._force_cpu = False
+        self._force_cpu_logged = False
+        self._ffmpeg_failure_times: deque[float] = deque(maxlen=20)
+        self._ffmpeg_failure_window_s = 30.0
+        self._ffmpeg_failure_backoff_s = 60.0
+        self._ffmpeg_failure_threshold = 3
+        self._disable_until = 0.0
+        self._disable_logged_at = 0.0
 
     @property
     def is_available(self) -> bool:
@@ -107,6 +132,17 @@ class SegmentRecorder:
             return None
         if self._ffmpeg_path is None:
             return None
+        if self._disable_until:
+            now = time.monotonic()
+            if now < self._disable_until:
+                if now - self._disable_logged_at > 5.0:
+                    self._disable_logged_at = now
+                    remaining = max(0.0, self._disable_until - now)
+                    self._log.warning(
+                        "FFmpeg disabled temporarily after repeated failures (cooldown {:.0f}s).",
+                        remaining,
+                    )
+                return None
         with self._lock:
             if self._segment is not None and self._segment.state == "recording":
                 return self._segment
@@ -129,6 +165,7 @@ class SegmentRecorder:
             self._stop_event.clear()
             self._stderr_lines.clear()
             self._accepting_frames = True
+            self._pad_logged = False
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
             return self._segment
@@ -204,8 +241,21 @@ class SegmentRecorder:
             composite = composite_frames(item, self._config.layout_mode)
             if composite is None:
                 continue
+            padded = _ensure_even_dimensions(composite)
+            if padded is not composite and not self._pad_logged:
+                self._pad_logged = True
+                self._log.warning(
+                    "Frame padded to even dimensions for encoder compatibility ({}x{} -> {}x{}).",
+                    composite.size[0],
+                    composite.size[1],
+                    padded.size[0],
+                    padded.size[1],
+                )
+            composite = padded
             if self._process is None:
                 if self._segment is None:
+                    break
+                if self._segment.state != "recording":
                     break
                 process, encoder = self._start_process(composite.size, self._segment.video_path)
                 if process is None:
@@ -238,49 +288,47 @@ class SegmentRecorder:
         fps = max(1, int(self._config.hid.fps_soft_cap))
         bitrate = self._config.video_bitrate
         preset = self._config.video_preset
-        encoder_candidates = ["av1_nvenc", "hevc_nvenc", "h264_nvenc"]
-        fallback_encoders = [("libx264", "ultrafast")]
-
-        for encoder in encoder_candidates:
+        for encoder, encoder_preset, is_hw in self._encoder_plan(preset):
             process = self._spawn_ffmpeg(
                 encoder=encoder,
-                preset=preset,
+                preset=encoder_preset,
                 bitrate=bitrate,
                 fps=fps,
                 size=(width, height),
                 output_path=output_path,
+                output_pix_fmt="yuv420p" if is_hw else None,
             )
             if process is None:
                 continue
-            self._log.info(
-                "Video encoder selected: {} | bitrate={} | preset={}",
-                encoder,
-                bitrate,
-                preset,
-            )
-            return process, encoder
-
-        for encoder, fallback_preset in fallback_encoders:
-            process = self._spawn_ffmpeg(
-                encoder=encoder,
-                preset=fallback_preset,
-                bitrate=bitrate,
-                fps=fps,
-                size=(width, height),
-                output_path=output_path,
-            )
-            if process is None:
-                continue
-            self._log.warning(
-                "Falling back to CPU encoder: {} | bitrate={} | preset={}",
-                encoder,
-                bitrate,
-                fallback_preset,
-            )
+            if is_hw:
+                self._log.info(
+                    "Video encoder selected: {} | bitrate={} | preset={}",
+                    encoder,
+                    bitrate,
+                    encoder_preset,
+                )
+            else:
+                self._log.warning(
+                    "Falling back to CPU encoder: {} | bitrate={} | preset={}",
+                    encoder,
+                    bitrate,
+                    encoder_preset,
+                )
             return process, encoder
 
         self._log.warning("No supported FFmpeg encoder found; video disabled.")
         return None, None
+
+    def _encoder_plan(self, preset: str) -> list[tuple[str, str, bool]]:
+        plan: list[tuple[str, str, bool]] = []
+        if not self._force_cpu:
+            for encoder in self._NVENC_ENCODERS:
+                if encoder in self._blocked_encoders:
+                    continue
+                plan.append((encoder, preset, True))
+        for encoder, cpu_preset in self._CPU_ENCODERS:
+            plan.append((encoder, cpu_preset, False))
+        return plan
 
     def _spawn_ffmpeg(
         self,
@@ -290,6 +338,7 @@ class SegmentRecorder:
         fps: int,
         size: tuple[int, int],
         output_path: Path,
+        output_pix_fmt: Optional[str] = None,
     ) -> Optional[subprocess.Popen[bytes]]:
         width, height = size
         cmd = [
@@ -316,9 +365,10 @@ class SegmentRecorder:
             bitrate,
             "-movflags",
             "+faststart",
-            "-y",
-            str(output_path),
         ]
+        if output_pix_fmt:
+            cmd.extend(["-pix_fmt", output_pix_fmt])
+        cmd.extend(["-y", str(output_path)])
         try:
             log_dir = self._config.data_dir / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -355,16 +405,70 @@ class SegmentRecorder:
     def _write_frame(self, image: Image.Image) -> None:
         if self._process is None or self._process.stdin is None:
             return
+        if self._process.poll() is not None:
+            return_code = self._process.returncode
+            self._log.warning("FFmpeg exited early (code={}); stopping segment.", return_code)
+            if self._segment:
+                self._segment.state = "failed"
+                self._segment.error = f"ffmpeg_exit_{return_code}"
+            stderr_text = self._drain_stderr_text().strip()
+            if stderr_text:
+                self._log.warning("FFmpeg stderr tail: {}", stderr_text)
+            self._record_failure(stderr_text)
+            self._terminate_process()
+            return
         try:
             self._process.stdin.write(image.tobytes())
             if self._segment:
                 self._segment.frame_count += 1
         except BrokenPipeError:
+            self._handle_pipe_error("ffmpeg_broken_pipe")
+        except OSError as exc:
+            self._handle_pipe_error("ffmpeg_pipe_error", exc)
+
+    def _handle_pipe_error(self, error_code: str, exc: Optional[Exception] = None) -> None:
+        if exc is not None:
+            self._log.warning("FFmpeg pipe write failed: {}", exc)
+        else:
             self._log.warning("FFmpeg pipe closed unexpectedly.")
-            if self._segment:
-                self._segment.state = "failed"
-                self._segment.error = "ffmpeg_broken_pipe"
-            self._terminate_process()
+        if self._segment:
+            self._segment.state = "failed"
+            self._segment.error = error_code
+        with self._lock:
+            self._accepting_frames = False
+        stderr_text = self._drain_stderr_text().strip()
+        if stderr_text:
+            self._log.warning("FFmpeg stderr tail: {}", stderr_text)
+        self._record_failure(stderr_text)
+        self._terminate_process()
+        self._signal_stop()
+
+    def _record_failure(self, stderr_text: str) -> None:
+        now = time.monotonic()
+        self._ffmpeg_failure_times.append(now)
+        while self._ffmpeg_failure_times and now - self._ffmpeg_failure_times[0] > (
+            self._ffmpeg_failure_window_s
+        ):
+            self._ffmpeg_failure_times.popleft()
+        if len(self._ffmpeg_failure_times) >= self._ffmpeg_failure_threshold:
+            self._disable_until = now + self._ffmpeg_failure_backoff_s
+            with self._lock:
+                self._accepting_frames = False
+        encoder = self._segment.encoder if self._segment else None
+        if not encoder:
+            return
+        lowered = (stderr_text or "").lower()
+        if encoder.endswith("_nvenc"):
+            if "no capable devices found" in lowered or "no nvenc capable devices found" in lowered:
+                self._force_cpu = True
+                self._blocked_encoders.update(self._NVENC_ENCODERS)
+            elif "yuv444p not supported" in lowered:
+                self._blocked_encoders.add(encoder)
+            elif "could not open encoder" in lowered or "error while opening encoder" in lowered:
+                self._blocked_encoders.add(encoder)
+        if self._force_cpu and not self._force_cpu_logged:
+            self._force_cpu_logged = True
+            self._log.warning("Disabling NVENC after encoder failures; using CPU fallback.")
 
     def _finalize(self) -> None:
         if self._process is None:
@@ -387,40 +491,47 @@ class SegmentRecorder:
                 stderr_text = self._drain_stderr_text().strip()
                 if stderr_text:
                     self._log.warning("FFmpeg stderr tail: {}", stderr_text)
+                self._record_failure(stderr_text)
         self._process = None
         self._frame_size = None
         self._stop_event.clear()
 
     def _terminate_process(self) -> None:
-        if self._process is None:
+        with self._lock:
+            process = self._process
+            self._process = None
+        if process is None:
             return
-        self._process.terminate()
+        process.terminate()
         try:
-            self._process.wait(timeout=2)
+            process.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            self._process.kill()
+            process.kill()
         self._stop_event.set()
         self._stop_stderr_reader()
         self._close_ffmpeg_log_file()
-        self._process = None
 
     def _shutdown_process(self) -> int:
-        if self._process is None:
+        process = self._process
+        if process is None:
             return -1
-        if self._process.stdin:
+        if process.stdin:
             try:
-                self._process.stdin.close()
+                process.stdin.close()
             except Exception:  # pragma: no cover - defensive
                 pass
         try:
-            return self._process.wait(timeout=5)
+            return process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self._log.warning("FFmpeg did not exit in time; terminating.")
-            self._process.terminate()
+            process.terminate()
             try:
-                return self._process.wait(timeout=2)
+                return process.wait(timeout=2)
             except subprocess.TimeoutExpired:
-                self._process.kill()
+                try:
+                    process.kill()
+                except Exception:
+                    pass
                 return -1
 
     def _signal_stop(self, q: queue.Queue[list[CaptureFrame] | None] | None = None) -> None:

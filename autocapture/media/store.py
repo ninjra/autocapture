@@ -119,12 +119,21 @@ class MediaStore:
                 staging_path,
                 final_path,
                 writer=self._encryption.encrypt_file,
+                remove_source=False,
             )
         else:
             atomic_publish(
                 staging_path,
                 final_path,
                 writer=_copy_file,
+                remove_source=False,
+            )
+        try:
+            safe_unlink(staging_path, retries=15, backoff_s=0.1)
+        except PermissionError:
+            self._log.warning(
+                "Video staging file still locked; will retry cleanup later: {}",
+                staging_path,
             )
         return final_path
 

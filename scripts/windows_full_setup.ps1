@@ -9,10 +9,112 @@ try {
 
 Set-Location $repoRoot
 
-if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
-    Write-Error "Poetry not found. Install Poetry and re-run this script."
-    exit 1
+function Resolve-PythonCommand {
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        return @("python")
+    }
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        return @("py", "-3")
+    }
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "Python not found; attempting install via winget..."
+        & winget install --id Python.Python.3.12 -e --accept-source-agreements --accept-package-agreements
+        if (Get-Command python -ErrorAction SilentlyContinue) {
+            return @("python")
+        }
+        if (Get-Command py -ErrorAction SilentlyContinue) {
+            return @("py", "-3")
+        }
+    }
+    return $null
 }
+
+function Ensure-Poetry {
+    if (Get-Command poetry -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    $poetryHome = $env:POETRY_HOME
+    if (-not $poetryHome) {
+        $poetryHome = Join-Path $env:LOCALAPPDATA "pypoetry"
+        $env:POETRY_HOME = $poetryHome
+    }
+    $poetryBin = Join-Path $poetryHome "bin"
+    $poetryExe = Join-Path $poetryBin "poetry.exe"
+    if (Test-Path $poetryExe) {
+        if (-not (($env:Path -split ";") -contains $poetryBin)) {
+            $env:Path = "$poetryBin;$env:Path"
+        }
+        return
+    }
+
+    $pythonCmd = Resolve-PythonCommand
+    if (-not $pythonCmd) {
+        Write-Error "Python not found. Install Python 3.12+ and re-run this script."
+        exit 1
+    }
+
+    Write-Host "Poetry not found; installing to $poetryHome..."
+    $installerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("install_poetry_{0}.py" -f ([System.Guid]::NewGuid().ToString("N")))
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    } catch {
+        # ignore on newer PowerShell versions
+    }
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "https://install.python-poetry.org" -OutFile $installerPath
+    } catch {
+        Write-Error "Failed to download Poetry installer."
+        exit 1
+    }
+
+    $pythonExe = $pythonCmd[0]
+    $pythonExtra = @()
+    if ($pythonCmd.Count -gt 1) {
+        $pythonExtra = $pythonCmd[1..($pythonCmd.Count - 1)]
+    }
+    & $pythonExe @pythonExtra $installerPath -y
+    $installExit = $LASTEXITCODE
+    Remove-Item $installerPath -ErrorAction SilentlyContinue
+    if ($installExit -ne 0) {
+        Write-Error "Poetry installer failed."
+        exit 1
+    }
+
+    if (-not (($env:Path -split ";") -contains $poetryBin)) {
+        $env:Path = "$poetryBin;$env:Path"
+    }
+    if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
+        Write-Error "Poetry install completed but poetry not found on PATH. Reopen the shell and retry."
+        exit 1
+    }
+}
+
+function Test-CudaAvailable {
+    if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+        & nvidia-smi -L > $null 2>&1
+        return $LASTEXITCODE -eq 0
+    }
+    return $false
+}
+
+function Normalize-GpuMode {
+    param([bool]$CudaAvailable)
+    $mode = $env:AUTOCAPTURE_GPU_MODE
+    if (-not $mode) {
+        $env:AUTOCAPTURE_GPU_MODE = "auto"
+        return
+    }
+    $normalized = $mode.Trim().ToLower()
+    if ($normalized -eq "on" -and -not $CudaAvailable) {
+        Write-Host "CUDA unavailable; overriding AUTOCAPTURE_GPU_MODE=on -> auto"
+        $env:AUTOCAPTURE_GPU_MODE = "auto"
+    }
+}
+
+Ensure-Poetry
+$cudaAvailable = Test-CudaAvailable
+Normalize-GpuMode $cudaAvailable
 
 $configPath = $env:AUTOCAPTURE_CONFIG
 if (-not $configPath) {
@@ -30,26 +132,23 @@ if (-not (Test-Path $configPath)) {
     Copy-Item $template $configPath
 }
 
-$env:AUTOCAPTURE_GPU_MODE = "on"
-
-poetry install --with dev --extras "ui windows ocr ocr-gpu embed-fast sqlcipher"
-poetry run python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('torch') else 1)"
-if ($LASTEXITCODE -ne 0) {
-    poetry run pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+if (-not $env:AUTOCAPTURE_GPU_MODE) {
+    $env:AUTOCAPTURE_GPU_MODE = "auto"
 }
 
-function Select-BaseDir {
-    try {
-        $shell = New-Object -ComObject Shell.Application
-        $folder = $shell.BrowseForFolder(0, "Choose a folder for Autocapture data", 0, 0)
-        if ($folder) {
-            return $folder.Self.Path
-        }
-    } catch {
-        return ""
+$extras = $env:AUTOCAPTURE_POETRY_EXTRAS
+if (-not $extras) {
+    $extrasList = @("ui", "windows", "ocr", "embed-fast", "embed-st", "sqlcipher")
+    if ($cudaAvailable) {
+        $extrasList += "ocr-gpu"
     }
-    return ""
+    $extras = ($extrasList -join " ")
 }
+$groups = $env:AUTOCAPTURE_POETRY_GROUPS
+if (-not $groups) {
+    $groups = "dev"
+}
+poetry install --with $groups --extras $extras
 
 function Get-BaseDirFromConfig {
     $code = @'
@@ -100,12 +199,7 @@ if (-not $baseDir) {
     $baseDir = Get-BaseDirFromConfig
 }
 if (-not $baseDir) {
-    $picked = Select-BaseDir
-    if ($picked) {
-        $baseDir = $picked
-    } else {
-        $baseDir = Join-Path $env:LOCALAPPDATA "Autocapture"
-    }
+    $baseDir = Join-Path $env:LOCALAPPDATA "Autocapture"
 }
 if ($baseDir) {
     Write-Host "Using base directory: $baseDir"
@@ -114,6 +208,22 @@ if ($baseDir) {
 
 poetry run autocapture setup --profile full --apply
 poetry run python tools/vendor_windows_binaries.py
+
+$prevSkipInstall = $env:AUTOCAPTURE_SKIP_POETRY_INSTALL
+$prevSkipDoctor = $env:AUTOCAPTURE_SKIP_DOCTOR
+$env:AUTOCAPTURE_SKIP_POETRY_INSTALL = "1"
+$env:AUTOCAPTURE_SKIP_DOCTOR = "1"
+& (Join-Path $repoRoot "scripts\\windows_llm_setup.ps1")
+if ($null -ne $prevSkipInstall) {
+    $env:AUTOCAPTURE_SKIP_POETRY_INSTALL = $prevSkipInstall
+} else {
+    Remove-Item Env:AUTOCAPTURE_SKIP_POETRY_INSTALL -ErrorAction SilentlyContinue
+}
+if ($null -ne $prevSkipDoctor) {
+    $env:AUTOCAPTURE_SKIP_DOCTOR = $prevSkipDoctor
+} else {
+    Remove-Item Env:AUTOCAPTURE_SKIP_DOCTOR -ErrorAction SilentlyContinue
+}
 
 function Invoke-Doctor {
     $prevPreference = $ErrorActionPreference
@@ -132,72 +242,177 @@ function Invoke-Doctor {
     return @($output, $exitCode)
 }
 
-$script:PromptTypeLoaded = $false
-function Show-TopmostPrompt {
-    param(
-        [string]$Text,
-        [string]$Title,
-        [uint32]$Buttons = 0x4,
-        [uint32]$Icon = 0x20
-    )
-    if (-not $script:PromptTypeLoaded) {
-        try {
-            Add-Type -Namespace Win32 -Name NativeMethods -MemberDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class NativeMethods {
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    public static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
-}
-'@
-            $script:PromptTypeLoaded = $true
-        } catch {
-            $script:PromptTypeLoaded = $false
-        }
-    }
-    if (-not $script:PromptTypeLoaded) {
-        return 0
-    }
-    $flags = $Buttons -bor $Icon -bor 0x40000 -bor 0x10000
-    return [Win32.NativeMethods]::MessageBoxW([IntPtr]::Zero, $Text, $Title, $flags)
-}
-
 $doctorResult = Invoke-Doctor
 $doctorOutput = $doctorResult[0]
 $doctorExit = $doctorResult[1]
 $doctorOutput | ForEach-Object { Write-Host $_ }
 
-function Confirm-ResetDb {
-    $result = Show-TopmostPrompt `
-        -Text "Encrypted DB appears invalid. Reset now? This deletes the local DB and key." `
-        -Title "Autocapture" `
-        -Buttons 0x4 `
-        -Icon 0x30
-    return $result -eq 6
+$autoReset = $env:AUTOCAPTURE_RESET_DB_ON_FAIL
+if (-not $autoReset) {
+    $env:AUTOCAPTURE_RESET_DB_ON_FAIL = "1"
+    $autoReset = "1"
 }
 
 if ($doctorOutput -match "file is not a database|hmac check failed|sqlcipher") {
-    if (Confirm-ResetDb) {
+    if ($autoReset -and $autoReset.Trim().ToLower() -in @("1","true","yes","on")) {
+        Write-Host "Resetting encrypted DB (AUTOCAPTURE_RESET_DB_ON_FAIL=1)."
         & (Join-Path $repoRoot "scripts\\windows_reset_db.ps1")
         $doctorResult = Invoke-Doctor
         $doctorOutput = $doctorResult[0]
         $doctorExit = $doctorResult[1]
         $doctorOutput | ForEach-Object { Write-Host $_ }
+    } else {
+        Write-Host "Encrypted DB appears invalid. Set AUTOCAPTURE_RESET_DB_ON_FAIL=1 to auto-reset."
     }
 }
 
-function Confirm-StartApp {
-    $result = Show-TopmostPrompt `
-        -Text "Start Autocapture now?" `
-        -Title "Autocapture" `
-        -Buttons 0x4 `
-        -Icon 0x40
-    return $result -eq 6
+$missingMatches = [regex]::Matches(($doctorOutput -join "`n"), 'model_missing=([^\s]+)')
+if ($missingMatches.Count -gt 0) {
+    $missingModels = $missingMatches | ForEach-Object { $_.Groups[1].Value.Trim() } | Sort-Object -Unique
+    $missingCsv = ($missingModels -join ",")
+    Write-Host "Pulling missing Ollama models: $missingCsv"
+    $prevModels = $env:AUTOCAPTURE_OLLAMA_MODELS
+    $prevSkipInstall = $env:AUTOCAPTURE_SKIP_POETRY_INSTALL
+    $prevSkipDoctor = $env:AUTOCAPTURE_SKIP_DOCTOR
+    $env:AUTOCAPTURE_OLLAMA_MODELS = $missingCsv
+    $env:AUTOCAPTURE_SKIP_POETRY_INSTALL = "1"
+    $env:AUTOCAPTURE_SKIP_DOCTOR = "1"
+    & (Join-Path $repoRoot "scripts\\windows_llm_setup.ps1")
+    if ($null -ne $prevModels) {
+        $env:AUTOCAPTURE_OLLAMA_MODELS = $prevModels
+    } else {
+        Remove-Item Env:AUTOCAPTURE_OLLAMA_MODELS -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $prevSkipInstall) {
+        $env:AUTOCAPTURE_SKIP_POETRY_INSTALL = $prevSkipInstall
+    } else {
+        Remove-Item Env:AUTOCAPTURE_SKIP_POETRY_INSTALL -ErrorAction SilentlyContinue
+    }
+    if ($null -ne $prevSkipDoctor) {
+        $env:AUTOCAPTURE_SKIP_DOCTOR = $prevSkipDoctor
+    } else {
+        Remove-Item Env:AUTOCAPTURE_SKIP_DOCTOR -ErrorAction SilentlyContinue
+    }
+    $doctorResult = Invoke-Doctor
+    $doctorOutput = $doctorResult[0]
+    $doctorExit = $doctorResult[1]
+    $doctorOutput | ForEach-Object { Write-Host $_ }
 }
 
+$skipAutoStart = $env:AUTOCAPTURE_SKIP_AUTO_START
 if ($doctorOutput -notmatch "\\bFAIL\\b" -and $doctorExit -eq 0) {
-    if (Confirm-StartApp) {
-        poetry run autocapture app
+    if ($skipAutoStart -and $skipAutoStart.Trim().ToLower() -in @("1","true","yes","on")) {
+        Write-Host "Auto-start skipped (AUTOCAPTURE_SKIP_AUTO_START=1)."
+    } else {
+        function Get-ConfigProbe {
+            $code = @'
+import json
+import os
+from pathlib import Path
+from autocapture.config import load_config
+from autocapture.paths import default_config_path
+
+config_path = Path(os.environ.get("AUTOCAPTURE_CONFIG") or default_config_path())
+config = load_config(config_path)
+payload = {
+    "host": config.api.bind_host,
+    "port": config.api.port,
+    "log_dir": str(Path(config.capture.data_dir) / "logs"),
+}
+print(json.dumps(payload))
+'@
+            $tempPath = Join-Path ([System.IO.Path]::GetTempPath()) ("autocapture_probe_{0}.py" -f ([System.Guid]::NewGuid().ToString("N")))
+            Set-Content -Path $tempPath -Value $code -Encoding UTF8
+            $output = & poetry run python $tempPath 2>$null
+            Remove-Item $tempPath -ErrorAction SilentlyContinue
+            if ($LASTEXITCODE -ne 0 -or -not $output) {
+                $fallback = @{
+                    host = "127.0.0.1"
+                    port = 8008
+                    log_dir = (Join-Path $env:LOCALAPPDATA "Autocapture\\logs")
+                }
+                return $fallback
+            }
+            try {
+                return $output | ConvertFrom-Json
+            } catch {
+                $fallback = @{
+                    host = "127.0.0.1"
+                    port = 8008
+                    log_dir = (Join-Path $env:LOCALAPPDATA "Autocapture\\logs")
+                }
+                return $fallback
+            }
+        }
+
+        function Wait-ApiHealthy {
+            param(
+                [string]$ApiHost,
+                [int]$ApiPort
+            )
+            $deadline = [DateTime]::UtcNow.AddSeconds(45)
+            $url = "http://{0}:{1}/health" -f $ApiHost, $ApiPort
+            while ([DateTime]::UtcNow -lt $deadline) {
+                try {
+                    $resp = Invoke-WebRequest -UseBasicParsing $url -TimeoutSec 2
+                    if ($resp.StatusCode -eq 200) {
+                        return $true
+                    }
+                } catch {
+                    Start-Sleep -Seconds 1
+                }
+            }
+            return $false
+        }
+
+        function Show-LogTail {
+            param([string]$Path, [string]$Label)
+            if (-not (Test-Path $Path)) {
+                Write-Host "$Label log not found: $Path"
+                return
+            }
+            Write-Host ("==== {0} (tail) ====" -f $Label)
+            Get-Content -Path $Path -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+        }
+
+        function Stop-AutocaptureProcesses {
+            $candidates = Get-CimInstance Win32_Process | Where-Object {
+                $_.CommandLine -and (
+                    $_.CommandLine -match "autocapture\\s+app" -or
+                    $_.CommandLine -match "autocapture\\.exe" -or
+                    $_.CommandLine -match "poetry\\.exe.*autocapture\\s+app"
+                )
+            }
+            foreach ($proc in $candidates) {
+                try {
+                    Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                } catch {
+                    # ignore
+                }
+            }
+            if ($candidates.Count -gt 0) {
+                Start-Sleep -Seconds 2
+            }
+        }
+
+        Write-Host "Starting Autocapture..."
+        Stop-AutocaptureProcesses
+        $probe = Get-ConfigProbe
+        $apiHost = $probe.host
+        $apiPort = [int]$probe.port
+        $logDir = $probe.log_dir
+        $apiLog = Join-Path $logDir "api.log"
+        $appLog = Join-Path $logDir "autocapture.log"
+
+        Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "set AUTOCAPTURE_CONFIG=$env:AUTOCAPTURE_CONFIG && poetry run autocapture app" -WorkingDirectory $repoRoot
+        if (Wait-ApiHealthy -Host $apiHost -Port $apiPort) {
+            Write-Host "Autocapture is up: http://$apiHost`:$apiPort"
+        } else {
+            Write-Host "Autocapture did not become healthy on http://$apiHost`:$apiPort"
+            Show-LogTail -Path $apiLog -Label "api.log"
+            Show-LogTail -Path $appLog -Label "autocapture.log"
+            Write-Host "If logs are empty, the process may have failed before logging started."
+        }
     }
 } else {
     Write-Host "Doctor reported failures; fix them before starting capture."

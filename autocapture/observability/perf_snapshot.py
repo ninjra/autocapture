@@ -34,16 +34,28 @@ class ProcessSampler:
 
     def snapshot(self) -> dict[str, float | None]:
         cpu = None
+        cpu_raw = None
+        cpu_count = None
         rss = None
         try:
-            cpu = float(self.process.cpu_percent(interval=None))
+            cpu_raw = float(self.process.cpu_percent(interval=None))
+            cpu_count = psutil.cpu_count() or 1
+            if cpu_count > 0:
+                cpu = max(0.0, min(cpu_raw / cpu_count, 100.0))
+            else:
+                cpu = cpu_raw
         except Exception:
             cpu = None
         try:
             rss = float(self.process.memory_info().rss) / (1024**2)
         except Exception:
             rss = None
-        return {"cpu_percent": cpu, "rss_mb": rss}
+        return {
+            "cpu_percent": cpu,
+            "cpu_percent_raw": cpu_raw,
+            "cpu_count": cpu_count,
+            "rss_mb": rss,
+        }
 
 
 def collect_samples(

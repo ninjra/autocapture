@@ -68,6 +68,8 @@ def run_doctor(
             _check_ocr,
             _check_embeddings,
             _check_vector_index,
+            _check_llm,
+            _check_agent_vision_llm,
             _check_api_port,
             _check_metrics,
             _check_raw_input,
@@ -481,6 +483,137 @@ def _check_embeddings(config: AppConfig) -> DoctorCheckResult:
         return DoctorCheckResult("embeddings", True, f"{embedder.model_name}")
     except Exception as exc:
         return DoctorCheckResult("embeddings", False, str(exc))
+
+
+def _check_llm(config: AppConfig) -> DoctorCheckResult:
+    provider = config.llm.provider
+    if provider == "ollama":
+        return _check_ollama_endpoint(
+            name="llm",
+            base_url=config.llm.ollama_url,
+            model=config.llm.ollama_model,
+        )
+    if provider == "openai_compatible":
+        return _check_openai_compatible_endpoint(
+            name="llm",
+            base_url=config.llm.openai_compatible_base_url,
+            model=config.llm.openai_compatible_model,
+            api_key=config.llm.openai_compatible_api_key,
+        )
+    if provider == "openai":
+        return _check_openai_endpoint(
+            name="llm",
+            api_key=config.llm.openai_api_key,
+            model=config.llm.openai_model,
+        )
+    return DoctorCheckResult("llm", False, f"Unsupported provider: {provider}")
+
+
+def _check_agent_vision_llm(config: AppConfig) -> DoctorCheckResult:
+    if not config.agents.enabled:
+        return DoctorCheckResult("agents_vision", True, "Agents disabled")
+    provider = config.agents.vision.provider
+    if provider == "ollama":
+        base_url = config.agents.vision.base_url or config.llm.ollama_url
+        return _check_ollama_endpoint(
+            name="agents_vision",
+            base_url=base_url,
+            model=config.agents.vision.model,
+        )
+    if provider == "openai_compatible":
+        return _check_openai_compatible_endpoint(
+            name="agents_vision",
+            base_url=config.agents.vision.base_url,
+            model=config.agents.vision.model,
+            api_key=config.agents.vision.api_key,
+        )
+    return DoctorCheckResult("agents_vision", False, f"Unsupported provider: {provider}")
+
+
+def _check_ollama_endpoint(*, name: str, base_url: str, model: str) -> DoctorCheckResult:
+    if not base_url:
+        return DoctorCheckResult(name, False, "ollama_url is not set")
+    url = base_url.rstrip("/") + "/api/tags"
+    response, error = _http_get(url)
+    if error:
+        return DoctorCheckResult(name, False, f"url={url} error={error}")
+    if response is None:
+        return DoctorCheckResult(name, False, f"url={url} error=unknown")
+    if response.status_code != 200:
+        return DoctorCheckResult(
+            name, False, f"url={url} status={response.status_code} body={response.text[:200]}"
+        )
+    try:
+        payload = response.json()
+    except Exception:
+        return DoctorCheckResult(name, False, f"url={url} error=invalid_json")
+    models = [item.get("name") for item in payload.get("models", []) if item.get("name")]
+    if model and not _ollama_model_available(model, models):
+        return DoctorCheckResult(
+            name,
+            False,
+            f"url={url} model_missing={model} installed={len(models)}",
+        )
+    return DoctorCheckResult(name, True, f"url={url} model={model}")
+
+
+def _ollama_model_available(model: str, models: list[str]) -> bool:
+    if model in models:
+        return True
+    if ":" not in model:
+        prefix = f"{model}:"
+        return any(name.startswith(prefix) for name in models)
+    return False
+
+
+def _check_openai_compatible_endpoint(
+    *,
+    name: str,
+    base_url: str | None,
+    model: str,
+    api_key: str | None,
+) -> DoctorCheckResult:
+    if not base_url:
+        return DoctorCheckResult(name, False, "openai_compatible_base_url is not set")
+    url = base_url.rstrip("/") + "/v1/models"
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    response, error = _http_get(url, headers=headers)
+    if error:
+        return DoctorCheckResult(name, False, f"url={url} error={error}")
+    if response is None:
+        return DoctorCheckResult(name, False, f"url={url} error=unknown")
+    if response.status_code != 200:
+        return DoctorCheckResult(
+            name, False, f"url={url} status={response.status_code} body={response.text[:200]}"
+        )
+    return DoctorCheckResult(name, True, f"url={url} model={model}")
+
+
+def _check_openai_endpoint(*, name: str, api_key: str | None, model: str) -> DoctorCheckResult:
+    if not api_key:
+        return DoctorCheckResult(name, False, "openai_api_key is not set")
+    url = "https://api.openai.com/v1/models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    response, error = _http_get(url, headers=headers)
+    if error:
+        return DoctorCheckResult(name, False, f"url={url} error={error}")
+    if response is None:
+        return DoctorCheckResult(name, False, f"url={url} error=unknown")
+    if response.status_code != 200:
+        return DoctorCheckResult(
+            name, False, f"url={url} status={response.status_code} body={response.text[:200]}"
+        )
+    return DoctorCheckResult(name, True, f"url={url} model={model}")
+
+
+def _http_get(url: str, headers: dict | None = None) -> tuple[httpx.Response | None, str | None]:
+    try:
+        response = httpx.get(url, headers=headers, timeout=5.0)
+        return response, None
+    except Exception as exc:
+        return None, str(exc)
 
 
 def _check_vector_index(config: AppConfig) -> DoctorCheckResult:

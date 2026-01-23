@@ -44,6 +44,15 @@ pyproject.toml        # Project dependencies and tooling configuration
 
 ## Quickstart
 
+Windows one-line setup (recommended for full local demo with models warmed):
+```powershell
+.\scripts\windows_full_setup.bat
+```
+To run the full demo flow (setup + research + promptops + UI):
+```powershell
+.\scripts\demo_flow.bat
+```
+
 1. Create a virtual environment:
    ```powershell
    python -m venv .venv

@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import threading
 import time
+import errno
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -23,13 +24,22 @@ from ..agents import (
 from ..agents.jobs import AgentJobQueue
 from ..agents.llm_client import AgentLLMClient
 from ..agents.schemas import (
+    CodeBlock,
     DailyHighlightsV1,
     EventEnrichmentV2,
+    ProvenanceInfo,
+    SensitivityInfo,
+    SqlStatement,
+    TaskItem,
     ThreadCitation,
     ThreadSummaryV1,
     VisionCaptionV1,
 )
-from ..agents.structured_output import parse_structured_output
+from ..agents.structured_output import (
+    StructuredOutputError,
+    extract_json_payload,
+    parse_structured_output,
+)
 from ..config import AppConfig, is_loopback_host
 from ..embeddings.service import EmbeddingService
 from ..indexing.lexical_index import LexicalIndex
@@ -60,6 +70,288 @@ from ..runtime_pause import PauseController, paused_guard
 from ..vision.extractors import ScreenExtractorRouter
 from ..enrichment.sql_artifacts import extract_sql_artifacts
 from ..plugins import PluginManager
+
+
+def _normalize_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
+def _truncate_text(value: str, limit: int = 240) -> str:
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _derive_summary(context: dict) -> tuple[str, str]:
+    app_name = _normalize_text(context.get("app_name"))
+    window_title = _normalize_text(context.get("window_title"))
+    ocr_text = _normalize_text(context.get("ocr_text"))
+    if app_name and window_title:
+        summary = f"Working in {app_name}: {window_title}"
+    elif window_title:
+        summary = window_title
+    elif app_name:
+        summary = f"Working in {app_name}"
+    elif ocr_text:
+        summary = _truncate_text(ocr_text, 160)
+    else:
+        summary = "Working on captured screen"
+    what = _truncate_text(ocr_text, 320) if ocr_text else summary
+    return _truncate_text(summary, 200), what
+
+
+def _coerce_importance(value: object) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return 0.1
+    if score < 0.0:
+        return 0.0
+    if score > 1.0:
+        return 1.0
+    return score
+
+
+def _coerce_string_list(value: object) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [item for item in (_normalize_text(v) for v in value) if item]
+    if isinstance(value, str):
+        cleaned = value.strip()
+        return [cleaned] if cleaned else []
+    return []
+
+
+def _coerce_string_value(value: object, default: str = "") -> str:
+    if isinstance(value, str):
+        return value.strip()
+    return default
+
+
+def _coerce_tasks(value: object) -> list[TaskItem]:
+    if not isinstance(value, list):
+        return []
+    tasks: list[TaskItem] = []
+    for item in value:
+        if isinstance(item, TaskItem):
+            tasks.append(item)
+            continue
+        if isinstance(item, dict):
+            title = _normalize_text(item.get("title"))
+            if not title:
+                continue
+            tasks.append(
+                TaskItem(
+                    title=title,
+                    status=_normalize_text(item.get("status")) or "unknown",
+                    evidence=_coerce_string_list(item.get("evidence")),
+                )
+            )
+            continue
+        title = _normalize_text(item)
+        if title:
+            tasks.append(TaskItem(title=title))
+    return tasks
+
+
+def _coerce_code_blocks(value: object) -> list[CodeBlock]:
+    if not isinstance(value, list):
+        return []
+    blocks: list[CodeBlock] = []
+    for item in value:
+        if isinstance(item, CodeBlock):
+            blocks.append(item)
+            continue
+        if isinstance(item, dict):
+            language = _normalize_text(item.get("language")) or "text"
+            text = _normalize_text(item.get("text"))
+            if text:
+                blocks.append(CodeBlock(language=language, text=text))
+    return blocks
+
+
+def _coerce_sql_statements(value: object) -> list[SqlStatement]:
+    if not isinstance(value, list):
+        return []
+    statements: list[SqlStatement] = []
+    for item in value:
+        if isinstance(item, SqlStatement):
+            statements.append(item)
+            continue
+        if isinstance(item, dict):
+            text = _normalize_text(item.get("text"))
+            operation = _normalize_text(item.get("operation")) or "other"
+            if text:
+                statements.append(
+                    SqlStatement(
+                        text=text,
+                        operation=operation,
+                        tables=_coerce_string_list(item.get("tables")),
+                        parse_error=_normalize_text(item.get("parse_error")) or None,
+                    )
+                )
+    return statements
+
+
+def _fallback_enrichment_payload(
+    raw_text: str,
+    context: dict,
+    *,
+    response_model: str,
+    response_provider: str,
+    prompt_id: str,
+) -> EventEnrichmentV2:
+    payload: dict = {}
+    try:
+        raw_json = extract_json_payload(raw_text)
+        payload = json.loads(raw_json)
+    except Exception:
+        payload = {}
+
+    short_summary_default, what_default = _derive_summary(context)
+    app_name = _normalize_text(context.get("app_name"))
+
+    short_summary = _coerce_string_value(payload.get("short_summary"), short_summary_default)
+    what_i_was_doing = _coerce_string_value(payload.get("what_i_was_doing"), what_default)
+    if not short_summary:
+        short_summary = short_summary_default
+    if not what_i_was_doing:
+        what_i_was_doing = what_default
+
+    apps_and_tools = _coerce_string_list(payload.get("apps_and_tools"))
+    if not apps_and_tools and app_name:
+        apps_and_tools = [app_name]
+
+    sensitivity = payload.get("sensitivity") if isinstance(payload.get("sensitivity"), dict) else {}
+    sensitivity_payload = {
+        "contains_pii": bool(sensitivity.get("contains_pii", False)),
+        "contains_secrets": bool(sensitivity.get("contains_secrets", False)),
+        "notes": _coerce_string_list(sensitivity.get("notes")),
+    }
+
+    return EventEnrichmentV2(
+        schema_version="v2",
+        event_id=_coerce_string_value(payload.get("event_id"), context.get("event_id", "") or ""),
+        short_summary=short_summary,
+        what_i_was_doing=what_i_was_doing,
+        apps_and_tools=apps_and_tools,
+        topics=_coerce_string_list(payload.get("topics")),
+        tasks=_coerce_tasks(payload.get("tasks")),
+        people=_coerce_string_list(payload.get("people")),
+        projects=_coerce_string_list(payload.get("projects")),
+        next_actions=_coerce_string_list(payload.get("next_actions")),
+        importance=_coerce_importance(payload.get("importance")),
+        sensitivity=SensitivityInfo.model_validate(sensitivity_payload),
+        keywords=_coerce_string_list(payload.get("keywords")),
+        code_blocks=_coerce_code_blocks(payload.get("code_blocks")),
+        sql_statements=_coerce_sql_statements(payload.get("sql_statements")),
+        provenance=_build_provenance(response_model, response_provider, prompt_id),
+    )
+
+
+def _build_provenance(model: str, provider: str, prompt_id: str) -> ProvenanceInfo:
+    return ProvenanceInfo(
+        model=model or "unknown",
+        provider=provider or "unknown",
+        prompt=prompt_id,
+    )
+
+
+def _fallback_vision_payload(
+    event: EventRecord,
+    *,
+    response_model: str,
+    response_provider: str,
+    prompt_id: str,
+) -> VisionCaptionV1:
+    ocr_text = _normalize_text(event.ocr_text)
+    caption = _truncate_text(ocr_text, 160) if ocr_text else "Screenshot captured"
+    visible = _truncate_text(ocr_text, 320) if ocr_text else ""
+    payload = {
+        "schema_version": "v1",
+        "event_id": event.event_id,
+        "caption": caption,
+        "ui_elements": [],
+        "visible_text_summary": visible,
+        "sensitivity": {"contains_pii": False, "contains_secrets": False, "notes": []},
+        "provenance": _build_provenance(response_model, response_provider, prompt_id),
+    }
+    return VisionCaptionV1.model_validate(payload)
+
+
+def _fallback_thread_summary_payload(
+    thread_id: str,
+    title_hint: str,
+    events: list[EventRecord],
+    *,
+    response_model: str,
+    response_provider: str,
+    prompt_id: str,
+) -> ThreadSummaryV1:
+    title = _normalize_text(title_hint) or "Thread summary"
+    event_titles = [
+        _normalize_text(event.window_title) or _normalize_text(event.app_name)
+        for event in events
+    ]
+    summary = _truncate_text(" / ".join([t for t in event_titles if t]), 300) or title
+    citations = [
+        ThreadCitation(
+            event_id=event.event_id,
+            ts_start=event.ts_start.isoformat(),
+            ts_end=event.ts_end.isoformat() if event.ts_end else None,
+        )
+        for event in events[:3]
+    ]
+    payload = {
+        "schema_version": "v1",
+        "thread_id": thread_id,
+        "title": title,
+        "summary": summary,
+        "key_entities": [],
+        "tasks": [],
+        "citations": citations,
+        "provenance": _build_provenance(response_model, response_provider, prompt_id),
+    }
+    return ThreadSummaryV1.model_validate(payload)
+
+
+def _fallback_daily_highlights_payload(
+    day: str,
+    events: list[EventRecord],
+    aggregates: list[DailyAggregateRecord],
+    *,
+    response_model: str,
+    response_provider: str,
+    prompt_id: str,
+) -> DailyHighlightsV1:
+    highlights: list[str] = []
+    for event in events[:5]:
+        title = _normalize_text(event.window_title) or _normalize_text(event.app_name)
+        if title:
+            highlights.append(_truncate_text(title, 120))
+    summary = _truncate_text(" / ".join(highlights), 320) if highlights else f"Daily summary for {day}"
+    time_spent: dict[str, float] = {}
+    for agg in aggregates:
+        if agg.metric_name == "seconds_active" and agg.metric_value:
+            time_spent[str(agg.app_name)] = float(agg.metric_value)
+    payload = {
+        "schema_version": "v1",
+        "day": day,
+        "summary": summary,
+        "highlights": highlights,
+        "projects": [],
+        "open_loops": [],
+        "people": [],
+        "context_switches": [],
+        "time_spent_by_app": time_spent,
+        "provenance": _build_provenance(response_model, response_provider, prompt_id),
+    }
+    return DailyHighlightsV1.model_validate(payload)
 
 
 class AgentJobWorker:
@@ -108,6 +400,11 @@ class AgentJobWorker:
         )
         self._lease_timeout_s = config.worker.lease_ms / 1000
         self._max_task_runtime_s = config.worker.max_task_runtime_s
+        self._llm_unreachable_until = 0.0
+        self._llm_unreachable_log_at = 0.0
+        self._llm_unreachable_backoff_s = 300.0
+        self._fallback_log_at: dict[str, float] = {}
+        self._fallback_log_cooldown_s = 60.0
 
     def _allow_work(self) -> bool:
         if not self._runtime:
@@ -116,6 +413,56 @@ class AgentJobWorker:
             return True
         self._log.debug("Agent worker paused by runtime governor")
         return False
+
+    def _llm_backoff_active(self) -> bool:
+        if not self._llm_unreachable_until:
+            return False
+        now = time.monotonic()
+        if now >= self._llm_unreachable_until:
+            self._llm_unreachable_until = 0.0
+            return False
+        if now - self._llm_unreachable_log_at > 30.0:
+            self._llm_unreachable_log_at = now
+            remaining = max(0.0, self._llm_unreachable_until - now)
+            self._log.warning(
+                "LLM endpoint unavailable; pausing agent jobs for {:.0f}s.",
+                remaining,
+            )
+        return True
+
+    def _register_llm_unreachable(self, exc: Exception) -> bool:
+        if not self._is_connection_refused(exc):
+            return False
+        self._llm_unreachable_until = time.monotonic() + self._llm_unreachable_backoff_s
+        self._llm_unreachable_log_at = 0.0
+        return True
+
+    @staticmethod
+    def _is_connection_refused(exc: Exception) -> bool:
+        seen = set()
+        current: Exception | None = exc
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, OSError):
+                if getattr(current, "winerror", None) == 10061:
+                    return True
+                err = getattr(current, "errno", None)
+                if err in (errno.ECONNREFUSED, 61, 10061):
+                    return True
+            message = str(current).lower()
+            if "connection refused" in message or "10061" in message:
+                return True
+            current = current.__cause__ or current.__context__
+        return False
+
+    def _log_fallback(self, label: str, exc: Exception) -> None:
+        now = time.monotonic()
+        last = self._fallback_log_at.get(label, 0.0)
+        if now - last >= self._fallback_log_cooldown_s:
+            self._fallback_log_at[label] = now
+            self._log.warning("{} output invalid; using fallback: {}", label, exc)
+        else:
+            self._log.debug("{} output invalid; using fallback: {}", label, exc)
 
     def run_forever(self, stop_event: threading.Event | None = None) -> None:
         backoff_s = 1.0
@@ -150,6 +497,8 @@ class AgentJobWorker:
             return 0
         if paused_guard(self._pause):
             return 0
+        if self._llm_backoff_active():
+            return 0
         if not self._allow_work():
             return 0
         self._recover_stale_leases()
@@ -175,9 +524,16 @@ class AgentJobWorker:
             else:
                 self._queue.mark_skipped(job.id, f"Unknown job type {job.job_type}")
         except Exception as exc:
-            self._log.warning("Agent job failed: {}", exc)
-            worker_errors_total.labels("agents").inc()
-            self._queue.mark_failed(job.id, str(exc), retry_after_s=5.0)
+            if self._register_llm_unreachable(exc):
+                self._queue.mark_failed(
+                    job.id,
+                    "LLM endpoint unavailable",
+                    retry_after_s=self._llm_unreachable_backoff_s,
+                )
+            else:
+                self._log.warning("Agent job failed: {}", exc)
+                worker_errors_total.labels("agents").inc()
+                self._queue.mark_failed(job.id, str(exc), retry_after_s=5.0)
         return 1
 
     def _recover_stale_leases(self) -> None:
@@ -218,6 +574,7 @@ class AgentJobWorker:
             if prompt
             else "You are a memory assistant. Respond with JSON only."
         )
+        prompt_id = f"{prompt.name}:{prompt.version}" if prompt else "event_enrichment:default"
         context_payload = {
             "event_id": event.event_id,
             "app_name": event.app_name,
@@ -235,7 +592,9 @@ class AgentJobWorker:
             ensure_ascii=False,
         )
         user_prompt = (
-            "Generate an enrichment JSON with keys matching EventEnrichmentV2. "
+            "Generate an enrichment JSON matching EventEnrichmentV2. "
+            "Required keys: schema_version, event_id, short_summary, what_i_was_doing, "
+            "importance (0-1), provenance. Use empty arrays for optional lists. "
             "Be concise, memory-first, and only use evidence in the input."
         )
         response = self._llm.generate_text(system_prompt, user_prompt, context)
@@ -247,14 +606,50 @@ class AgentJobWorker:
             )
             return self._llm.generate_text(system_prompt, repair_prompt, context).text
 
-        result = parse_structured_output(response.text, EventEnrichmentV2, repair_fn=_repair)
+        response_model = getattr(response, "model", "unknown")
+        response_provider = getattr(response, "provider", "unknown")
+        try:
+            result = parse_structured_output(response.text, EventEnrichmentV2, repair_fn=_repair)
+        except Exception as exc:
+            self._log_fallback("Enrichment", exc)
+            try:
+                result = _fallback_enrichment_payload(
+                    response.text,
+                    context_payload,
+                    response_model=response_model,
+                    response_provider=response_provider,
+                    prompt_id=prompt_id,
+                )
+            except Exception as fallback_exc:
+                self._log.warning("Enrichment fallback failed; using minimal output: {}", fallback_exc)
+                short_summary, what_i_was_doing = _derive_summary(context_payload)
+                result = EventEnrichmentV2(
+                    schema_version="v2",
+                    event_id=event.event_id,
+                    short_summary=short_summary,
+                    what_i_was_doing=what_i_was_doing,
+                    importance=0.1,
+                    provenance=_build_provenance(response_model, response_provider, prompt_id),
+                )
+        else:
+            fallback = _fallback_enrichment_payload(
+                "{}",
+                context_payload,
+                response_model=response_model,
+                response_provider=response_provider,
+                prompt_id=prompt_id,
+            )
+            if not result.short_summary.strip():
+                result.short_summary = fallback.short_summary
+            if not result.what_i_was_doing.strip():
+                result.what_i_was_doing = fallback.what_i_was_doing
+            if result.importance is None:
+                result.importance = fallback.importance
         if result.event_id != event.event_id:
             result.event_id = event.event_id
-        result.provenance.model = getattr(response, "model", result.provenance.model)
-        result.provenance.provider = getattr(response, "provider", result.provenance.provider)
-        result.provenance.prompt = (
-            f"{prompt.name}:{prompt.version}" if prompt else "event_enrichment:default"
-        )
+        result.provenance.model = response_model or result.provenance.model
+        result.provenance.provider = response_provider or result.provenance.provider
+        result.provenance.prompt = prompt_id
         sql_artifacts = extract_sql_artifacts(
             event.ocr_text or "",
             (event.tags or {}).get("vision_extract", {}).get("regions", []),
@@ -344,6 +739,7 @@ class AgentJobWorker:
                 self._queue.mark_skipped(job.id, "Cloud images not permitted")
                 return
         system_prompt = "You are a memory assistant. Respond with JSON only."
+        prompt_id = "vision_caption:default"
         user_prompt = (
             "Summarize the screenshot with a short caption and UI elements per VisionCaptionV1."
         )
@@ -356,9 +752,23 @@ class AgentJobWorker:
             )
             return self._llm.generate_text(system_prompt, repair_prompt, "").text
 
-        result = parse_structured_output(response.text, VisionCaptionV1, repair_fn=_repair)
+        response_model = getattr(response, "model", "unknown")
+        response_provider = getattr(response, "provider", "unknown")
+        try:
+            result = parse_structured_output(response.text, VisionCaptionV1, repair_fn=_repair)
+        except Exception as exc:
+            self._log_fallback("Vision caption", exc)
+            result = _fallback_vision_payload(
+                event,
+                response_model=response_model,
+                response_provider=response_provider,
+                prompt_id=prompt_id,
+            )
         if result.event_id != event.event_id:
             result.event_id = event.event_id
+        result.provenance.model = response_model or result.provenance.model
+        result.provenance.provider = response_provider or result.provenance.provider
+        result.provenance.prompt = prompt_id
         record = self._queue.insert_result(
             job_id=job.id,
             job_type=job.job_type,
@@ -503,7 +913,21 @@ class AgentJobWorker:
             )
             return self._llm.generate_text(system_prompt, repair_prompt, context).text
 
-        result = parse_structured_output(response.text, ThreadSummaryV1, repair_fn=_repair)
+        response_model = getattr(response, "model", "unknown")
+        response_provider = getattr(response, "provider", "unknown")
+        prompt_id = f"{prompt.name}:{prompt.version}" if prompt else "thread_summary:default"
+        try:
+            result = parse_structured_output(response.text, ThreadSummaryV1, repair_fn=_repair)
+        except Exception as exc:
+            self._log_fallback("Thread summary", exc)
+            result = _fallback_thread_summary_payload(
+                thread_id,
+                thread.window_title or "",
+                events,
+                response_model=response_model,
+                response_provider=response_provider,
+                prompt_id=prompt_id,
+            )
         if result.thread_id != thread_id:
             result.thread_id = thread_id
         if not result.citations:
@@ -515,11 +939,9 @@ class AgentJobWorker:
                 )
                 for event in events[:3]
             ]
-        result.provenance.model = getattr(response, "model", result.provenance.model)
-        result.provenance.provider = getattr(response, "provider", result.provenance.provider)
-        result.provenance.prompt = (
-            f"{prompt.name}:{prompt.version}" if prompt else "thread_summary:default"
-        )
+        result.provenance.model = response_model or result.provenance.model
+        result.provenance.provider = response_provider or result.provenance.provider
+        result.provenance.prompt = prompt_id
         result_record = self._queue.insert_result(
             job_id=job.id,
             job_type=job.job_type,
@@ -623,9 +1045,26 @@ class AgentJobWorker:
             )
             return self._llm.generate_text(system_prompt, repair_prompt, context).text
 
-        result = parse_structured_output(response.text, DailyHighlightsV1, repair_fn=_repair)
+        response_model = getattr(response, "model", "unknown")
+        response_provider = getattr(response, "provider", "unknown")
+        prompt_id = "daily_highlights:default"
+        try:
+            result = parse_structured_output(response.text, DailyHighlightsV1, repair_fn=_repair)
+        except Exception as exc:
+            self._log_fallback("Daily highlights", exc)
+            result = _fallback_daily_highlights_payload(
+                day,
+                events,
+                aggregates,
+                response_model=response_model,
+                response_provider=response_provider,
+                prompt_id=prompt_id,
+            )
         if result.day != day:
             result.day = day
+        result.provenance.model = response_model or result.provenance.model
+        result.provenance.provider = response_provider or result.provenance.provider
+        result.provenance.prompt = prompt_id
         record = self._queue.insert_result(
             job_id=job.id,
             job_type=job.job_type,

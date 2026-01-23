@@ -2,6 +2,10 @@ const tabs = document.querySelectorAll('.nav-tabs button');
 const sections = document.querySelectorAll('.tab');
 const urlParams = new URLSearchParams(window.location.search);
 const unlockToken = urlParams.get('unlock');
+let sessionToken = unlockToken || sessionStorage.getItem('autocaptureUnlock') || '';
+let unlockPromise = null;
+let unlockBlockedUntil = 0;
+let unlockWarning = null;
 const perfProfileSelect = document.getElementById('perfProfileSelect');
 const applyPerfProfile = document.getElementById('applyPerfProfile');
 const perfLogComponent = document.getElementById('perfLogComponent');
@@ -9,21 +13,40 @@ const refreshPerfLog = document.getElementById('refreshPerfLog');
 
 function apiHeaders() {
   const headers = { 'Content-Type': 'application/json' };
-  if (unlockToken) {
-    headers['Authorization'] = `Bearer ${unlockToken}`;
+  if (sessionToken) {
+    headers['Authorization'] = `Bearer ${sessionToken}`;
   }
   return headers;
 }
 
 function withUnlock(url) {
-  if (!unlockToken) return url;
+  if (!sessionToken) return url;
   const separator = url.includes('?') ? '&' : '?';
-  return `${url}${separator}unlock=${encodeURIComponent(unlockToken)}`;
+  return `${url}${separator}unlock=${encodeURIComponent(sessionToken)}`;
 }
 
 async function apiFetch(path, options = {}) {
+  const { _retryUnlock, ...fetchOptions } = options;
   const headers = { ...apiHeaders(), ...(options.headers || {}) };
-  return fetch(path, { ...options, headers });
+  let response = await fetch(path, { ...fetchOptions, headers });
+  if (
+    response.status === 401 &&
+    !_retryUnlock &&
+    !path.startsWith('/api/unlock') &&
+    !path.startsWith('/api/lock')
+  ) {
+    try {
+      await ensureUnlocked();
+      const retryHeaders = { ...apiHeaders(), ...(options.headers || {}) };
+      response = await fetch(path, { ...fetchOptions, headers: retryHeaders });
+      if (response.status !== 401) {
+        setUnlockWarning(null);
+      }
+    } catch (err) {
+      setUnlockWarning('Unlock required');
+    }
+  }
+  return response;
 }
 
 function formatBytes(bytes) {
@@ -43,8 +66,11 @@ function formatNumber(value, digits = 1) {
   return value.toFixed(digits);
 }
 
-function formatRate(value) {
-  if (!Number.isFinite(value)) return 'n/a';
+function formatRate(value, total = null) {
+  if (!Number.isFinite(value)) {
+    if (Number.isFinite(total)) return 'warming up';
+    return 'n/a';
+  }
   return `${value.toFixed(2)}/min`;
 }
 
@@ -57,6 +83,67 @@ function formatMs(value) {
 function formatPercent(value) {
   if (!Number.isFinite(value)) return 'n/a';
   return `${value.toFixed(1)}%`;
+}
+
+function setSessionToken(token) {
+  sessionToken = token || '';
+  if (sessionToken) {
+    sessionStorage.setItem('autocaptureUnlock', sessionToken);
+  } else {
+    sessionStorage.removeItem('autocaptureUnlock');
+  }
+}
+
+async function ensureUnlocked() {
+  const now = Date.now();
+  if (unlockBlockedUntil && now < unlockBlockedUntil) {
+    throw new Error('unlock blocked');
+  }
+  if (unlockPromise) return unlockPromise;
+  unlockPromise = (async () => {
+    const response = await fetch('/api/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+      throw new Error('unlock failed');
+    }
+    const payload = await response.json();
+    if (!payload || !payload.token) {
+      throw new Error('unlock missing token');
+    }
+    setSessionToken(payload.token);
+    setUnlockWarning(null);
+    return payload.token;
+  })()
+    .catch((err) => {
+      unlockBlockedUntil = Date.now() + 60000;
+      throw err;
+    })
+    .finally(() => {
+      unlockPromise = null;
+    });
+  return unlockPromise;
+}
+
+function setUnlockWarning(message) {
+  unlockWarning = message;
+  renderStatusBar(null);
+}
+
+function normalizeCpuPercent(proc) {
+  if (!proc) return null;
+  let value = Number.isFinite(proc.cpu_percent_total)
+    ? proc.cpu_percent_total
+    : proc.cpu_percent;
+  if (!Number.isFinite(value)) return null;
+  const count = Number.isFinite(proc.cpu_count)
+    ? proc.cpu_count
+    : (Number.isFinite(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : null);
+  if (value > 100 && count && count > 0) {
+    value /= count;
+  }
+  return value;
 }
 
 function createStateStore(onUpdate, onError) {
@@ -112,6 +199,21 @@ function renderStatusBar(state) {
   const container = document.getElementById('statusBar');
   if (!container) return;
   container.textContent = '';
+  if (unlockWarning) {
+    const chip = document.createElement('div');
+    chip.className = 'status-chip blocked';
+    chip.textContent = unlockWarning;
+    chip.addEventListener('click', async () => {
+      try {
+        await ensureUnlocked();
+        setUnlockWarning(null);
+      } catch (err) {
+        setUnlockWarning('Unlock required');
+      }
+    });
+    container.appendChild(chip);
+    if (!state) return;
+  }
   if (!state) return;
   const overall = state.health ? state.health.overall : 'unknown';
   const chip = document.createElement('div');
@@ -211,8 +313,9 @@ function renderPerfPanel(state) {
     const profileLabel = profile.active
       ? `${profile.active}${profile.override ? ' (override)' : ''}`
       : 'n/a';
+    const cpuPercent = normalizeCpuPercent(proc);
     addCard('Runtime', [
-      ['CPU', formatPercent(proc.cpu_percent)],
+      ['CPU', formatPercent(cpuPercent)],
       ['Memory', proc.rss_mb ? `${formatNumber(proc.rss_mb)} MB` : 'n/a'],
       ['Profile', profileLabel],
       ['Mode', profile.mode || 'n/a'],
@@ -230,7 +333,7 @@ function renderPerfPanel(state) {
   if (runtimePerf && runtimePerf.captures) {
     const captures = runtimePerf.captures || {};
     addCard('Captures', [
-      ['Rate', formatRate(captures.per_min)],
+      ['Rate', formatRate(captures.per_min, captures.total)],
       ['Total', formatNumber(captures.total, 0)],
       ['Dropped', formatNumber(captures.dropped, 0)],
       ['Backpressure', formatNumber(captures.skipped_backpressure, 0)],
@@ -307,15 +410,17 @@ async function loadPerfLog() {
       const summary = document.createElement('div');
       summary.className = 'perf-metric';
       const captures = parsed.captures || {};
-      const proc = parsed.process || {};
-      summary.innerHTML = `<div>CPU</div><span>${formatPercent(
-        proc.cpu_percent
+    const proc = parsed.process || {};
+    const cpuPercent = normalizeCpuPercent(proc);
+    summary.innerHTML = `<div>CPU</div><span>${formatPercent(
+        cpuPercent
       )}</span>`;
       card.appendChild(summary);
       const captureRow = document.createElement('div');
       captureRow.className = 'perf-metric';
-      captureRow.innerHTML = `<div>Capture rate</div><span>${formatRate(
-        captures.per_min
+    captureRow.innerHTML = `<div>Capture rate</div><span>${formatRate(
+        captures.per_min,
+        captures.total
       )}</span>`;
       card.appendChild(captureRow);
       const queues = parsed.queues || {};

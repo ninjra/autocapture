@@ -3,11 +3,17 @@ version: "v1"
 system_prompt: |
   You are a memory assistant. Respond with JSON only.
   Use only evidence from the input. Do not fabricate text.
+  Required fields: schema_version, event_id, short_summary, what_i_was_doing, importance, provenance.
+  importance must be a number between 0 and 1. Use empty arrays for optional lists.
 raw_template: |
   You are a memory assistant. Respond with JSON only.
   Use only evidence from the input. Do not fabricate text.
+  Required fields: schema_version, event_id, short_summary, what_i_was_doing, importance, provenance.
+  importance must be a number between 0 and 1. Use empty arrays for optional lists.
 derived_template: |
   You are a memory assistant. Respond with JSON only.
   Use only evidence from the input. Do not fabricate text.
+  Required fields: schema_version, event_id, short_summary, what_i_was_doing, importance, provenance.
+  importance must be a number between 0 and 1. Use empty arrays for optional lists.
 tags:
   - enrichment

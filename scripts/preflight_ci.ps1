@@ -9,10 +9,88 @@ try {
 
 Set-Location $repoRoot
 
-if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
-    Write-Error "Poetry not found. Install Poetry and re-run this script."
-    exit 1
+function Resolve-PythonCommand {
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        return @("python")
+    }
+    if (Get-Command py -ErrorAction SilentlyContinue) {
+        return @("py", "-3")
+    }
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Write-Host "Python not found; attempting install via winget..."
+        & winget install --id Python.Python.3.12 -e --accept-source-agreements --accept-package-agreements
+        if (Get-Command python -ErrorAction SilentlyContinue) {
+            return @("python")
+        }
+        if (Get-Command py -ErrorAction SilentlyContinue) {
+            return @("py", "-3")
+        }
+    }
+    return $null
 }
+
+function Ensure-Poetry {
+    if (Get-Command poetry -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    $poetryHome = $env:POETRY_HOME
+    if (-not $poetryHome) {
+        $poetryHome = Join-Path $env:LOCALAPPDATA "pypoetry"
+        $env:POETRY_HOME = $poetryHome
+    }
+    $poetryBin = Join-Path $poetryHome "bin"
+    $poetryExe = Join-Path $poetryBin "poetry.exe"
+    if (Test-Path $poetryExe) {
+        if (-not (($env:Path -split ";") -contains $poetryBin)) {
+            $env:Path = "$poetryBin;$env:Path"
+        }
+        return
+    }
+
+    $pythonCmd = Resolve-PythonCommand
+    if (-not $pythonCmd) {
+        Write-Error "Python not found. Install Python 3.12+ and re-run this script."
+        exit 1
+    }
+
+    Write-Host "Poetry not found; installing to $poetryHome..."
+    $installerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("install_poetry_{0}.py" -f ([System.Guid]::NewGuid().ToString("N")))
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    } catch {
+        # ignore on newer PowerShell versions
+    }
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri "https://install.python-poetry.org" -OutFile $installerPath
+    } catch {
+        Write-Error "Failed to download Poetry installer."
+        exit 1
+    }
+
+    $pythonExe = $pythonCmd[0]
+    $pythonExtra = @()
+    if ($pythonCmd.Count -gt 1) {
+        $pythonExtra = $pythonCmd[1..($pythonCmd.Count - 1)]
+    }
+    & $pythonExe @pythonExtra $installerPath -y
+    $installExit = $LASTEXITCODE
+    Remove-Item $installerPath -ErrorAction SilentlyContinue
+    if ($installExit -ne 0) {
+        Write-Error "Poetry installer failed."
+        exit 1
+    }
+
+    if (-not (($env:Path -split ";") -contains $poetryBin)) {
+        $env:Path = "$poetryBin;$env:Path"
+    }
+    if (-not (Get-Command poetry -ErrorAction SilentlyContinue)) {
+        Write-Error "Poetry install completed but poetry not found on PATH. Reopen the shell and retry."
+        exit 1
+    }
+}
+
+Ensure-Poetry
 
 $env:AUTOCAPTURE_TEST_MODE = "1"
 $env:AUTOCAPTURE_GPU_MODE = "off"
