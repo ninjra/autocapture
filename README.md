@@ -93,6 +93,12 @@ poetry run black --check .
 poetry run pytest -q
 ```
 
+For a CI-parity preflight on Windows (with an optional WSL/Linux pass), run:
+```powershell
+.\scripts\preflight_ci.bat
+```
+Set `AUTOCAPTURE_PREFLIGHT_WSL=0` to skip the WSL/Linux portion.
+
 Node.js is not required for the core workflows; the UI assets are bundled in the repo.
 
 ### Spec and Schema Validation
