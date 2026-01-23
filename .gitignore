@@ -37,9 +37,7 @@ src/**/bin/
 
 # Runtime artifacts
 .runtime/
-artifacts/bench/
-artifacts/logs/
-artifacts/*_report.json
+artifacts/
 bench/results/*
 !bench/results/.gitkeep
 data/state/
