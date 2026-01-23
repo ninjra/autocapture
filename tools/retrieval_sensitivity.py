@@ -12,6 +12,7 @@ from sqlalchemy import select
 from autocapture.next10.harness import build_harness
 from autocapture.storage.models import RetrievalHitRecord
 from autocapture.memory.retrieval import RetrievalService
+from autocapture.memory.threads import ThreadRetrievalService
 
 
 def _write_report(report: dict, path: Path) -> None:
@@ -113,11 +114,21 @@ def main() -> int:
         variant_path = _write_tiers(variant)
         corpus.config.next10.tiers_defaults_path = variant_path
         variant_retrieval = RetrievalService(corpus.db, corpus.config)
+        variant_thread_retrieval = ThreadRetrievalService(
+            corpus.config,
+            corpus.db,
+            embedder=variant_retrieval.embedder,
+            vector_index=variant_retrieval.vector_index,
+        )
         variant_answer_graph = type(answer_graph)(
             corpus.config,
             variant_retrieval,
+            db=corpus.db,
+            thread_retrieval=variant_thread_retrieval,
             prompt_registry=answer_graph._prompt_registry,
             entities=answer_graph._entities,
+            plugin_manager=answer_graph._plugins,
+            memory_client=answer_graph._memory_client,
         )
         for query in queries:
             batch = variant_retrieval.retrieve_tiered(query, None, None, limit=4)

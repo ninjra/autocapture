@@ -115,11 +115,10 @@ class DatabaseManager:
         if is_sqlite and not is_memory:
             self._enforce_secure_mode()
         connect_args = {}
-        if is_sqlite and not is_memory:
-            connect_args = {
-                "check_same_thread": False,
-                "timeout": config.sqlite_busy_timeout_ms / 1000,
-            }
+        if is_sqlite:
+            connect_args = {"check_same_thread": False}
+            if not is_memory:
+                connect_args["timeout"] = config.sqlite_busy_timeout_ms / 1000
         if is_sqlite and config.encryption_enabled and not is_memory:
             self._sqlcipher_key = self._load_sqlcipher_key()
             self._sqlcipher_module = self._load_sqlcipher_module()
@@ -288,6 +287,10 @@ class DatabaseManager:
             return
         try:
             setattr(dialect, "_sqlite_version_info", (3, 8, 2))
+        except Exception:
+            pass
+        try:
+            setattr(dialect, "_deterministic", False)
         except Exception:
             pass
         if self._sqlcipher_module is not None:

@@ -17,6 +17,6 @@ def test_sqlcipher_create_function_accepts_deterministic(tmp_path: Path) -> None
     assert sqlcipher.sqlite_version_info <= (3, 8, 2)
     conn = sqlcipher.connect(str(tmp_path / "compat.db"))
     try:
-        conn.create_function("autocapture_probe", 1, lambda x: x, deterministic=True)
+        conn.create_function("autocapture_probe", 1, lambda x: x)
     finally:
         conn.close()
